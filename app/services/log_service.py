@@ -8,8 +8,11 @@ from app.core.config import resolve_path
 from app.rag.llm_client import generate_chat_completion
 
 
+INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
+
+
 class LogService:
-    """Persist interaction logs and keep analytics metadata out of the routing path."""
+    """Persist interaction logs and expose lightweight user-profile summaries."""
 
     def __init__(self):
         self.db_path = resolve_path("data/processed/interaction_logs.db")
@@ -33,6 +36,7 @@ class LogService:
                     query_scope TEXT,
                     matched_attraction TEXT,
                     recommendation_label TEXT,
+                    response_kind TEXT,
                     cost_time REAL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -45,6 +49,7 @@ class LogService:
                 "query_scope": "ALTER TABLE interaction_logs ADD COLUMN query_scope TEXT",
                 "matched_attraction": "ALTER TABLE interaction_logs ADD COLUMN matched_attraction TEXT",
                 "recommendation_label": "ALTER TABLE interaction_logs ADD COLUMN recommendation_label TEXT",
+                "response_kind": "ALTER TABLE interaction_logs ADD COLUMN response_kind TEXT",
             }
             for column, statement in migrations.items():
                 if column not in columns:
@@ -61,7 +66,7 @@ class LogService:
         username: str = "anonymous",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        if not user_query or user_query in {"（没有听到声音）", "（语音识别失败）", "（未听清）"}:
+        if not user_query or user_query in INVALID_INPUTS:
             return
 
         metadata = metadata or {}
@@ -70,10 +75,10 @@ class LogService:
         focus_point = "未知"
 
         try:
-            result = self._extract_summary_labels(user_query)
-            intent_type = result.get("intent_type", intent_type)
-            sentiment = result.get("sentiment", sentiment)
-            focus_point = result.get("focus_point", focus_point)
+            labels = self._extract_summary_labels(user_query)
+            intent_type = labels.get("intent_type", intent_type)
+            sentiment = labels.get("sentiment", sentiment)
+            focus_point = labels.get("focus_point", focus_point)
         except Exception as exc:
             print(f"[LogService] failed to analyze log labels: {exc}")
 
@@ -84,8 +89,8 @@ class LogService:
                 """
                 INSERT INTO interaction_logs
                 (username, user_query, ai_response, intent_type, sentiment, focus_point,
-                 query_scope, matched_attraction, recommendation_label, cost_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 query_scope, matched_attraction, recommendation_label, response_kind, cost_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     username,
@@ -97,6 +102,7 @@ class LogService:
                     metadata.get("query_scope"),
                     metadata.get("matched_attraction"),
                     metadata.get("recommendation_label"),
+                    metadata.get("response_kind"),
                     cost_time,
                 ),
             )
@@ -152,7 +158,7 @@ class LogService:
         if intents:
             profile_parts.append(f"主要互动意图：{Counter(intents).most_common(1)[0][0]}")
         if focuses:
-            top_focuses = ", ".join(item[0] for item in Counter(focuses).most_common(3))
+            top_focuses = "、".join(item[0] for item in Counter(focuses).most_common(3))
             profile_parts.append(f"核心关注点：{top_focuses}")
         if sentiments:
             profile_parts.append(f"近期情感倾向：{Counter(sentiments).most_common(1)[0][0]}")
@@ -163,9 +169,8 @@ class LogService:
 
     def _extract_summary_labels(self, user_query: str) -> Dict[str, str]:
         system_prompt = (
-            "Return strict JSON only. Analyze the user query and extract: "
-            "intent_type, sentiment, focus_point. "
-            "sentiment must be one of 正面, 中性, 负面."
+            "Return strict JSON only. Analyze the user query and extract intent_type, sentiment, focus_point. "
+            "Sentiment must be one of 正面, 中性, 负面."
         )
         prompt = f"""
 用户提问: "{user_query}"

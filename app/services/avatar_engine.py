@@ -4,6 +4,11 @@ import time
 
 from app.core.config import settings
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+SOULX_ROOT = os.path.join(PROJECT_ROOT, "SoulX-FlashHead")
+if SOULX_ROOT not in sys.path and os.path.exists(SOULX_ROOT):
+    sys.path.insert(0, SOULX_ROOT)
+
 # Must be set before importing torch to take effect.
 if settings.AVATAR_CUDA_ALLOC_CONF:
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", settings.AVATAR_CUDA_ALLOC_CONF)
@@ -13,7 +18,11 @@ import cv2
 import numpy as np
 
 # Adjust imports to match SoulX-FlashHead repository structure
+_original_cwd = os.getcwd()
+if os.path.exists(SOULX_ROOT):
+    os.chdir(SOULX_ROOT)
 from flash_head.inference import get_pipeline, get_base_data, get_audio_embedding, run_pipeline
+os.chdir(_original_cwd)
 
 class AvatarEngine:
     """

@@ -3,162 +3,161 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>景区数字人管理后台 - 数据大屏</title>
-    <!-- Vue 3 -->
+    <title>景区数字人管理后台</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <!-- Element Plus -->
     <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
     <script src="https://unpkg.com/element-plus"></script>
-    <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-    <!-- ECharts WordCloud -->
     <script src="https://cdn.jsdelivr.net/npm/echarts-wordcloud@2.1.0/dist/echarts-wordcloud.min.js"></script>
-    <!-- Tailwind CSS (for layout) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body {
-            background-color: #0f172a;
-            color: #f8fafc;
-            margin: 0;
-            padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        }
-        .card-bg {
-            background: rgba(30, 41, 59, 0.7);
-            border: 1px solid #334155;
-            border-radius: 12px;
-            backdrop-filter: blur(10px);
-        }
-        .chart-container {
-            height: 350px;
-            width: 100%;
-        }
-        [v-cloak] {
-            display: none;
-        }
+        body { background: #0f172a; color: #f8fafc; }
+        .card-bg { background: rgba(30, 41, 59, 0.8); border: 1px solid #334155; border-radius: 18px; backdrop-filter: blur(10px); }
+        .chart-container { height: 320px; width: 100%; }
+        [v-cloak] { display: none; }
     </style>
 </head>
 <body>
-    <div id="app" v-cloak class="min-h-screen p-6">
-        <!-- Header -->
-        <header class="flex justify-between items-center mb-8 border-b border-slate-700 pb-4">
-            <div class="flex items-center gap-3">
-                <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-xl">
-                    AI
-                </div>
-                <h1 class="text-2xl font-bold tracking-wider">景区数字人管理后台 <span class="text-blue-400">数据大屏</span></h1>
+    <div id="app" v-cloak class="max-w-7xl mx-auto p-6 space-y-6">
+        <header class="flex justify-between items-center gap-4 flex-wrap">
+            <div>
+                <h1 class="text-3xl font-bold">景区数字人管理后台</h1>
+                <p class="text-slate-300 mt-1">查看游客意图、推荐效果、失败样例与数据状态</p>
             </div>
-            <div class="flex gap-4 items-center">
-                <span class="text-sm">欢迎, <span class="font-bold">{{ username }}</span></span>
-                <el-button type="primary" @click="fetchDashboardData" :loading="loading" plain>
-                    <span class="flex items-center gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        刷新数据
-                    </span>
-                </el-button>
-                <el-button type="info" plain @click="openVoiceDialog">配置音色</el-button>
-                <el-button type="warning" plain @click="showAvatarDialog = true">更新数字人形象</el-button>
+            <div class="flex gap-2 flex-wrap">
+                <el-button type="primary" @click="fetchDashboardData" :loading="loading">刷新数据</el-button>
+                <el-button type="info" @click="openVoiceDialog">音色配置</el-button>
+                <el-button type="warning" @click="showAvatarDialog = true">更新数字人形象</el-button>
                 <el-button @click="goToFrontend">返回前台</el-button>
-                <el-button type="danger" plain @click="logout">退出</el-button>
+                <el-button type="danger" @click="logout">退出</el-button>
             </div>
         </header>
 
-        <main v-loading.fullscreen.lock="loading" element-loading-background="rgba(15, 23, 42, 0.9)">
-            <!-- Top Stats Row -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                <div class="card-bg p-6 flex flex-col items-center justify-center h-40">
-                    <h3 class="text-slate-400 text-lg mb-2">累计接待交互人次</h3>
-                    <div class="text-6xl font-bold text-blue-400">{{ data.total_interactions }}</div>
-                </div>
-                <div class="card-bg p-6 flex flex-col items-center justify-center h-40">
-                    <h3 class="text-slate-400 text-lg mb-2">系统平均响应耗时</h3>
-                    <div class="text-5xl font-bold text-emerald-400">{{ data.avg_cost_time }} <span class="text-2xl text-emerald-600">秒</span></div>
+        <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="card-bg p-5">
+                <div class="text-slate-400 text-sm">累计交互量</div>
+                <div class="text-4xl font-bold mt-3 text-sky-400">{{ data.total_interactions }}</div>
+            </div>
+            <div class="card-bg p-5">
+                <div class="text-slate-400 text-sm">当日交互量</div>
+                <div class="text-4xl font-bold mt-3 text-emerald-400">{{ data.daily_interactions }}</div>
+            </div>
+            <div class="card-bg p-5">
+                <div class="text-slate-400 text-sm">平均响应耗时</div>
+                <div class="text-4xl font-bold mt-3 text-amber-400">{{ data.avg_cost_time }}s</div>
+            </div>
+        </section>
+
+        <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="card-bg p-5">
+                <div class="text-slate-400 text-sm mb-2">预检状态</div>
+                <div :class="data.data_status.preflight_ok ? 'text-emerald-400' : 'text-red-400'" class="font-semibold">
+                    {{ data.data_status.preflight_ok ? '通过' : '未通过' }}
                 </div>
             </div>
-
-            <!-- Charts Row 1 -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                <!-- Intent Distribution (Pie) -->
-                <div class="card-bg p-6">
-                    <h3 class="text-xl font-semibold mb-4 border-l-4 border-blue-500 pl-3">游客意图分布</h3>
-                    <div id="intentChart" class="chart-container"></div>
+            <div class="card-bg p-5">
+                <div class="text-slate-400 text-sm mb-2">景区知识库</div>
+                <div :class="data.data_status.knowledge_base_ready ? 'text-emerald-400' : 'text-red-400'" class="font-semibold">
+                    {{ data.data_status.knowledge_base_ready ? '已就绪' : '未就绪' }}
                 </div>
-
-                <!-- Sentiment Distribution (Bar) -->
-                <div class="card-bg p-6">
-                    <h3 class="text-xl font-semibold mb-4 border-l-4 border-purple-500 pl-3">游客情感倾向</h3>
-                    <div id="sentimentChart" class="chart-container"></div>
+                <div class="text-xs text-slate-300 mt-2">文档数：{{ data.data_status.knowledge_doc_count }}</div>
+            </div>
+            <div class="card-bg p-5">
+                <div class="text-slate-400 text-sm mb-2">行为分析库</div>
+                <div :class="data.data_status.behavior_db_ready ? 'text-emerald-400' : 'text-red-400'" class="font-semibold">
+                    {{ data.data_status.behavior_db_ready ? '已就绪' : '未就绪' }}
                 </div>
             </div>
+        </section>
 
-            <!-- Charts Row 2 -->
-            <div class="grid grid-cols-1 gap-6">
-                <!-- Word Cloud -->
-                <div class="card-bg p-6">
-                    <h3 class="text-xl font-semibold mb-4 border-l-4 border-emerald-500 pl-3">热门关注点词云</h3>
-                    <div id="wordcloudChart" class="chart-container" style="height: 400px;"></div>
-                </div>
+        <section class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div class="card-bg p-5">
+                <h2 class="text-lg font-semibold mb-4">游客意图分布</h2>
+                <div id="intentChart" class="chart-container"></div>
             </div>
-        </main>
+            <div class="card-bg p-5">
+                <h2 class="text-lg font-semibold mb-4">满意度趋势（近 7 天）</h2>
+                <div id="sentimentTrendChart" class="chart-container"></div>
+            </div>
+        </section>
 
-        <!-- Avatar Update Dialog -->
-        <el-dialog v-model="showAvatarDialog" title="更新数字人默认形象" width="400px" center>
-            <div class="flex flex-col items-center">
-                <el-upload
-                    class="avatar-uploader"
-                    action="#"
-                    :show-file-list="false"
-                    :auto-upload="false"
-                    :on-change="handleAvatarChange"
-                    accept="image/jpeg, image/png, image/webp"
-                >
-                    <img v-if="avatarPreview" :src="avatarPreview" class="w-48 h-48 object-cover rounded-lg border-2 border-dashed border-gray-400" />
-                    <div v-else class="w-48 h-48 border-2 border-dashed border-gray-400 rounded-lg flex flex-col items-center justify-center text-gray-500 cursor-pointer hover:border-blue-500 hover:text-blue-500 transition">
-                        <svg class="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                        <span>选择图片</span>
+        <section class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div class="card-bg p-5">
+                <h2 class="text-lg font-semibold mb-4">推荐标签分布</h2>
+                <div id="recommendChart" class="chart-container"></div>
+            </div>
+            <div class="card-bg p-5">
+                <h2 class="text-lg font-semibold mb-4">高频关注点词云</h2>
+                <div id="wordcloudChart" class="chart-container"></div>
+            </div>
+        </section>
+
+        <section class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <div class="card-bg p-5">
+                <h2 class="text-lg font-semibold mb-4">热门分析问题</h2>
+                <div class="space-y-3">
+                    <div v-for="item in data.hot_analytics_questions" :key="item.question" class="rounded-xl bg-slate-800 p-3">
+                        <div class="text-sm">{{ item.question }}</div>
+                        <div class="text-xs text-slate-400 mt-1">出现次数：{{ item.count }}</div>
                     </div>
+                    <div v-if="!data.hot_analytics_questions.length" class="text-slate-400 text-sm">暂无数据</div>
+                </div>
+            </div>
+
+            <div class="card-bg p-5">
+                <h2 class="text-lg font-semibold mb-4">热门景点偏好</h2>
+                <div class="space-y-3">
+                    <div v-for="item in data.top_attraction_preferences" :key="item.name" class="rounded-xl bg-slate-800 p-3">
+                        <div class="text-sm">{{ item.name }}</div>
+                        <div class="text-xs text-slate-400 mt-1">触发次数：{{ item.value }}</div>
+                    </div>
+                    <div v-if="!data.top_attraction_preferences.length" class="text-slate-400 text-sm">暂无数据</div>
+                </div>
+            </div>
+
+            <div class="card-bg p-5">
+                <h2 class="text-lg font-semibold mb-4">最近失败 / 拒答样例</h2>
+                <div class="space-y-3">
+                    <div v-for="(item, index) in data.recent_failed_samples" :key="index" class="rounded-xl bg-slate-800 p-3">
+                        <div class="text-xs text-red-300 mb-1">{{ item.response_kind }}</div>
+                        <div class="text-sm font-medium">{{ item.user_query }}</div>
+                        <div class="text-xs text-slate-300 mt-2 line-clamp-3">{{ item.ai_response }}</div>
+                    </div>
+                    <div v-if="!data.recent_failed_samples.length" class="text-slate-400 text-sm">暂无失败样例</div>
+                </div>
+            </div>
+        </section>
+
+        <el-dialog v-model="showAvatarDialog" title="更新数字人默认形象" width="420px">
+            <div class="flex flex-col items-center">
+                <el-upload action="#" :show-file-list="false" :auto-upload="false" :on-change="handleAvatarChange" accept="image/jpeg,image/png,image/webp">
+                    <img v-if="avatarPreview" :src="avatarPreview" class="w-56 h-56 object-cover rounded-2xl border border-slate-500" />
+                    <div v-else class="w-56 h-56 rounded-2xl border border-dashed border-slate-500 flex items-center justify-center text-slate-400">选择图片</div>
                 </el-upload>
             </div>
             <template #footer>
-                <span class="dialog-footer">
-                    <el-button @click="showAvatarDialog = false">取消</el-button>
-                    <el-button type="primary" @click="submitAvatar" :loading="avatarUploading" :disabled="!selectedAvatarFile">确认上传</el-button>
-                </span>
+                <el-button @click="showAvatarDialog = false">取消</el-button>
+                <el-button type="primary" @click="submitAvatar" :loading="avatarUploading" :disabled="!selectedAvatarFile">上传</el-button>
             </template>
         </el-dialog>
 
-        <!-- TTS Voice Config Dialog -->
-        <el-dialog v-model="showVoiceDialog" title="配置数字人音色" width="450px" center @close="stopPreviewAudio">
-            <div class="flex flex-col items-center gap-4 py-4" v-loading="voiceLoading">
-                <span class="text-gray-300">请选择预设语音 (Edge-TTS)：</span>
-                <div class="flex items-center gap-2">
-                    <el-select v-model="currentVoice" placeholder="选择音色" style="width: 250px;" @change="stopPreviewAudio">
-                        <el-option
-                            v-for="voice in availableVoices"
-                            :key="voice.id"
-                            :label="voice.name"
-                            :value="voice.id">
-                        </el-option>
-                    </el-select>
-                    <el-button type="success" plain @click="previewVoice" :loading="voicePreviewing" :disabled="!currentVoice">试听</el-button>
+        <el-dialog v-model="showVoiceDialog" title="配置数字人音色" width="460px" @close="stopPreviewAudio">
+            <div class="space-y-4" v-loading="voiceLoading">
+                <el-select v-model="currentVoice" placeholder="选择音色" style="width: 100%;">
+                    <el-option v-for="voice in availableVoices" :key="voice.id" :label="voice.name" :value="voice.id"></el-option>
+                </el-select>
+                <div class="flex gap-2">
+                    <el-button type="success" @click="previewVoice" :loading="voicePreviewing" :disabled="!currentVoice">试听</el-button>
+                    <el-button type="primary" @click="submitVoice" :loading="voiceUpdating" :disabled="!currentVoice">保存</el-button>
                 </div>
-                <div v-if="previewAudioUrl" class="mt-2 text-sm text-green-400">正在播放试听...</div>
             </div>
-            <template #footer>
-                <span class="dialog-footer">
-                    <el-button @click="showVoiceDialog = false">取消</el-button>
-                    <el-button type="primary" @click="submitVoice" :loading="voiceUpdating" :disabled="!currentVoice">确认保存</el-button>
-                </span>
-            </template>
         </el-dialog>
     </div>
 
     <script>
         const { createApp, ref, onMounted, nextTick } = Vue;
 
-        const app = createApp({
+        createApp({
             setup() {
                 const loading = ref(true);
                 const username = ref('');
@@ -173,176 +172,118 @@
                 const voiceLoading = ref(false);
                 const voiceUpdating = ref(false);
                 const voicePreviewing = ref(false);
-                const previewAudioUrl = ref('');
                 let previewAudioElement = null;
 
                 const data = ref({
                     total_interactions: 0,
+                    daily_interactions: 0,
                     avg_cost_time: 0,
                     sentiment_distribution: {},
                     intent_distribution: {},
-                    focus_points: []
+                    focus_points: [],
+                    hot_analytics_questions: [],
+                    top_attraction_preferences: [],
+                    satisfaction_trend: [],
+                    recommendation_label_distribution: {},
+                    recent_failed_samples: [],
+                    data_status: {
+                        preflight_ok: false,
+                        knowledge_base_ready: false,
+                        behavior_db_ready: false,
+                        knowledge_doc_count: 0
+                    }
                 });
 
                 let intentChart = null;
-                let sentimentChart = null;
+                let trendChart = null;
+                let recommendChart = null;
                 let wordcloudChart = null;
 
                 const initCharts = () => {
                     if (!intentChart) intentChart = echarts.init(document.getElementById('intentChart'), 'dark');
-                    if (!sentimentChart) sentimentChart = echarts.init(document.getElementById('sentimentChart'), 'dark');
+                    if (!trendChart) trendChart = echarts.init(document.getElementById('sentimentTrendChart'), 'dark');
+                    if (!recommendChart) recommendChart = echarts.init(document.getElementById('recommendChart'), 'dark');
                     if (!wordcloudChart) wordcloudChart = echarts.init(document.getElementById('wordcloudChart'), 'dark');
                 };
 
-                const renderIntentChart = () => {
-                    const seriesData = Object.entries(data.value.intent_distribution).map(([name, value]) => ({
-                        name, value
-                    }));
-                    
-                    const option = {
-                        backgroundColor: 'transparent',
-                        tooltip: { trigger: 'item', formatter: '{b}: {c}次 ({d}%)' },
-                        legend: { orient: 'vertical', left: 'left', textStyle: { color: '#cbd5e1' } },
-                        series: [
-                            {
-                                type: 'pie',
-                                radius: ['40%', '70%'],
-                                avoidLabelOverlap: false,
-                                itemStyle: {
-                                    borderRadius: 10,
-                                    borderColor: '#1e293b',
-                                    borderWidth: 2
-                                },
-                                label: { show: false, position: 'center' },
-                                emphasis: {
-                                    label: { show: true, fontSize: 20, fontWeight: 'bold' }
-                                },
-                                labelLine: { show: false },
-                                data: seriesData
-                            }
-                        ]
-                    };
-                    intentChart.setOption(option);
-                };
+                const renderCharts = () => {
+                    initCharts();
 
-                const renderSentimentChart = () => {
-                    const keys = Object.keys(data.value.sentiment_distribution);
-                    const values = Object.values(data.value.sentiment_distribution);
-                    
-                    // Define colors based on sentiment type
-                    const colors = keys.map(k => {
-                        if (k.includes('正') || k.includes('满意')) return '#10b981'; // green
-                        if (k.includes('负') || k.includes('不满') || k.includes('差')) return '#ef4444'; // red
-                        return '#3b82f6'; // blue (neutral)
+                    intentChart.setOption({
+                        tooltip: { trigger: 'item' },
+                        series: [{
+                            type: 'pie',
+                            radius: ['40%', '70%'],
+                            data: Object.entries(data.value.intent_distribution).map(([name, value]) => ({ name, value }))
+                        }]
                     });
 
-                    const option = {
-                        backgroundColor: 'transparent',
-                        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-                        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-                        xAxis: [
-                            {
-                                type: 'category',
-                                data: keys,
-                                axisTick: { alignWithLabel: true },
-                                axisLabel: { color: '#cbd5e1' }
-                            }
-                        ],
-                        yAxis: [
-                            { type: 'value', axisLabel: { color: '#cbd5e1' }, splitLine: { lineStyle: { color: '#334155' } } }
-                        ],
+                    trendChart.setOption({
+                        tooltip: { trigger: 'axis' },
+                        legend: { textStyle: { color: '#cbd5e1' } },
+                        xAxis: {
+                            type: 'category',
+                            data: data.value.satisfaction_trend.map(item => item.date),
+                            axisLabel: { color: '#cbd5e1' }
+                        },
+                        yAxis: {
+                            type: 'value',
+                            axisLabel: { color: '#cbd5e1' }
+                        },
                         series: [
-                            {
-                                name: '交互次数',
-                                type: 'bar',
-                                barWidth: '40%',
-                                itemStyle: {
-                                    color: (params) => colors[params.dataIndex],
-                                    borderRadius: [4, 4, 0, 0]
-                                },
-                                data: values
-                            }
+                            { name: '正面', type: 'line', data: data.value.satisfaction_trend.map(item => item.positive), smooth: true },
+                            { name: '中性', type: 'line', data: data.value.satisfaction_trend.map(item => item.neutral), smooth: true },
+                            { name: '负面', type: 'line', data: data.value.satisfaction_trend.map(item => item.negative), smooth: true }
                         ]
-                    };
-                    sentimentChart.setOption(option);
-                };
+                    });
 
-                const renderWordCloud = () => {
-                    const option = {
-                        backgroundColor: 'transparent',
+                    recommendChart.setOption({
+                        tooltip: { trigger: 'axis' },
+                        xAxis: {
+                            type: 'category',
+                            data: Object.keys(data.value.recommendation_label_distribution),
+                            axisLabel: { color: '#cbd5e1' }
+                        },
+                        yAxis: { type: 'value', axisLabel: { color: '#cbd5e1' } },
+                        series: [{
+                            type: 'bar',
+                            data: Object.values(data.value.recommendation_label_distribution),
+                            itemStyle: { color: '#38bdf8' }
+                        }]
+                    });
+
+                    wordcloudChart.setOption({
                         tooltip: { show: true },
                         series: [{
                             type: 'wordCloud',
                             shape: 'circle',
-                            keepAspect: false,
-                            left: 'center',
-                            top: 'center',
-                            width: '100%',
-                            height: '100%',
-                            right: null,
-                            bottom: null,
-                            sizeRange: [18, 60],
-                            rotationRange: [-90, 90],
-                            rotationStep: 45,
+                            sizeRange: [16, 54],
+                            rotationRange: [-45, 45],
                             gridSize: 8,
-                            drawOutOfBound: false,
-                            layoutAnimation: true,
                             textStyle: {
-                                fontFamily: 'sans-serif',
-                                fontWeight: 'bold',
-                                color: function () {
-                                    // Random pleasant colors for dark theme
-                                    const colors = ['#60a5fa', '#34d399', '#a78bfa', '#f472b6', '#fbbf24', '#facc15', '#38bdf8'];
-                                    return colors[Math.floor(Math.random() * colors.length)];
-                                }
-                            },
-                            emphasis: {
-                                focus: 'self',
-                                textStyle: { textShadowBlur: 10, textShadowColor: '#fff' }
+                                color: () => ['#60a5fa', '#34d399', '#fbbf24', '#f472b6'][Math.floor(Math.random() * 4)]
                             },
                             data: data.value.focus_points
                         }]
-                    };
-                    wordcloudChart.setOption(option);
+                    });
                 };
 
                 const fetchDashboardData = async () => {
                     loading.value = true;
                     try {
                         const response = await fetch('/api/v1/admin/dashboard', {
-                            headers: { 'Authorization': `Bearer ${authToken.value}` }
+                            headers: { Authorization: `Bearer ${authToken.value}` }
                         });
-                        if (!response.ok) {
-                            if (response.status === 401 || response.status === 403) {
-                                window.location.href = '/login';
-                                return;
-                            }
-                            throw new Error('Network response was not ok');
-                        }
-                        data.value = await response.json();
-                        
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.detail || '获取数据失败');
+                        data.value = result;
                         await nextTick();
-                        initCharts();
-                        renderIntentChart();
-                        renderSentimentChart();
-                        renderWordCloud();
+                        renderCharts();
                     } catch (error) {
-                        console.error("Failed to fetch dashboard data:", error);
-                        ElementPlus.ElMessage.error('获取大屏数据失败');
+                        ElementPlus.ElMessage.error(error.message);
                     } finally {
                         loading.value = false;
                     }
-                };
-
-                const goToFrontend = () => {
-                    window.location.href = '/';
-                };
-
-                const logout = () => {
-                    localStorage.removeItem('auth_token');
-                    localStorage.removeItem('username');
-                    localStorage.removeItem('user_role');
-                    window.location.href = '/login';
                 };
 
                 const handleAvatarChange = (file) => {
@@ -352,23 +293,17 @@
 
                 const submitAvatar = async () => {
                     if (!selectedAvatarFile.value) return;
-                    
                     avatarUploading.value = true;
-                    const formData = new FormData();
-                    formData.append('file', selectedAvatarFile.value);
-                    
                     try {
+                        const formData = new FormData();
+                        formData.append('file', selectedAvatarFile.value);
                         const response = await fetch('/api/v1/admin/avatar', {
                             method: 'POST',
-                            headers: { 'Authorization': `Bearer ${authToken.value}` },
+                            headers: { Authorization: `Bearer ${authToken.value}` },
                             body: formData
                         });
-                        
-                        if (!response.ok) {
-                            const errData = await response.json();
-                            throw new Error(errData.detail || '上传失败');
-                        }
-                        
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.detail || '上传失败');
                         ElementPlus.ElMessage.success('数字人形象更新成功');
                         showAvatarDialog.value = false;
                     } catch (error) {
@@ -382,11 +317,10 @@
                     voiceLoading.value = true;
                     try {
                         const response = await fetch('/api/v1/admin/voice/list', {
-                            headers: { 'Authorization': `Bearer ${authToken.value}` }
+                            headers: { Authorization: `Bearer ${authToken.value}` }
                         });
-                        if (!response.ok) throw new Error('Failed to fetch voices');
-                        
                         const result = await response.json();
+                        if (!response.ok) throw new Error(result.detail || '获取音色失败');
                         availableVoices.value = result.available_voices;
                         currentVoice.value = result.current_voice;
                     } catch (error) {
@@ -402,25 +336,19 @@
                 };
 
                 const submitVoice = async () => {
-                    if (!currentVoice.value) return;
-                    
                     voiceUpdating.value = true;
                     try {
                         const response = await fetch('/api/v1/admin/voice/update', {
                             method: 'POST',
-                            headers: { 
-                                'Authorization': `Bearer ${authToken.value}`,
+                            headers: {
+                                Authorization: `Bearer ${authToken.value}`,
                                 'Content-Type': 'application/json'
                             },
                             body: JSON.stringify({ voice_id: currentVoice.value })
                         });
-                        
-                        if (!response.ok) {
-                            const errData = await response.json();
-                            throw new Error(errData.detail || '保存失败');
-                        }
-                        
-                        ElementPlus.ElMessage.success('数字人音色更新成功');
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.detail || '保存失败');
+                        ElementPlus.ElMessage.success('音色更新成功');
                         showVoiceDialog.value = false;
                     } catch (error) {
                         ElementPlus.ElMessage.error(error.message);
@@ -430,37 +358,23 @@
                 };
 
                 const previewVoice = async () => {
-                    if (!currentVoice.value) return;
-                    
-                    stopPreviewAudio();
                     voicePreviewing.value = true;
+                    stopPreviewAudio();
                     try {
                         const response = await fetch('/api/v1/admin/voice/preview', {
                             method: 'POST',
-                            headers: { 
-                                'Authorization': `Bearer ${authToken.value}`,
+                            headers: {
+                                Authorization: `Bearer ${authToken.value}`,
                                 'Content-Type': 'application/json'
                             },
                             body: JSON.stringify({ voice_id: currentVoice.value })
                         });
-                        
-                        if (!response.ok) {
-                            const errData = await response.json();
-                            throw new Error(errData.detail || '试听失败');
-                        }
-                        
                         const result = await response.json();
-                        previewAudioUrl.value = result.audio_url;
-                        
-                        // 播放音频
+                        if (!response.ok) throw new Error(result.detail || '试听失败');
                         previewAudioElement = new Audio(result.audio_url);
-                        previewAudioElement.onended = () => {
-                            previewAudioUrl.value = '';
-                        };
                         await previewAudioElement.play();
                     } catch (error) {
                         ElementPlus.ElMessage.error(error.message);
-                        previewAudioUrl.value = '';
                     } finally {
                         voicePreviewing.value = false;
                     }
@@ -472,27 +386,30 @@
                         previewAudioElement.currentTime = 0;
                         previewAudioElement = null;
                     }
-                    previewAudioUrl.value = '';
+                };
+
+                const goToFrontend = () => window.location.href = '/';
+                const logout = () => {
+                    localStorage.removeItem('auth_token');
+                    localStorage.removeItem('username');
+                    localStorage.removeItem('user_role');
+                    window.location.href = '/login';
                 };
 
                 onMounted(() => {
                     const token = localStorage.getItem('auth_token');
                     const role = localStorage.getItem('user_role');
-                    
                     if (!token || role !== 'admin') {
                         window.location.href = '/login';
                         return;
                     }
-                    
                     authToken.value = token;
-                    username.value = localStorage.getItem('username');
-                    
+                    username.value = localStorage.getItem('username') || 'admin';
                     fetchDashboardData();
-                    
-                    // Handle window resize
                     window.addEventListener('resize', () => {
                         if (intentChart) intentChart.resize();
-                        if (sentimentChart) sentimentChart.resize();
+                        if (trendChart) trendChart.resize();
+                        if (recommendChart) recommendChart.resize();
                         if (wordcloudChart) wordcloudChart.resize();
                     });
                 });
@@ -511,22 +428,18 @@
                     voiceLoading,
                     voiceUpdating,
                     voicePreviewing,
-                    previewAudioUrl,
                     fetchDashboardData,
-                    goToFrontend,
-                    logout,
                     handleAvatarChange,
                     submitAvatar,
                     openVoiceDialog,
                     submitVoice,
                     previewVoice,
-                    stopPreviewAudio
+                    stopPreviewAudio,
+                    goToFrontend,
+                    logout,
                 };
             }
-        });
-
-        app.use(ElementPlus);
-        app.mount('#app');
+        }).use(ElementPlus).mount('#app');
     </script>
 </body>
 </html>

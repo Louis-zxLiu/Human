@@ -31,7 +31,7 @@ CREATE TABLE tourist_behavior (
 
 
 class TouristAnalyticsAgent:
-    """Use the cross-scenic behavior table for analytics only, never scenic facts."""
+    """Use cross-scenic visitor behavior data only for analytics and preference hints."""
 
     DISALLOWED_SQL = ("insert ", "update ", "delete ", "drop ", "alter ", "pragma ", "attach ")
 
@@ -95,10 +95,9 @@ class TouristAnalyticsAgent:
 
     def _generate_sql(self, user_query: str) -> Optional[str]:
         system_prompt = (
-            "You are a SQLite analytics assistant. Use ONLY the tourist_behavior table. "
-            "Return one SQLite SELECT statement and nothing else. "
-            "Never infer scenic fact knowledge such as opening hours, scenic location, "
-            "or attraction history. This table is for visitor behavior analytics only."
+            "You are a SQLite analytics assistant. Use only tourist_behavior. "
+            "Never infer scenic facts such as opening hours, location or attraction history. "
+            "Return one SQLite SELECT statement only."
         )
         prompt = f"""
 Schema:
@@ -111,31 +110,25 @@ Rules:
 - Use LIKE '%keyword%' for fuzzy matching when needed.
 - Use visit_date for date filters.
 - Use satisfaction for satisfaction-related analysis.
-- Use total_cost and the cost columns for spending analysis.
-- Use attraction_type and attraction_name only as behavior labels, not as scenic facts.
-- Output a single SELECT statement only.
+- Use total_cost and related cost fields for spending analysis.
+- attraction_type and attraction_name are behavior labels, not scenic facts.
+- Output a single SELECT statement.
 """
         sql_query = generate_chat_completion(prompt, system_prompt, temperature=0.1)
         if not sql_query:
             return None
-        cleaned = (
-            sql_query.replace("```sql", "")
-            .replace("```sqlite", "")
-            .replace("```", "")
-            .strip()
-        )
+        cleaned = sql_query.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
         return cleaned if self._is_safe_select(cleaned) else None
 
     def _summarize_result(self, user_query: str, result_data: List[Dict[str, Any]]) -> str:
         system_prompt = (
             "You summarize analytics results for a scenic digital guide. "
-            "State clearly that the answer is based on visitor behavior data analysis. "
-            "Do not present the result as official scenic fact knowledge."
+            "Always state that the answer is based on visitor behavior data analysis."
         )
         prompt = (
             f"User question: {user_query}\n"
             f"Analytics result: {json.dumps(result_data, ensure_ascii=False)}\n"
-            "Please provide a concise Chinese answer."
+            "Please answer in concise Chinese."
         )
         answer = generate_chat_completion(prompt, system_prompt, temperature=0.2)
         if not answer:
@@ -147,66 +140,91 @@ Rules:
     def _rule_based_response(self, user_query: str) -> Optional[str]:
         query = user_query
 
-        if "女性" in query and "喜欢" in query and ("类型" in query or "景点" in query):
-            sql = (
+        if "女性" in query and ("喜欢" in query or "偏好" in query) and ("类型" in query or "景点" in query):
+            rows = self.execute_sql(
                 "select attraction_type, count(*) as visits "
                 "from tourist_behavior where gender = '女' "
                 "group by attraction_type order by visits desc limit 3"
             )
-            rows = self.execute_sql(sql)
             if rows and "error" not in rows[0]:
                 summary = "，".join(f"{row['attraction_type']}（{row['visits']}次）" for row in rows)
                 return f"基于游客行为数据分析，女性游客最常选择的景点类型主要是：{summary}。"
 
-        if "男性" in query and "喜欢" in query and ("类型" in query or "景点" in query):
-            sql = (
+        if "男性" in query and ("喜欢" in query or "偏好" in query) and ("类型" in query or "景点" in query):
+            rows = self.execute_sql(
                 "select attraction_type, count(*) as visits "
                 "from tourist_behavior where gender = '男' "
                 "group by attraction_type order by visits desc limit 3"
             )
-            rows = self.execute_sql(sql)
             if rows and "error" not in rows[0]:
                 summary = "，".join(f"{row['attraction_type']}（{row['visits']}次）" for row in rows)
                 return f"基于游客行为数据分析，男性游客最常选择的景点类型主要是：{summary}。"
 
-        if ("平均消费" in query or "人均消费" in query or "总消费" in query) and "餐" not in query:
-            rows = self.execute_sql(
-                "select round(avg(total_cost), 2) as avg_total_cost from tourist_behavior"
-            )
+        if ("平均消费" in query or "人均消费" in query or "总消费" in query or "人均花费" in query or "花费" in query) and "餐" not in query:
+            rows = self.execute_sql("select round(avg(total_cost), 2) as avg_total_cost from tourist_behavior")
             if rows and "error" not in rows[0]:
                 return f"基于游客行为数据分析，样本游客的人均总消费约为{rows[0]['avg_total_cost']}元。"
 
         if "餐" in query or "吃饭" in query or "food_cost" in query:
-            rows = self.execute_sql(
-                "select round(avg(food_cost), 2) as avg_food_cost from tourist_behavior"
-            )
+            rows = self.execute_sql("select round(avg(food_cost), 2) as avg_food_cost from tourist_behavior")
             if rows and "error" not in rows[0]:
                 return f"基于游客行为数据分析，样本游客的人均餐饮消费约为{rows[0]['avg_food_cost']}元。"
 
         if "停留" in query and "最长" in query:
             rows = self.execute_sql(
                 "select attraction_name, round(avg(stay_duration), 2) as avg_stay "
-                "from tourist_behavior group by attraction_name "
-                "order by avg_stay desc limit 1"
+                "from tourist_behavior group by attraction_name order by avg_stay desc limit 1"
             )
             if rows and "error" not in rows[0]:
                 row = rows[0]
-                return (
-                    "基于游客行为数据分析，平均停留时间最长的景点是"
-                    f"{row['attraction_name']}，平均停留约{row['avg_stay']}小时。"
-                )
+                return f"基于游客行为数据分析，平均停留时间最长的景点是{row['attraction_name']}，平均停留约{row['avg_stay']}小时。"
 
         if "满意度" in query and "最高" in query:
             rows = self.execute_sql(
                 "select attraction_name, round(avg(satisfaction), 2) as avg_satisfaction "
-                "from tourist_behavior group by attraction_name "
-                "having count(*) >= 30 order by avg_satisfaction desc limit 1"
+                "from tourist_behavior group by attraction_name having count(*) >= 30 "
+                "order by avg_satisfaction desc limit 1"
             )
             if rows and "error" not in rows[0]:
                 row = rows[0]
+                return f"基于游客行为数据分析，平均满意度较高的景点是{row['attraction_name']}，平均满意度约{row['avg_satisfaction']}分。"
+
+        if "热门" in query and "类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, count(*) as visits "
+                "from tourist_behavior group by attraction_type order by visits desc limit 3"
+            )
+            if rows and "error" not in rows[0]:
+                summary = "，".join(f"{row['attraction_type']}（{row['visits']}次）" for row in rows)
+                return f"基于游客行为数据分析，当前样本中最热门的景点类型主要是：{summary}。"
+
+        if "消费趋势" in query:
+            total = self.execute_sql("select round(avg(total_cost), 2) as avg_total_cost from tourist_behavior")
+            top_type = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior "
+                "group by attraction_type order by visits desc limit 1"
+            )
+            if total and top_type and "error" not in total[0] and "error" not in top_type[0]:
                 return (
-                    "基于游客行为数据分析，平均满意度较高的景点是"
-                    f"{row['attraction_name']}，平均满意度约{row['avg_satisfaction']}分。"
+                    "基于游客行为数据分析，样本游客的人均总消费约为"
+                    f"{total[0]['avg_total_cost']}元，当前出现频次最高的景点类型是"
+                    f"{top_type[0]['attraction_type']}。这说明游客消费主要集中在高频热门类型景点。"
+                )
+
+        if "不同人群偏好" in query or "人群偏好差异" in query:
+            female = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior "
+                "where gender = '女' group by attraction_type order by visits desc limit 1"
+            )
+            male = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior "
+                "where gender = '男' group by attraction_type order by visits desc limit 1"
+            )
+            if female and male and "error" not in female[0] and "error" not in male[0]:
+                return (
+                    "基于游客行为数据分析，女性游客当前最常选择的类型是"
+                    f"{female[0]['attraction_type']}，男性游客当前最常选择的类型是"
+                    f"{male[0]['attraction_type']}。这说明不同人群在景点偏好上存在明显差异。"
                 )
 
         return None

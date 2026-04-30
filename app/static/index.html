@@ -3,165 +3,148 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>景区导览服务AI数字人</title>
+    <title>景区导览服务 AI 数字人</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 引入 marked.js 用于渲染 Markdown -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-        <style>
+    <style>
         .chat-container::-webkit-scrollbar { width: 6px; }
         .chat-container::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-        
-        /* Markdown 渲染样式定制 */
         .markdown-body p { margin-bottom: 0.5em; }
         .markdown-body ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 0.5em; }
-        .markdown-body ol { list-style-type: decimal; padding-left: 1.5em; margin-bottom: 0.5em; }
-        .markdown-body strong { font-weight: bold; color: #1e40af; }
-        .markdown-body h1, .markdown-body h2, .markdown-body h3 { font-weight: bold; margin-top: 0.5em; margin-bottom: 0.5em; }
-        .markdown-body code { background-color: rgba(0,0,0,0.05); padding: 0.1em 0.3em; border-radius: 3px; font-family: monospace; }
-        .markdown-body pre { background-color: #1f2937; color: #f3f4f6; padding: 1em; border-radius: 6px; overflow-x: auto; margin-bottom: 0.5em; }
+        .markdown-body strong { font-weight: bold; color: #0f172a; }
     </style>
 </head>
-<body class="bg-gray-50 h-screen flex overflow-hidden font-sans">
-    <div id="app" class="w-full h-full flex flex-col md:flex-row max-w-7xl mx-auto p-4 gap-4">
-        
-        <!-- 数字人展示区 -->
-        <div class="flex-1 bg-white rounded-2xl shadow-lg flex flex-col overflow-hidden relative">
-            <div class="bg-indigo-600 text-white p-4 font-bold text-lg flex justify-between items-center">
-                <div class="flex items-center gap-2 flex-wrap">
-                    <span>数字人导游</span>
-                    <span v-if="isStreamingMode" class="text-xs bg-indigo-500 px-2 py-1 rounded-full whitespace-nowrap">实时流</span>
-                    <span v-else class="text-xs bg-green-500 px-2 py-1 rounded-full whitespace-nowrap">完整生成</span>
-                    
-                    <!-- 流式推流切换开关与提示 -->
-                    <div class="flex items-center gap-1 ml-2 bg-indigo-700/50 rounded-full px-2 py-1">
-                        <label class="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" v-model="isStreamingMode" class="sr-only peer" @change="toggleStreamingMode">
-                            <div class="w-8 h-4 bg-gray-400 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-green-400"></div>
-                            <span class="ml-2 text-xs font-medium text-white whitespace-nowrap">启用流式推流</span>
-                        </label>
-                        
-                        <div class="group relative flex items-center justify-center ml-1">
-                            <div class="w-4 h-4 rounded-full border border-white/70 text-white/70 flex items-center justify-center text-[10px] cursor-help font-bold group-hover:text-white group-hover:border-white">?</div>
-                            <!-- Tooltip -->
-                            <div class="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-64 bg-gray-900 text-white text-xs rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-xl pointer-events-none before:content-[''] before:absolute before:-top-1 before:left-1/2 before:-translate-x-1/2 before:border-4 before:border-transparent before:border-b-gray-900 font-normal leading-relaxed text-left">
-                                <span class="block mb-1 text-yellow-300 font-bold">💡 显卡性能提示</span>
-                                流式推流可实现“边思考边说话”的极低延迟体验，但对显卡算力要求较高。<br><br>
-                                <span class="text-gray-300">若您的设备（如 RTX 4060 及以下）在播放时出现画面卡顿、音画不同步，建议<b class="text-red-400">关闭</b>此选项，采用“完整生成”模式以获得极其流畅的体验。</span>
-                            </div>
-                        </div>
+<body class="bg-slate-100 min-h-screen text-slate-900">
+    <div id="app" class="max-w-7xl mx-auto p-4 grid grid-cols-1 xl:grid-cols-[1.4fr,1fr] gap-4">
+        <section class="bg-white rounded-3xl shadow-lg overflow-hidden flex flex-col">
+            <header class="bg-slate-900 text-white p-4 flex flex-col gap-3">
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                        <h1 class="text-xl font-bold">灵山胜境 AI 数字人导游</h1>
+                        <p class="text-sm text-slate-300">事实问答、个性化推荐、弱 GPS 场景导览</p>
                     </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <span class="px-3 py-1 rounded-full bg-slate-700">欢迎，{{ username }}</span>
+                        <a v-if="userRole === 'admin'" href="/admin" class="px-3 py-1 rounded-full bg-amber-500 text-slate-900 font-semibold">管理后台</a>
+                        <button @click="logout" class="px-3 py-1 rounded-full bg-slate-700 hover:bg-slate-600">退出</button>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <label class="flex items-center gap-2 text-sm bg-slate-800 rounded-full px-3 py-2">
+                        <input type="checkbox" v-model="isStreamingMode" @change="persistModes">
+                        <span>流式推送</span>
+                    </label>
+                    <label class="flex items-center gap-2 text-sm bg-red-950/70 rounded-full px-3 py-2">
+                        <input type="checkbox" v-model="isGpsWeak" @change="persistModes">
+                        <span>GPS 信号极弱</span>
+                    </label>
+                    <span class="text-xs text-slate-300" v-if="userProfile">{{ userProfile }}</span>
+                </div>
+            </header>
 
-                    <!-- GPS 信号模拟开关 -->
-                    <div class="flex items-center gap-1 ml-2 bg-gray-700/50 rounded-full px-2 py-1">
-                        <label class="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" v-model="isGpsWeak" class="sr-only peer" @change="toggleGpsMode">
-                            <div class="w-8 h-4 bg-gray-400 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-red-500"></div>
-                            <span class="ml-2 text-xs font-medium text-white whitespace-nowrap">GPS信号极弱</span>
-                        </label>
-                        
-                        <div class="group relative flex items-center justify-center ml-1">
-                            <div class="w-4 h-4 rounded-full border border-white/70 text-white/70 flex items-center justify-center text-[10px] cursor-help font-bold group-hover:text-white group-hover:border-white">?</div>
-                            <!-- Tooltip -->
-                            <div class="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-64 bg-gray-900 text-white text-xs rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-xl pointer-events-none before:content-[''] before:absolute before:-top-1 before:left-1/2 before:-translate-x-1/2 before:border-4 before:border-transparent before:border-b-gray-900 font-normal leading-relaxed text-left">
-                                <span class="block mb-1 text-yellow-300 font-bold">📍 赛题加分项测试</span>
-                                模拟在山区或室内展馆等 <b>GPS 信号丢失</b> 的情况。<br><br>
-                                <span class="text-gray-300">开启后，若您询问位置，数字人将触发降级策略：通过询问您周围的<b class="text-red-400">视觉标志物</b>并检索知识库，为您进行反向定位。</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="flex items-center gap-4 text-sm font-normal">
-                    <!-- 游客个性化画像标签与高级 Tooltip -->
-                    <div class="hidden md:flex items-center group relative cursor-pointer" v-if="userProfile && userProfile !== '新游客，暂无历史偏好记录。'">
-                        <div class="flex items-center gap-2 bg-indigo-700/50 hover:bg-indigo-700/70 transition-colors px-3 py-1 rounded-full text-indigo-100 border border-indigo-500/30">
-                            <svg class="w-4 h-4 text-yellow-300 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                            <span class="text-xs font-medium">专属服务中</span>
-                        </div>
-                        <!-- Tooltip 展开内容 -->
-                        <div class="absolute right-0 top-full mt-2 w-72 bg-gray-900 text-white text-xs rounded-xl p-4 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-2xl border border-gray-700 pointer-events-none transform origin-top-right scale-95 group-hover:scale-100">
-                            <div class="flex items-center gap-2 mb-2 border-b border-gray-700 pb-2">
-                                <span class="text-lg">🎯</span>
-                                <span class="font-bold text-sm text-indigo-300">游客个性化画像</span>
-                            </div>
-                            <div class="leading-relaxed text-gray-300 space-y-1">
-                                <p v-for="(line, index) in userProfile.split('；')" :key="index" class="flex items-start gap-1">
-                                    <span class="text-indigo-400 mt-0.5">•</span>
-                                    <span>{{ line.replace('。', '') }}</span>
-                                </p>
-                            </div>
-                            <div class="mt-3 pt-2 border-t border-gray-700/50 text-[10px] text-gray-400 italic flex items-start gap-1">
-                                <svg class="w-3 h-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                                <span>AI 导游已记住您的偏好，将在后续讲解与路线推荐中为您提供专属的个性化服务。</span>
-                            </div>
-                        </div>
-                    </div>
-                    <span>欢迎, <span class="font-bold">{{ username }}</span></span>
-                    <a v-if="userRole === 'admin'" href="/admin" class="hover:underline text-yellow-300 font-bold">管理后台</a>
-                    <button @click="logout" class="bg-indigo-700 hover:bg-indigo-800 px-3 py-1 rounded transition shadow-sm">退出</button>
-                </div>
-            </div>
-            
-            <div class="flex-1 bg-black relative flex items-center justify-center">
-                <!-- 使用原生的 video 或者图片展示 -->
+            <div class="bg-black aspect-video relative flex items-center justify-center">
                 <canvas v-show="isStreamingMode" ref="avatarCanvas" class="w-full h-full object-cover"></canvas>
-                <video v-if="!isStreamingMode && isPlaying" :src="videoStreamUrl" class="w-full h-full object-cover" autoplay playsinline @ended="isPlaying = false"></video>
-                <img v-show="!isPlaying" :src="videoStreamUrl" class="absolute w-full h-full object-cover" alt="Avatar Image" />
-                <div v-if="!isPlaying && !videoStreamUrl" class="absolute text-gray-400 flex flex-col items-center">
-                    <svg class="w-16 h-16 mb-4 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                    <span>等待互动开始...</span>
+                <video
+                    v-if="!isStreamingMode && isPlaying"
+                    :src="videoStreamUrl"
+                    class="w-full h-full object-cover"
+                    autoplay
+                    playsinline
+                    @ended="isPlaying = false"
+                ></video>
+                <img v-show="!isPlaying" :src="videoStreamUrl" class="absolute w-full h-full object-cover" alt="avatar" />
+                <div v-if="!isPlaying && !videoStreamUrl" class="absolute text-slate-400 text-center">
+                    <div class="text-lg font-semibold mb-2">等待互动开始</div>
+                    <div class="text-sm">支持文本、语音、推荐与弱 GPS 导览</div>
                 </div>
             </div>
-            
-            <!-- 录音控件 -->
-            <div class="p-4 bg-gray-50 flex justify-center border-t">
-                <button 
-                    @mousedown="startRecording" 
+
+            <div class="p-4 border-t bg-slate-50 flex items-center justify-center gap-3 flex-wrap">
+                <button
+                    @mousedown="startRecording"
                     @mouseup="stopRecording"
                     @touchstart.prevent="startRecording"
                     @touchend.prevent="stopRecording"
-                    :class="['px-8 py-3 rounded-full font-bold text-white shadow-md transition-all flex items-center gap-2', 
-                            isRecording ? 'bg-red-500 animate-pulse' : 'bg-indigo-600 hover:bg-indigo-700']"
+                    :class="[
+                        'px-6 py-3 rounded-full text-white font-semibold transition',
+                        isRecording ? 'bg-red-500 animate-pulse' : 'bg-sky-600 hover:bg-sky-700'
+                    ]"
                 >
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
-                    {{ isRecording ? '松开结束发送' : '按住说话' }}
+                    {{ isRecording ? '松开结束说话' : '按住语音提问' }}
                 </button>
+                <span class="text-xs text-slate-500">当前模式：{{ isGpsWeak ? '弱 GPS 演示中' : '正常定位' }}</span>
             </div>
-        </div>
+        </section>
 
-        <!-- 聊天记录区 -->
-        <div class="w-full md:w-1/3 bg-white rounded-2xl shadow-lg flex flex-col overflow-hidden">
-            <div class="bg-gray-800 text-white p-4 font-bold text-lg">
-                对话记录
-            </div>
-            
-            <div class="flex-1 overflow-y-auto p-4 chat-container space-y-4" ref="chatBox">
-                <div v-for="(msg, index) in messages" :key="index" :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
-                    <div :class="['max-w-[80%] rounded-2xl px-4 py-2 shadow-sm', 
-                                msg.role === 'user' ? 'bg-indigo-100 text-indigo-900 rounded-tr-none' : 'bg-gray-100 text-gray-800 rounded-tl-none']">
-                        <div class="text-xs opacity-50 mb-1">{{ msg.role === 'user' ? '游客' : '导游' }}</div>
+        <section class="bg-white rounded-3xl shadow-lg overflow-hidden flex flex-col min-h-[75vh]">
+            <header class="px-4 py-4 border-b bg-slate-50">
+                <h2 class="font-bold text-lg">对话记录</h2>
+                <p class="text-sm text-slate-500">推荐结果会显示为路线卡片，弱 GPS 会显示状态条</p>
+            </header>
+
+            <div ref="chatBox" class="flex-1 overflow-y-auto p-4 space-y-4 chat-container">
+                <div
+                    v-for="(msg, index) in messages"
+                    :key="index"
+                    :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']"
+                >
+                    <div :class="[
+                        'max-w-[88%] rounded-2xl px-4 py-3 shadow-sm',
+                        msg.role === 'user' ? 'bg-sky-100 text-sky-950' : 'bg-slate-100 text-slate-800'
+                    ]">
+                        <div class="text-xs opacity-60 mb-2">{{ msg.role === 'user' ? '游客' : '数字人导游' }}</div>
+
+                        <div
+                            v-if="msg.role === 'assistant' && msg.meta && msg.meta.gps_state && msg.meta.gps_state !== 'normal'"
+                            :class="[
+                                'mb-3 rounded-xl px-3 py-2 text-sm',
+                                gpsBannerClass(msg.meta.gps_state)
+                            ]"
+                        >
+                            {{ gpsBannerText(msg.meta) }}
+                        </div>
+
+                        <div
+                            v-if="msg.role === 'assistant' && msg.meta && msg.meta.recommendation"
+                            class="mb-3 rounded-2xl border border-amber-200 bg-amber-50 p-3"
+                        >
+                            <div class="font-semibold text-amber-900 mb-2">{{ msg.meta.recommendation.title }}</div>
+                            <div class="text-sm text-slate-700 mb-2">{{ msg.meta.recommendation.reason }}</div>
+                            <div class="text-sm text-slate-700 mb-2">预计游览时长：{{ msg.meta.recommendation.estimated_duration }}</div>
+                            <div class="space-y-2">
+                                <div
+                                    v-for="(item, itemIndex) in msg.meta.recommendation.route_items"
+                                    :key="itemIndex"
+                                    class="rounded-xl bg-white px-3 py-2 border border-amber-100"
+                                >
+                                    <div class="font-medium text-slate-900">{{ itemIndex + 1 }}. {{ item.name }}</div>
+                                    <div class="text-sm text-slate-600">{{ item.summary }}</div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div v-if="msg.role === 'user'" class="whitespace-pre-wrap">{{ msg.content }}</div>
-                        <!-- 使用 v-html 渲染 Markdown，注意：实际生产环境中应配合 DOMPurify 防范 XSS -->
-                        <div v-else class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
+                        <div v-else class="markdown-body whitespace-pre-wrap" v-html="renderMarkdown(msg.content)"></div>
                     </div>
                 </div>
-                <div v-if="isLoading" class="flex justify-start">
-                    <div class="bg-gray-100 text-gray-800 rounded-2xl rounded-tl-none px-4 py-2 flex items-center gap-2 shadow-sm">
-                        <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                        <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
-                        <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="p-3 border-t bg-gray-50 flex gap-2">
-                <input v-model="inputText" @keyup.enter="sendTextMessage" type="text" placeholder="或输入文字提问..." class="flex-1 px-4 py-2 border rounded-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                <button @click="sendTextMessage" class="bg-indigo-600 text-white p-2 rounded-full hover:bg-indigo-700 transition">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
-                </button>
-            </div>
-        </div>
 
+                <div v-if="isLoading" class="flex justify-start">
+                    <div class="bg-slate-100 rounded-2xl px-4 py-3 shadow-sm text-slate-500">正在生成回答...</div>
+                </div>
+            </div>
+
+            <div class="p-4 border-t bg-slate-50 flex gap-2">
+                <input
+                    v-model="inputText"
+                    @keyup.enter="sendTextMessage"
+                    type="text"
+                    placeholder="输入问题，例如：给我推荐一条历史文化路线"
+                    class="flex-1 px-4 py-3 rounded-full border border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                >
+                <button @click="sendTextMessage" class="px-4 py-3 rounded-full bg-sky-600 text-white hover:bg-sky-700">发送</button>
+            </div>
+        </section>
     </div>
 
     <script>
@@ -170,163 +153,52 @@
         createApp({
             setup() {
                 const messages = ref([
-                    { role: 'assistant', content: '您好！我是您的专属景区数字人导游。您可以按住左侧语音按钮与我对话，或者在下方输入文字。' }
+                    {
+                        role: 'assistant',
+                        content: '您好，我是您的灵山胜境数字人导游。您可以问我景点事实问题、路线推荐，也可以在弱 GPS 模式下体验多轮问路。',
+                        meta: null
+                    }
                 ]);
                 const inputText = ref('');
                 const isLoading = ref(false);
                 const isRecording = ref(false);
                 const isPlaying = ref(false);
-                const isStreamingMode = ref(true); // 是否启用流式推流，默认为 true
-                const isGpsWeak = ref(false); // 是否启用 GPS 信号极弱模式
+                const isStreamingMode = ref(true);
+                const isGpsWeak = ref(false);
                 const chatBox = ref(null);
-                const avatarCanvas = ref(null); // 引用 Canvas 元素
+                const avatarCanvas = ref(null);
                 const videoStreamUrl = ref('');
-                const selectedImageFile = ref(null); // 存储用户选择的图片
                 const username = ref('');
                 const userRole = ref('');
                 const userProfile = ref('');
                 const authToken = ref('');
+                const clientSessionId = ref('');
 
-                const logout = () => {
-                    localStorage.removeItem('auth_token');
-                    localStorage.removeItem('username');
-                    localStorage.removeItem('user_role');
-                    window.location.href = '/login';
-                };
-                
-                const renderMarkdown = (text) => {
-                    if (!text) return '';
-                    try {
-                        return marked.parse(text);
-                    } catch (e) {
-                        console.error('Markdown parse error:', e);
-                        return text;
-                    }
-                };
-
-                const toggleStreamingMode = () => {
-                    localStorage.setItem('streaming_mode', isStreamingMode.value);
-                };
-
-                const toggleGpsMode = () => {
-                    localStorage.setItem('gps_weak_mode', isGpsWeak.value);
-                };
-
-                let ws = null;
-                const chunkQueue = [];
-                let currentAudio = null;
-                let frameInterval = null;
-
-                const connectWebSocket = () => {
-                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/interact/stream`);
-                    
-                    ws.onmessage = (event) => {
-                        const data = JSON.parse(event.data);
-                        
-                        if (data.type === 'text_user') {
-                            messages.value.push({ role: 'user', content: data.text });
-                            scrollToBottom();
-                        } else if (data.type === 'text_token') {
-                            // Find the last assistant message
-                            let lastMsg = messages.value[messages.value.length - 1];
-                            if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.isComplete) {
-                                messages.value.push({ role: 'assistant', content: data.text, isComplete: false });
-                            } else {
-                                lastMsg.content += data.text;
-                            }
-                            scrollToBottom();
-                        } else if (data.type === 'chunk') {
-                            chunkQueue.push(data);
-                            processQueue();
-                        } else if (data.type === 'done') {
-                            isLoading.value = false;
-                            let lastMsg = messages.value[messages.value.length - 1];
-                            if (lastMsg && lastMsg.role === 'assistant') {
-                                lastMsg.isComplete = true;
-                            }
-                        } else if (data.type === 'error') {
-                            isLoading.value = false;
-                            messages.value.push({ role: 'assistant', content: `[系统错误] ${data.message}` });
-                            scrollToBottom();
-                        }
-                    };
-                    
-                    ws.onclose = () => {
-                        console.log('WebSocket closed, reconnecting...');
-                        setTimeout(connectWebSocket, 3000);
-                    };
-                };
-
-                const processQueue = () => {
-                    if (isPlaying.value || chunkQueue.length === 0) return;
-                    
-                    isPlaying.value = true;
-                    const chunk = chunkQueue.shift();
-                    
-                    // Create audio
-                    const audio = new Audio("data:audio/mp3;base64," + chunk.audio);
-                    currentAudio = audio;
-                    
-                    const frames = chunk.frames;
-                    let frameIndex = 0;
-                    
-                    const drawFrame = () => {
-                        if (frameIndex < frames.length) {
-                            const img = new Image();
-                            img.onload = () => {
-                                if (avatarCanvas.value) {
-                                    const ctx = avatarCanvas.value.getContext('2d');
-                                    avatarCanvas.value.width = img.width;
-                                    avatarCanvas.value.height = img.height;
-                                    ctx.drawImage(img, 0, 0);
-                                }
-                            };
-                            img.src = "data:image/jpeg;base64," + frames[frameIndex];
-                            frameIndex++;
-                        }
-                    };
-                    
-                    // Sync frames with audio time (25 FPS)
-                    audio.onplay = () => {
-                        frameInterval = setInterval(() => {
-                            const expectedFrame = Math.floor(audio.currentTime * 25);
-                            if (expectedFrame > frameIndex && expectedFrame < frames.length) {
-                                frameIndex = expectedFrame;
-                            }
-                            drawFrame();
-                        }, 40); // 1000ms / 25fps = 40ms
-                    };
-                    
-                    audio.onended = () => {
-                        clearInterval(frameInterval);
-                        isPlaying.value = false;
-                        processQueue(); // Process next chunk
-                    };
-                    
-                    audio.play().catch(e => {
-                        console.error('Audio play error:', e);
-                        clearInterval(frameInterval);
-                        isPlaying.value = false;
-                        processQueue();
-                    });
-                };
-                
                 let mediaRecorder = null;
                 let audioChunks = [];
+                let ws = null;
+                const chunkQueue = [];
+                let frameInterval = null;
 
-                const handleImageUpload = (event) => {
-                    const file = event.target.files[0];
-                    if (file) {
-                        selectedImageFile.value = file;
-                        // 本地预览图片
-                        const reader = new FileReader();
-                        reader.onload = (e) => {
-                            videoStreamUrl.value = e.target.result;
-                        };
-                        reader.readAsDataURL(file);
-                        alert('形象已选择！在您下一次发送消息时将使用新形象。');
-                    }
+                const persistModes = () => {
+                    localStorage.setItem('streaming_mode', String(isStreamingMode.value));
+                    localStorage.setItem('gps_weak_mode', String(isGpsWeak.value));
+                };
+
+                const renderMarkdown = (text) => marked.parse(text || '');
+
+                const gpsBannerClass = (state) => {
+                    if (state === 'awaiting_landmarks') return 'bg-amber-100 text-amber-900 border border-amber-200';
+                    if (state === 'ambiguous') return 'bg-orange-100 text-orange-900 border border-orange-200';
+                    if (state === 'resolved' || state === 'resolved_recommendation') return 'bg-emerald-100 text-emerald-900 border border-emerald-200';
+                    return 'bg-slate-100 text-slate-700 border border-slate-200';
+                };
+
+                const gpsBannerText = (meta) => {
+                    if (meta.gps_state === 'awaiting_landmarks') return '弱 GPS：系统正在等待您补充地标描述。';
+                    if (meta.gps_state === 'ambiguous') return `弱 GPS：当前候选位置有 ${meta.gps_candidates.join(' / ')}。`;
+                    if (meta.gps_state === 'resolved' || meta.gps_state === 'resolved_recommendation') return `弱 GPS：已根据地标推测到 ${meta.matched_attraction || '候选位置'}。`;
+                    return '弱 GPS 状态已激活。';
                 };
 
                 const scrollToBottom = async () => {
@@ -336,14 +208,215 @@
                     }
                 };
 
+                const logout = () => {
+                    localStorage.removeItem('auth_token');
+                    localStorage.removeItem('username');
+                    localStorage.removeItem('user_role');
+                    window.location.href = '/login';
+                };
+
+                const buildFormData = (fieldName, payload) => {
+                    const formData = new FormData();
+                    formData.append('gps_status', isGpsWeak.value ? 'weak' : 'normal');
+                    formData.append('client_session_id', clientSessionId.value);
+                    if (fieldName === 'text') {
+                        formData.append('text', payload);
+                    } else {
+                        formData.append('audio', payload, 'voice.webm');
+                    }
+                    return formData;
+                };
+
+                const attachAssistantMetadata = (meta) => {
+                    const lastMsg = messages.value[messages.value.length - 1];
+                    if (lastMsg && lastMsg.role === 'assistant') {
+                        lastMsg.meta = meta || null;
+                    }
+                };
+
+                const processQueue = () => {
+                    if (isPlaying.value || chunkQueue.length === 0) return;
+                    isPlaying.value = true;
+                    const chunk = chunkQueue.shift();
+                    const audio = new Audio('data:audio/mp3;base64,' + chunk.audio);
+                    const frames = chunk.frames || [];
+                    let frameIndex = 0;
+
+                    const drawFrame = () => {
+                        if (frameIndex >= frames.length) return;
+                        const img = new Image();
+                        img.onload = () => {
+                            if (!avatarCanvas.value) return;
+                            const ctx = avatarCanvas.value.getContext('2d');
+                            avatarCanvas.value.width = img.width;
+                            avatarCanvas.value.height = img.height;
+                            ctx.drawImage(img, 0, 0);
+                        };
+                        img.src = 'data:image/jpeg;base64,' + frames[frameIndex];
+                        frameIndex += 1;
+                    };
+
+                    audio.onplay = () => {
+                        frameInterval = setInterval(drawFrame, 40);
+                    };
+                    audio.onended = () => {
+                        clearInterval(frameInterval);
+                        isPlaying.value = false;
+                        processQueue();
+                    };
+                    audio.play().catch(() => {
+                        clearInterval(frameInterval);
+                        isPlaying.value = false;
+                        processQueue();
+                    });
+                };
+
+                const connectWebSocket = () => {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/interact/stream`);
+
+                    ws.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'text_user') {
+                            messages.value.push({ role: 'user', content: data.text, meta: null });
+                            scrollToBottom();
+                            return;
+                        }
+                        if (data.type === 'text_token') {
+                            let lastMsg = messages.value[messages.value.length - 1];
+                            if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.isComplete) {
+                                lastMsg = { role: 'assistant', content: data.text, meta: null, isComplete: false };
+                                messages.value.push(lastMsg);
+                            } else {
+                                lastMsg.content += data.text;
+                            }
+                            scrollToBottom();
+                            return;
+                        }
+                        if (data.type === 'chunk') {
+                            chunkQueue.push(data);
+                            processQueue();
+                            return;
+                        }
+                        if (data.type === 'done') {
+                            isLoading.value = false;
+                            attachAssistantMetadata(data.rag_metadata);
+                            const lastMsg = messages.value[messages.value.length - 1];
+                            if (lastMsg && lastMsg.role === 'assistant') lastMsg.isComplete = true;
+                            scrollToBottom();
+                            return;
+                        }
+                        if (data.type === 'error') {
+                            isLoading.value = false;
+                            messages.value.push({ role: 'assistant', content: `[系统错误] ${data.message}`, meta: null });
+                            scrollToBottom();
+                        }
+                    };
+
+                    ws.onclose = () => {
+                        setTimeout(connectWebSocket, 3000);
+                    };
+                };
+
+                const sendAudioMessage = async (audioBlob) => {
+                    isLoading.value = true;
+                    if (!isStreamingMode.value) {
+                        try {
+                            const formData = buildFormData('audio', audioBlob);
+                            const response = await fetch('/api/v1/interact/audio', {
+                                method: 'POST',
+                                headers: { Authorization: `Bearer ${authToken.value}` },
+                                body: formData
+                            });
+                            const data = await response.json();
+                            if (!response.ok) throw new Error(data.detail || '请求失败');
+                            messages.value.push({ role: 'user', content: data.user_text, meta: null });
+                            messages.value.push({ role: 'assistant', content: data.assistant_text, meta: data.rag_metadata || null });
+                            if (data.video_stream_url) {
+                                videoStreamUrl.value = `${data.video_stream_url}?t=${Date.now()}`;
+                                isPlaying.value = true;
+                            }
+                        } catch (error) {
+                            messages.value.push({ role: 'assistant', content: `[网络错误] ${error.message}`, meta: null });
+                        } finally {
+                            isLoading.value = false;
+                            scrollToBottom();
+                        }
+                        return;
+                    }
+
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        connectWebSocket();
+                        setTimeout(() => sendAudioMessage(audioBlob), 500);
+                        return;
+                    }
+
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const payload = {
+                            audio: reader.result.split(',')[1],
+                            gps_status: isGpsWeak.value ? 'weak' : 'normal',
+                            client_session_id: clientSessionId.value
+                        };
+                        ws.send(JSON.stringify(payload));
+                    };
+                    reader.readAsDataURL(audioBlob);
+                };
+
+                const sendTextMessage = async () => {
+                    if (!inputText.value.trim()) return;
+                    const userMsg = inputText.value.trim();
+                    messages.value.push({ role: 'user', content: userMsg, meta: null });
+                    inputText.value = '';
+                    isLoading.value = true;
+                    scrollToBottom();
+
+                    if (!isStreamingMode.value) {
+                        try {
+                            const formData = buildFormData('text', userMsg);
+                            const response = await fetch('/api/v1/interact/text', {
+                                method: 'POST',
+                                headers: { Authorization: `Bearer ${authToken.value}` },
+                                body: formData
+                            });
+                            const data = await response.json();
+                            if (!response.ok) throw new Error(data.detail || '请求失败');
+                            messages.value.push({ role: 'assistant', content: data.assistant_text, meta: data.rag_metadata || null });
+                            if (data.video_stream_url) {
+                                videoStreamUrl.value = `${data.video_stream_url}?t=${Date.now()}`;
+                                isPlaying.value = true;
+                            }
+                        } catch (error) {
+                            messages.value.push({ role: 'assistant', content: `[网络错误] ${error.message}`, meta: null });
+                        } finally {
+                            isLoading.value = false;
+                            scrollToBottom();
+                        }
+                        return;
+                    }
+
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        connectWebSocket();
+                        setTimeout(() => sendTextMessageRequest(userMsg), 500);
+                        return;
+                    }
+                    sendTextMessageRequest(userMsg);
+                };
+
+                const sendTextMessageRequest = (userMsg) => {
+                    ws.send(JSON.stringify({
+                        text: userMsg,
+                        gps_status: isGpsWeak.value ? 'weak' : 'normal',
+                        client_session_id: clientSessionId.value
+                    }));
+                };
+
                 const initAudio = async () => {
                     try {
                         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                         mediaRecorder = new MediaRecorder(stream);
                         mediaRecorder.ondataavailable = (event) => {
-                            if (event.data.size > 0) {
-                                audioChunks.push(event.data);
-                            }
+                            if (event.data.size > 0) audioChunks.push(event.data);
                         };
                         mediaRecorder.onstop = async () => {
                             const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
@@ -351,7 +424,6 @@
                             await sendAudioMessage(audioBlob);
                         };
                     } catch (error) {
-                        console.error('获取麦克风权限失败:', error);
                         alert('无法获取麦克风权限，请检查浏览器设置。');
                     }
                 };
@@ -377,188 +449,33 @@
                     }
                 };
 
-                const sendAudioMessage = async (audioBlob) => {
-                    isLoading.value = true;
-                    
-                    if (!isStreamingMode.value) {
-                        // 使用完整生成模式 (REST API)
-                        try {
-                            const formData = new FormData();
-                            formData.append('audio', audioBlob, 'voice.webm');
-                            formData.append('gps_status', isGpsWeak.value ? 'weak' : 'normal');
-                            if (selectedImageFile.value) {
-                                formData.append('avatar_image', selectedImageFile.value);
-                            }
-                            
-                            const response = await fetch('/api/v1/interact/audio', {
-                                method: 'POST',
-                                headers: { 'Authorization': `Bearer ${authToken.value}` },
-                                body: formData
-                            });
-                            
-                            if (response.ok) {
-                                const data = await response.json();
-                                messages.value.push({ role: 'user', content: data.user_text });
-                                messages.value.push({ role: 'assistant', content: data.assistant_text, isComplete: true });
-                                scrollToBottom();
-                                
-                                if (data.video_stream_url) {
-                                         // Use the query parameter to avoid browser caching issues with identical URLs
-                                         videoStreamUrl.value = data.video_stream_url + "?t=" + new Date().getTime();
-                                         isPlaying.value = true;
-                                         
-                                         // Handle Video Ended (Handled by the @ended event on the video tag)
-                                     }
-                            } else {
-                                const err = await response.json();
-                                messages.value.push({ role: 'assistant', content: `[系统错误] ${err.detail || '请求失败'}` });
-                            }
-                        } catch (e) {
-                            console.error(e);
-                            messages.value.push({ role: 'assistant', content: `[网络错误] 无法连接到服务器` });
-                        } finally {
-                            isLoading.value = false;
-                            scrollToBottom();
-                        }
-                        return;
-                    }
-                    
-                    if (!ws || ws.readyState !== WebSocket.OPEN) {
-                        connectWebSocket();
-                        setTimeout(() => sendAudioMessage(audioBlob), 500);
-                        return;
-                    }
-
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        const base64Audio = reader.result.split(',')[1];
-                        const payload = { audio: base64Audio, gps_status: isGpsWeak.value ? 'weak' : 'normal' };
-                        
-                        if (selectedImageFile.value) {
-                            const imgReader = new FileReader();
-                            imgReader.onloadend = () => {
-                                payload.avatar_image = imgReader.result.split(',')[1];
-                                ws.send(JSON.stringify(payload));
-                                scrollToBottom();
-                            };
-                            imgReader.readAsDataURL(selectedImageFile.value);
-                        } else {
-                            ws.send(JSON.stringify(payload));
-                            scrollToBottom();
-                        }
-                    };
-                    reader.readAsDataURL(audioBlob);
-                };
-
-                const sendTextMessage = async () => {
-                    if (!inputText.value.trim()) return;
-                    
-                    const userMsg = inputText.value;
-                    messages.value.push({ role: 'user', content: userMsg });
-                    inputText.value = '';
-                    isLoading.value = true;
-                    scrollToBottom();
-
-                    if (!isStreamingMode.value) {
-                        // 使用完整生成模式 (REST API)
-                        try {
-                            const formData = new FormData();
-                            formData.append('text', userMsg);
-                            formData.append('gps_status', isGpsWeak.value ? 'weak' : 'normal');
-                            if (selectedImageFile.value) {
-                                formData.append('avatar_image', selectedImageFile.value);
-                            }
-                            
-                            const response = await fetch('/api/v1/interact/text', {
-                                method: 'POST',
-                                headers: { 'Authorization': `Bearer ${authToken.value}` },
-                                body: formData
-                            });
-                            
-                            if (response.ok) {
-                                const data = await response.json();
-                                messages.value.push({ role: 'assistant', content: data.assistant_text, isComplete: true });
-                                scrollToBottom();
-                                
-                                if (data.video_stream_url) {
-                                    videoStreamUrl.value = data.video_stream_url + "?t=" + new Date().getTime();
-                                    isPlaying.value = true;
-                                    
-                                    // Video element @ended event handles the completion
-                                }
-                            } else {
-                                const err = await response.json();
-                                messages.value.push({ role: 'assistant', content: `[系统错误] ${err.detail || '请求失败'}` });
-                            }
-                        } catch (e) {
-                            console.error(e);
-                            messages.value.push({ role: 'assistant', content: `[网络错误] 无法连接到服务器` });
-                        } finally {
-                            isLoading.value = false;
-                            scrollToBottom();
-                        }
-                        return;
-                    }
-
-                    if (!ws || ws.readyState !== WebSocket.OPEN) {
-                        connectWebSocket();
-                        setTimeout(() => {
-                            sendTextMessageRequest(userMsg);
-                        }, 500);
-                        return;
-                    }
-
-                    sendTextMessageRequest(userMsg);
-                };
-
-                const sendTextMessageRequest = (userMsg) => {
-                    const payload = { text: userMsg, gps_status: isGpsWeak.value ? 'weak' : 'normal' };
-                    if (selectedImageFile.value) {
-                        const imgReader = new FileReader();
-                        imgReader.onloadend = () => {
-                            payload.avatar_image = imgReader.result.split(',')[1];
-                            ws.send(JSON.stringify(payload));
-                        };
-                        imgReader.readAsDataURL(selectedImageFile.value);
-                    } else {
-                        ws.send(JSON.stringify(payload));
-                    }
-                };
-
                 const loadHistory = async () => {
                     try {
                         const response = await fetch('/api/v1/interact/history?limit=10', {
-                            headers: { 'Authorization': `Bearer ${authToken.value}` }
+                            headers: { Authorization: `Bearer ${authToken.value}` }
                         });
-                        if (response.ok) {
-                            const data = await response.json();
-                            if (data.history && data.history.length > 0) {
-                                // Add historical messages to chat (in reverse since we ordered by DESC)
-                                data.history.reverse().forEach(log => {
-                                    messages.value.push({ role: 'user', content: log.user_query });
-                                    messages.value.push({ role: 'assistant', content: log.ai_response });
-                                });
-                                scrollToBottom();
-                            }
+                        if (!response.ok) return;
+                        const data = await response.json();
+                        for (const log of (data.history || []).reverse()) {
+                            messages.value.push({ role: 'user', content: log.user_query, meta: null });
+                            messages.value.push({ role: 'assistant', content: log.ai_response, meta: null });
                         }
-                    } catch (e) {
-                        console.error('Failed to load history', e);
+                        scrollToBottom();
+                    } catch (error) {
+                        console.error(error);
                     }
                 };
 
                 const loadProfile = async () => {
                     try {
                         const response = await fetch('/api/v1/interact/profile', {
-                            headers: { 'Authorization': `Bearer ${authToken.value}` }
+                            headers: { Authorization: `Bearer ${authToken.value}` }
                         });
-                        if (response.ok) {
-                            const data = await response.json();
-                            if (data.profile) {
-                                userProfile.value = data.profile;
-                            }
-                        }
-                    } catch (e) {
-                        console.error('Failed to load user profile', e);
+                        if (!response.ok) return;
+                        const data = await response.json();
+                        userProfile.value = data.profile || '';
+                    } catch (error) {
+                        console.error(error);
                     }
                 };
 
@@ -568,25 +485,22 @@
                         window.location.href = '/login';
                         return;
                     }
+
                     authToken.value = token;
-                    username.value = localStorage.getItem('username') || '用户';
+                    username.value = localStorage.getItem('username') || '游客';
                     userRole.value = localStorage.getItem('user_role') || 'user';
-                    
-                    const savedMode = localStorage.getItem('streaming_mode');
-                    if (savedMode !== null) {
-                        isStreamingMode.value = savedMode === 'true';
-                    }
+                    clientSessionId.value = localStorage.getItem('client_session_id') || crypto.randomUUID();
+                    localStorage.setItem('client_session_id', clientSessionId.value);
 
-                    const savedGpsMode = localStorage.getItem('gps_weak_mode');
-                    if (savedGpsMode !== null) {
-                        isGpsWeak.value = savedGpsMode === 'true';
-                    }
+                    const savedStreaming = localStorage.getItem('streaming_mode');
+                    const savedGps = localStorage.getItem('gps_weak_mode');
+                    if (savedStreaming !== null) isStreamingMode.value = savedStreaming === 'true';
+                    if (savedGps !== null) isGpsWeak.value = savedGps === 'true';
 
-                    scrollToBottom();
+                    connectWebSocket();
                     initAudio();
                     loadProfile();
                     loadHistory();
-                    connectWebSocket();
                 });
 
                 return {
@@ -597,20 +511,20 @@
                     isPlaying,
                     isStreamingMode,
                     isGpsWeak,
-                    chatBox,
                     videoStreamUrl,
+                    avatarCanvas,
+                    chatBox,
                     username,
                     userRole,
                     userProfile,
-                    logout,
                     renderMarkdown,
+                    gpsBannerClass,
+                    gpsBannerText,
+                    persistModes,
+                    sendTextMessage,
                     startRecording,
                     stopRecording,
-                    sendTextMessage,
-                    handleImageUpload,
-                    toggleStreamingMode,
-                    toggleGpsMode,
-                    avatarCanvas
+                    logout,
                 };
             }
         }).mount('#app');

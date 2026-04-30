@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.api.auth import get_current_admin
-from app.core.config import resolve_path
+from app.core.config import resolve_path, settings
 from app.services.asr_tts import tts_service
 from app.services.avatar_engine import avatar_engine
 
@@ -19,6 +19,26 @@ router = APIRouter()
 
 def get_db_path() -> str:
     return resolve_path("data/processed/interaction_logs.db")
+
+
+def build_data_status() -> Dict[str, Any]:
+    chroma_dir = resolve_path(settings.CHROMA_DB_DIR)
+    behavior_db = resolve_path("data/processed/tourist_behavior.db")
+    kb_dir = resolve_path(settings.KNOWLEDGE_BASE_DIR)
+
+    chroma_ready = os.path.exists(chroma_dir) and bool(os.listdir(chroma_dir))
+    behavior_ready = os.path.exists(behavior_db)
+    kb_docs = []
+    if os.path.exists(kb_dir):
+        kb_docs = [name for name in os.listdir(kb_dir) if name.lower().endswith((".docx", ".xlsx", ".txt", ".csv"))]
+
+    return {
+        "preflight_ok": chroma_ready and behavior_ready,
+        "knowledge_base_ready": chroma_ready,
+        "behavior_db_ready": behavior_ready,
+        "knowledge_doc_count": len(kb_docs),
+        "knowledge_documents": kb_docs[:10],
+    }
 
 
 @router.get("/dashboard")
@@ -37,6 +57,8 @@ async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current
                 "top_attraction_preferences": [],
                 "satisfaction_trend": [],
                 "recommendation_label_distribution": {},
+                "recent_failed_samples": [],
+                "data_status": build_data_status(),
             }
         )
 
@@ -45,9 +67,7 @@ async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current
     try:
         cursor = conn.cursor()
 
-        total_interactions = cursor.execute(
-            "SELECT COUNT(*) AS count FROM interaction_logs"
-        ).fetchone()["count"]
+        total_interactions = cursor.execute("SELECT COUNT(*) AS count FROM interaction_logs").fetchone()["count"]
         daily_interactions = cursor.execute(
             "SELECT COUNT(*) AS count FROM interaction_logs WHERE date(created_at) = date('now', 'localtime')"
         ).fetchone()["count"]
@@ -88,7 +108,7 @@ async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current
                 FROM interaction_logs
                 WHERE query_scope = 'ANALYTICS'
                 GROUP BY user_query
-                ORDER BY count DESC, max(created_at) DESC
+                ORDER BY count DESC, MAX(created_at) DESC
                 LIMIT 5
                 """
             ).fetchall()
@@ -138,6 +158,23 @@ async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current
                 """
             ).fetchall()
         }
+        recent_failed_samples = [
+            {
+                "user_query": row["user_query"],
+                "ai_response": row["ai_response"],
+                "response_kind": row["response_kind"],
+                "created_at": row["created_at"],
+            }
+            for row in cursor.execute(
+                """
+                SELECT user_query, ai_response, response_kind, created_at
+                FROM interaction_logs
+                WHERE response_kind LIKE 'refused%' OR response_kind LIKE 'gps:ambiguous%' OR response_kind LIKE 'gps:need_more%'
+                ORDER BY created_at DESC
+                LIMIT 8
+                """
+            ).fetchall()
+        ]
 
         return JSONResponse(
             content={
@@ -151,6 +188,8 @@ async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current
                 "top_attraction_preferences": top_attraction_preferences,
                 "satisfaction_trend": satisfaction_trend,
                 "recommendation_label_distribution": recommendation_label_distribution,
+                "recent_failed_samples": recent_failed_samples,
+                "data_status": build_data_status(),
             }
         )
     except Exception as exc:
@@ -167,11 +206,9 @@ async def update_default_avatar(
     try:
         avatar_dir = resolve_path("data/processed")
         os.makedirs(avatar_dir, exist_ok=True)
-
         target_path = os.path.join(avatar_dir, "default_avatar.jpg")
         with open(target_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-
         avatar_engine.update_base_image(target_path)
         return JSONResponse(content={"message": "Default avatar image updated successfully"})
     except Exception as exc:
@@ -220,7 +257,7 @@ async def preview_tts_voice(
 
     tts_error = []
 
-    def run_tts():
+    def run_tts() -> None:
         try:
             tts_service.synthesize(preview_text, audio_output_path, voice_id=request.voice_id)
         except Exception as exc:

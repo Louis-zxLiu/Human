@@ -9,22 +9,15 @@ import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    File,
-    Form,
-    UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
-)
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user, get_current_user_optional
 from app.core.config import resolve_path
+from app.rag.location_agent import ScenicLocationAgent
 from app.rag.pipeline import ScenicRAGPipeline
+from app.rag.router import get_query_intent
 from app.services.asr_tts import asr_service, tts_service
 from app.services.avatar_engine import avatar_engine
 from app.services.log_service import log_service
@@ -35,8 +28,10 @@ TEMP_DIR = resolve_path("SoulX-FlashHead/data/temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 _pipeline_cache: Optional[ScenicRAGPipeline] = None
-EMPTY_ASR_RESULTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
+_location_agent_cache: Optional[ScenicLocationAgent] = None
+INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?；;])")
+WEAK_GPS_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 
 class TextInteractRequest(BaseModel):
@@ -50,6 +45,13 @@ def get_pipeline() -> ScenicRAGPipeline:
     return _pipeline_cache
 
 
+def get_location_agent() -> ScenicLocationAgent:
+    global _location_agent_cache
+    if _location_agent_cache is None:
+        _location_agent_cache = ScenicLocationAgent(get_pipeline().fact_agent)
+    return _location_agent_cache
+
+
 def clean_markdown_for_tts(text: str) -> str:
     import markdown
     from bs4 import BeautifulSoup
@@ -58,7 +60,7 @@ def clean_markdown_for_tts(text: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     plain_text = soup.get_text()
     emoji_pattern = re.compile(
-        r"["  # remove emojis while preserving Chinese text
+        r"["
         r"\U0001f600-\U0001f64f"
         r"\U0001f300-\U0001f5ff"
         r"\U0001f680-\U0001f6ff"
@@ -70,20 +72,7 @@ def clean_markdown_for_tts(text: str) -> str:
 
 
 def is_valid_user_text(text: str) -> bool:
-    return bool(text.strip()) and text not in EMPTY_ASR_RESULTS
-
-
-def apply_gps_fallback(user_text: str, answer: str, gps_status: str, intent: str) -> str:
-    if gps_status != "weak":
-        return answer
-    if intent != "FACT":
-        return answer
-    if not any(keyword in user_text for keyword in ("位置", "在哪", "哪里", "怎么走", "路线", "导航")):
-        return answer
-    return (
-        "当前 GPS 信号较弱，我还不能准确判断您的位置。"
-        "请您先描述一下附近最显眼的建筑、佛像、广场或桥梁，我再结合灵山景点资料继续帮您判断路线。"
-    )
+    return bool(text.strip()) and text not in INVALID_INPUTS
 
 
 def split_sentences(text: str) -> list[str]:
@@ -102,7 +91,6 @@ def synthesize_chunk_payload(text: str) -> Optional[Dict[str, Any]]:
     sentence_id = str(uuid.uuid4())
     audio_path = os.path.join(TEMP_DIR, f"{sentence_id}.mp3")
     tts_service.synthesize(clean_text, audio_path)
-
     if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
         return None
 
@@ -114,18 +102,135 @@ def synthesize_chunk_payload(text: str) -> Optional[Dict[str, Any]]:
     return {"audio": audio_b64, "frames": frames_b64}
 
 
-def run_answer_pipeline(user_text: str, gps_status: str) -> Tuple[str, Dict[str, Any]]:
-    result = get_pipeline().process_query(user_text)
-    answer = apply_gps_fallback(user_text, result["answer"], gps_status, result["intent"])
-    return answer, result
+def get_session_key(username: str, client_session_id: Optional[str], fallback: Optional[str] = None) -> str:
+    if client_session_id:
+        return f"session:{client_session_id}"
+    if username and username != "anonymous":
+        return f"user:{username}"
+    return fallback or "anonymous"
+
+
+def should_enter_weak_gps_flow(user_text: str, gps_status: str, intent: str) -> bool:
+    if gps_status != "weak":
+        return False
+    location_agent = get_location_agent()
+    if location_agent.is_navigation_query(user_text):
+        return True
+    return intent == "RECOMMEND" and any(keyword in user_text for keyword in ("从这里", "当前位置", "附近"))
+
+
+def pop_weak_gps_context(session_key: str) -> Optional[Dict[str, Any]]:
+    return WEAK_GPS_SESSIONS.pop(session_key, None)
+
+
+def set_weak_gps_context(session_key: str, context: Dict[str, Any]) -> None:
+    WEAK_GPS_SESSIONS[session_key] = context
+
+
+def handle_weak_gps_flow(
+    user_text: str,
+    gps_status: str,
+    session_key: str,
+    user_profile: Optional[str],
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    if gps_status != "weak":
+        pop_weak_gps_context(session_key)
+        return None
+
+    pipeline = get_pipeline()
+    location_agent = get_location_agent()
+    pending = WEAK_GPS_SESSIONS.get(session_key)
+
+    if pending:
+        candidates = location_agent.infer_candidates(user_text)
+        gps_result = location_agent.build_candidate_reply(candidates, pending["original_query"])
+        base_metadata = {
+            "query": pending["original_query"],
+            "intent": pending["original_intent"],
+            "agent_type": "weak_gps_location",
+            "matched_attraction": gps_result.get("resolved_attraction"),
+            "recommendation_label": None,
+            "response_kind": f"gps:{gps_result['gps_state']}",
+            "recommendation": None,
+            "gps_state": gps_result["gps_state"],
+            "gps_candidates": gps_result.get("candidate_names", []),
+        }
+
+        if gps_result["gps_state"] != "resolved":
+            set_weak_gps_context(session_key, pending)
+            return gps_result["answer"], base_metadata
+
+        current_attraction = gps_result["resolved_attraction"]
+        pop_weak_gps_context(session_key)
+
+        if pending["original_intent"] == "RECOMMEND":
+            recommendation_result = pipeline.process_query(
+                pending["original_query"],
+                user_profile=user_profile,
+                start_attraction=current_attraction,
+            )
+            recommendation_result["agent_type"] = "weak_gps_recommendation"
+            recommendation_result["matched_attraction"] = current_attraction
+            recommendation_result["response_kind"] = "gps:resolved_recommendation"
+            recommendation_result["gps_state"] = "resolved"
+            recommendation_result["gps_candidates"] = gps_result.get("candidate_names", [])
+            answer = gps_result["answer"] + "\n" + recommendation_result["answer"]
+            recommendation_result["answer"] = answer
+            return answer, recommendation_result
+
+        return gps_result["answer"], base_metadata
+
+    original_intent = get_query_intent(user_text)
+    if not should_enter_weak_gps_flow(user_text, gps_status, original_intent):
+        return None
+
+    set_weak_gps_context(
+        session_key,
+        {
+            "original_query": user_text,
+            "original_intent": original_intent,
+            "created_at": time.time(),
+        },
+    )
+    answer = location_agent.build_follow_up_prompt()
+    return answer, {
+        "query": user_text,
+        "intent": original_intent,
+        "agent_type": "weak_gps_prompt",
+        "matched_attraction": None,
+        "recommendation_label": None,
+        "response_kind": "gps:awaiting_landmarks",
+        "recommendation": None,
+        "gps_state": "awaiting_landmarks",
+        "gps_candidates": [],
+    }
+
+
+def run_answer_pipeline(
+    user_text: str,
+    gps_status: str,
+    session_key: str,
+    user_profile: Optional[str] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    gps_result = handle_weak_gps_flow(user_text, gps_status, session_key, user_profile)
+    if gps_result:
+        return gps_result
+
+    result = get_pipeline().process_query(user_text, user_profile=user_profile)
+    result["gps_state"] = "normal" if gps_status != "weak" else "weak_without_followup"
+    result["gps_candidates"] = []
+    return result["answer"], result
 
 
 def generate_avatar_response(
     user_text: str,
     username: str = "anonymous",
     gps_status: str = "normal",
+    client_session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     start_time = time.time()
+    session_key = get_session_key(username, client_session_id)
+    user_profile = log_service.get_user_profile(username) if username and username != "anonymous" else None
 
     if not is_valid_user_text(user_text):
         return {
@@ -139,10 +244,18 @@ def generate_avatar_response(
                 "matched_attraction": None,
                 "recommendation_label": None,
                 "response_kind": "invalid_input",
+                "recommendation": None,
+                "gps_state": "invalid_input",
+                "gps_candidates": [],
             },
         }
 
-    assistant_text, pipeline_result = run_answer_pipeline(user_text, gps_status)
+    assistant_text, pipeline_result = run_answer_pipeline(
+        user_text,
+        gps_status,
+        session_key=session_key,
+        user_profile=user_profile,
+    )
 
     request_id = str(uuid.uuid4())
     audio_output_path = os.path.join(TEMP_DIR, f"{request_id}.mp3")
@@ -157,7 +270,7 @@ def generate_avatar_response(
             def run_tts() -> None:
                 try:
                     tts_service.synthesize(clean_text_for_tts, audio_output_path)
-                except Exception as exc:  # pragma: no cover - runtime environment dependent
+                except Exception as exc:
                     tts_error.append(exc)
 
             tts_thread = threading.Thread(target=run_tts)
@@ -166,7 +279,7 @@ def generate_avatar_response(
             if tts_error:
                 raise tts_error[0]
             audio_ready = os.path.exists(audio_output_path) and os.path.getsize(audio_output_path) > 0
-    except Exception as exc:  # pragma: no cover - runtime environment dependent
+    except Exception as exc:
         print(f"[TTS] synthesis failed: {exc}")
         audio_ready = False
 
@@ -175,7 +288,7 @@ def generate_avatar_response(
         try:
             success_path = avatar_engine.generate_avatar_video(audio_output_path, video_output_path)
             video_ready = bool(success_path and os.path.exists(video_output_path))
-        except Exception as exc:  # pragma: no cover - runtime environment dependent
+        except Exception as exc:
             print(f"[AvatarEngine] video generation failed: {exc}")
             video_ready = False
 
@@ -193,6 +306,9 @@ def generate_avatar_response(
             "matched_attraction": pipeline_result.get("matched_attraction"),
             "recommendation_label": pipeline_result.get("recommendation_label"),
             "response_kind": pipeline_result.get("response_kind"),
+            "recommendation": pipeline_result.get("recommendation"),
+            "gps_state": pipeline_result.get("gps_state"),
+            "gps_candidates": pipeline_result.get("gps_candidates", []),
         },
     }
 
@@ -200,6 +316,7 @@ def generate_avatar_response(
 @router.websocket("/v1/interact/stream")
 async def interact_stream_ws(websocket: WebSocket):
     await websocket.accept()
+    ws_session_key = f"ws:{uuid.uuid4()}"
 
     try:
         while True:
@@ -216,6 +333,8 @@ async def interact_stream_ws(websocket: WebSocket):
             user_text = ""
             is_audio_input = False
             gps_status = payload.get("gps_status", "normal")
+            client_session_id = payload.get("client_session_id")
+            session_key = get_session_key("anonymous", client_session_id, fallback=ws_session_key)
 
             if "text" in payload:
                 user_text = payload["text"]
@@ -241,7 +360,12 @@ async def interact_stream_ws(websocket: WebSocket):
             if is_audio_input:
                 await websocket.send_json({"type": "text_user", "text": user_text})
 
-            assistant_text, pipeline_result = run_answer_pipeline(user_text, gps_status)
+            assistant_text, pipeline_result = run_answer_pipeline(
+                user_text,
+                gps_status,
+                session_key=session_key,
+                user_profile=None,
+            )
 
             for char in assistant_text:
                 await websocket.send_json({"type": "text_token", "text": char})
@@ -251,7 +375,17 @@ async def interact_stream_ws(websocket: WebSocket):
                 if payload_chunk:
                     await websocket.send_json({"type": "chunk", **payload_chunk})
 
-            await websocket.send_json({"type": "done", "full_text": assistant_text})
+            rag_metadata = {
+                "intent": pipeline_result["intent"],
+                "agent_type": pipeline_result["agent_type"],
+                "matched_attraction": pipeline_result.get("matched_attraction"),
+                "recommendation_label": pipeline_result.get("recommendation_label"),
+                "response_kind": pipeline_result.get("response_kind"),
+                "recommendation": pipeline_result.get("recommendation"),
+                "gps_state": pipeline_result.get("gps_state"),
+                "gps_candidates": pipeline_result.get("gps_candidates", []),
+            }
+            await websocket.send_json({"type": "done", "full_text": assistant_text, "rag_metadata": rag_metadata})
 
             try:
                 log_service.analyze_and_log(
@@ -263,6 +397,7 @@ async def interact_stream_ws(websocket: WebSocket):
                         "query_scope": pipeline_result["intent"],
                         "matched_attraction": pipeline_result.get("matched_attraction"),
                         "recommendation_label": pipeline_result.get("recommendation_label"),
+                        "response_kind": pipeline_result.get("response_kind"),
                     },
                 )
             except Exception as exc:
@@ -284,6 +419,7 @@ async def interact_audio(
     audio: UploadFile = File(...),
     avatar_image: Optional[UploadFile] = File(None),
     gps_status: str = Form("normal"),
+    client_session_id: Optional[str] = Form(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     api_start_time = time.time()
@@ -308,7 +444,7 @@ async def interact_audio(
     except Exception:
         user_text = "（语音识别失败）"
 
-    result = generate_avatar_response(user_text, username, gps_status)
+    result = generate_avatar_response(user_text, username, gps_status, client_session_id=client_session_id)
 
     total_latency = time.time() - api_start_time
     background_tasks.add_task(
@@ -321,6 +457,7 @@ async def interact_audio(
             "query_scope": result.get("rag_metadata", {}).get("intent"),
             "matched_attraction": result.get("rag_metadata", {}).get("matched_attraction"),
             "recommendation_label": result.get("rag_metadata", {}).get("recommendation_label"),
+            "response_kind": result.get("rag_metadata", {}).get("response_kind"),
         },
     )
 
@@ -333,6 +470,7 @@ async def interact_text(
     text: str = Form(...),
     avatar_image: Optional[UploadFile] = File(None),
     gps_status: str = Form("normal"),
+    client_session_id: Optional[str] = Form(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     api_start_time = time.time()
@@ -345,7 +483,7 @@ async def interact_text(
             shutil.copyfileobj(avatar_image.file, buffer)
         avatar_engine.update_base_image(image_path)
 
-    result = generate_avatar_response(text, username, gps_status)
+    result = generate_avatar_response(text, username, gps_status, client_session_id=client_session_id)
 
     total_latency = time.time() - api_start_time
     background_tasks.add_task(
@@ -358,6 +496,7 @@ async def interact_text(
             "query_scope": result.get("rag_metadata", {}).get("intent"),
             "matched_attraction": result.get("rag_metadata", {}).get("matched_attraction"),
             "recommendation_label": result.get("rag_metadata", {}).get("recommendation_label"),
+            "response_kind": result.get("rag_metadata", {}).get("response_kind"),
         },
     )
 
@@ -371,9 +510,6 @@ async def get_profile(current_user: Dict[str, Any] = Depends(get_current_user)):
 
 
 @router.get("/v1/interact/history")
-async def get_history(
-    limit: int = 50,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-):
+async def get_history(limit: int = 50, current_user: Dict[str, Any] = Depends(get_current_user)):
     history = log_service.get_user_history(current_user["username"], limit=limit)
     return JSONResponse(content={"history": history})
