@@ -4,7 +4,7 @@ import whisper
 import asyncio
 import edge_tts
 
-from app.core.config import settings
+from app.core.config import resolve_path, settings
 
 class ASRService:
     """
@@ -17,7 +17,9 @@ class ASRService:
 
     def _load_model(self):
         print(f"[ASR] Loading Whisper model: {self.model_name}")
-        self.model = whisper.load_model(self.model_name, device=self.device)
+        download_root = resolve_path(settings.WHISPER_DOWNLOAD_DIR)
+        os.makedirs(download_root, exist_ok=True)
+        self.model = whisper.load_model(self.model_name, device=self.device, download_root=download_root)
         self.is_loaded = True
 
     def transcribe(self, audio_path: str) -> str:

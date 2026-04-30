@@ -1,0 +1,51 @@
+{
+  "models": [
+    {
+      "name": "bge-large-zh-v1.5",
+      "type": "huggingface_snapshot",
+      "repo_id": "BAAI/bge-large-zh-v1.5",
+      "target_dir": "models/bge-large-zh-v1.5",
+      "required_files": [
+        "config.json",
+        "model.safetensors",
+        "tokenizer.json",
+        "vocab.txt"
+      ]
+    },
+    {
+      "name": "SoulX-FlashHead-Lite-1.3B",
+      "type": "huggingface_snapshot",
+      "repo_id": "Soul-AILab/SoulX-FlashHead-1_3B",
+      "target_dir": "models/SoulX-FlashHead-Lite-1.3B",
+      "required_files": [
+        "model_index.json",
+        "Model_Lite/config.json",
+        "Model_Lite/diffusion_pytorch_model.safetensors",
+        "VAE_LTX/config.json",
+        "VAE_LTX/diffusion_pytorch_model.safetensors",
+        "VAE_Wan/Wan2.1_VAE.pth"
+      ]
+    },
+    {
+      "name": "wav2vec2-base-960h",
+      "type": "huggingface_snapshot",
+      "repo_id": "facebook/wav2vec2-base-960h",
+      "target_dir": "models/wav2vec2-base-960h",
+      "required_files": [
+        "config.json",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "feature_extractor_config.json"
+      ]
+    },
+    {
+      "name": "whisper-base-runtime",
+      "type": "openai_whisper",
+      "model_name": "base",
+      "target_dir": "models/whisper-cache",
+      "required_files": [
+        "base.pt"
+      ]
+    }
+  ]
+}

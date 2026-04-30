@@ -1,7 +1,5 @@
 import os
-from typing import Any, Dict, Optional
 from pydantic_settings import BaseSettings
-from pydantic import validator
 
 # 统一解析路径的基准：项目根目录
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -50,12 +48,12 @@ class Settings(BaseSettings):
     AVATAR_EMPTY_CACHE_AFTER_INFER: bool = True
 
     # ==========================================
-    # ASR & TTS (Whisper & ParaTTS)
+    # ASR & TTS (Whisper & Edge-TTS)
     # ==========================================
     MODEL_ASR_NAME: str = "Whisper"
     MODEL_ASR_PATH: str = "base"
-    MODEL_TTS_NAME: str = "ParaTTS"
-    MODEL_TTS_PATH: str = "./models/paratts"
+    WHISPER_DOWNLOAD_DIR: str = "./models/whisper-cache"
+    MODEL_TTS_NAME: str = "Edge-TTS"
 
     # ==========================================
     # Server Configuration

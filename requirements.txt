@@ -38,6 +38,7 @@ diffusers>=0.37.0
 transformers==4.57.3
 tokenizers>=0.20.3
 sentencepiece
+huggingface_hub>=0.23.0
 xfuser>=0.4.3; platform_system != "Windows"
 xformers; platform_system != "Windows"
 mediapipe==0.10.9

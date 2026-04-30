@@ -1,18 +1,20 @@
 import json
 import os
-import shutil
 import sqlite3
 import sys
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Dict, List
 
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-ENV_PATH = os.path.join(PROJECT_ROOT, ".env")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_PATH = PROJECT_ROOT / ".env"
+VENV_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+MANIFEST_PATH = PROJECT_ROOT / "scripts" / "model_manifest.json"
 
 
-def load_env_file(path: str) -> Dict[str, str]:
+def load_env_file(path: Path) -> Dict[str, str]:
     values: Dict[str, str] = {}
-    if not os.path.exists(path):
+    if not path.exists():
         return values
     with open(path, "r", encoding="utf-8") as file_obj:
         for raw_line in file_obj:
@@ -24,80 +26,64 @@ def load_env_file(path: str) -> Dict[str, str]:
     return values
 
 
-def resolve_project_path(path_value: str) -> str:
-    if os.path.isabs(path_value):
-        return path_value
-    return os.path.normpath(os.path.join(PROJECT_ROOT, path_value))
+def resolve_project_path(path_value: str) -> Path:
+    path = Path(path_value)
+    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
-def check_env(env_values: Dict[str, str]) -> List[str]:
-    errors = []
-    required = [
-        "LLM_API_KEY",
-        "LLM_API_BASE",
-        "LLM_MODEL_NAME",
-        "MODEL_EMBEDDING_PATH",
-        "MODEL_AVATAR_PATH",
-        "KNOWLEDGE_BASE_DIR",
-        "CHROMA_DB_DIR",
-    ]
-    for key in required:
-        if not env_values.get(key):
-            errors.append(f"Missing required .env field: {key}")
-
-    if env_values.get("LLM_API_KEY") in {"", "sk-placeholder", "your_api_key_here"}:
-        errors.append("LLM_API_KEY is missing or still using a placeholder value")
-
-    return errors
+def load_manifest() -> Dict[str, List[Dict[str, object]]]:
+    with open(MANIFEST_PATH, "r", encoding="utf-8") as file_obj:
+        return json.load(file_obj)
 
 
-def check_paths(env_values: Dict[str, str]) -> List[str]:
-    errors = []
-    for key in ("MODEL_EMBEDDING_PATH", "MODEL_AVATAR_PATH", "KNOWLEDGE_BASE_DIR"):
-        value = env_values.get(key)
-        if value and not os.path.exists(resolve_project_path(value)):
-            errors.append(f"Configured path does not exist: {key} -> {resolve_project_path(value)}")
-
-    asr_value = env_values.get("MODEL_ASR_PATH", "")
-    known_whisper_aliases = {"tiny", "base", "small", "medium", "large", "turbo"}
-    if asr_value and asr_value not in known_whisper_aliases:
-        if not os.path.exists(resolve_project_path(asr_value)):
-            errors.append(f"Configured ASR path does not exist: MODEL_ASR_PATH -> {resolve_project_path(asr_value)}")
-
-    return errors
+def collect_missing_runtime(env_values: Dict[str, str]) -> List[str]:
+    missing = []
+    if not VENV_PYTHON.exists():
+        missing.append("Python virtual environment is missing (.venv).")
+    if not ENV_PATH.exists():
+        missing.append(".env file is missing.")
+    elif env_values.get("LLM_API_KEY") in {"", "sk-placeholder", "your_llm_api_key_here"}:
+        missing.append("LLM_API_KEY is missing or still using the placeholder value.")
+    return missing
 
 
-def check_ffmpeg() -> List[str]:
-    if shutil.which("ffmpeg"):
-        return []
-    try:
-        import imageio_ffmpeg
+def collect_missing_models(env_values: Dict[str, str]) -> List[str]:
+    manifest = load_manifest()
+    missing = []
+    model_targets = {
+        "MODEL_EMBEDDING_PATH": env_values.get("MODEL_EMBEDDING_PATH"),
+        "MODEL_AVATAR_PATH": env_values.get("MODEL_AVATAR_PATH"),
+        "WHISPER_DOWNLOAD_DIR": env_values.get("WHISPER_DOWNLOAD_DIR"),
+    }
+    for key, value in model_targets.items():
+        if value and not resolve_project_path(value).exists():
+            missing.append(f"Configured model path is missing: {key} -> {resolve_project_path(value)}")
 
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and os.path.exists(exe):
-            return []
-    except Exception:
-        pass
-    return ["ffmpeg is not available via PATH or imageio_ffmpeg; avatar video generation will fail"]
-
-
-def check_chroma(env_values: Dict[str, str]) -> List[str]:
-    errors = []
-    db_dir = env_values.get("CHROMA_DB_DIR")
-    if not db_dir:
-        return errors
-    resolved = resolve_project_path(db_dir)
-    if not os.path.exists(resolved) or not os.listdir(resolved):
-        errors.append("Chroma knowledge base is missing; run build_knowledge_base.bat first")
-    return errors
+    for model in manifest.get("models", []):
+        target_dir = resolve_project_path(str(model["target_dir"]))
+        required_files = [target_dir / relative_path for relative_path in model.get("required_files", [])]
+        if not target_dir.exists() or not all(path.exists() for path in required_files):
+            missing.append(f"Model is not ready: {model['name']} -> {target_dir}")
+    return missing
 
 
-def check_behavior_db() -> List[str]:
-    db_path = os.path.join(PROJECT_ROOT, "data", "processed", "tourist_behavior.db")
-    if not os.path.exists(db_path):
-        return ["Behavior database is missing; run build_behavior_data.bat first"]
+def collect_missing_data(env_values: Dict[str, str]) -> List[str]:
+    missing = []
 
-    conn = sqlite3.connect(db_path)
+    kb_dir = resolve_project_path(env_values.get("KNOWLEDGE_BASE_DIR", "./data/knowledge_base"))
+    if not kb_dir.exists():
+        missing.append(f"Knowledge base source directory is missing: {kb_dir}")
+
+    chroma_dir = resolve_project_path(env_values.get("CHROMA_DB_DIR", "./data/chroma_db"))
+    if not chroma_dir.exists() or not os.listdir(chroma_dir):
+        missing.append("Chroma knowledge base is missing. Run build_knowledge_base.bat.")
+
+    behavior_db = PROJECT_ROOT / "data" / "processed" / "tourist_behavior.db"
+    if not behavior_db.exists():
+        missing.append("Behavior database is missing. Run build_behavior_data.bat.")
+        return missing
+
+    conn = sqlite3.connect(str(behavior_db))
     try:
         cursor = conn.cursor()
         for table in ("tourist_behavior", "attractions"):
@@ -106,29 +92,42 @@ def check_behavior_db() -> List[str]:
                 (table,),
             ).fetchone()[0]
             if not exists:
-                return [f"Required table is missing in tourist_behavior.db: {table}"]
-        return []
+                missing.append(f"Required table is missing in tourist_behavior.db: {table}")
     finally:
         conn.close()
 
+    return missing
+
+
+def build_next_steps(missing_runtime: List[str], missing_models: List[str], missing_data: List[str]) -> List[str]:
+    steps: List[str] = []
+    if missing_runtime or missing_models:
+        steps.append("Run bootstrap_windows.bat first.")
+    if any("LLM_API_KEY" in item or ".env" in item for item in missing_runtime):
+        steps.append("Fill the real LLM API configuration in .env.")
+    if any("build_behavior_data.bat" in item or "tourist_behavior" in item for item in missing_data):
+        steps.append("Run build_behavior_data.bat.")
+    if any("build_knowledge_base.bat" in item or "Chroma" in item for item in missing_data):
+        steps.append("Run build_knowledge_base.bat.")
+    steps.append("edge-tts and the LLM API both require network access at runtime.")
+    return steps
+
 
 def main() -> int:
-    problems: List[str] = []
     env_values = load_env_file(ENV_PATH)
-
-    if not os.path.exists(ENV_PATH):
-        problems.append(".env file is missing; copy .env.example to .env and fill the values first")
-    else:
-        problems.extend(check_env(env_values))
-        problems.extend(check_paths(env_values))
-        problems.extend(check_chroma(env_values))
-
-    problems.extend(check_ffmpeg())
-    problems.extend(check_behavior_db())
+    missing_runtime = collect_missing_runtime(env_values)
+    missing_models = collect_missing_models(env_values)
+    missing_data = collect_missing_data(env_values)
+    problems = missing_runtime + missing_models + missing_data
+    next_steps = build_next_steps(missing_runtime, missing_models, missing_data)
 
     payload = {
         "ok": not problems,
         "problems": problems,
+        "missing_runtime": missing_runtime,
+        "missing_models": missing_models,
+        "missing_data": missing_data,
+        "next_steps": next_steps,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if not problems else 1

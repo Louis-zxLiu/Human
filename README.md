@@ -1,46 +1,77 @@
 # Human
 
-景区导览服务 AI 数字人项目协作说明。
+景区导览服务 AI 数字人项目。
 
-当前版本已经完成两轮核心整改，运行逻辑按以下三层分工：
+当前版本已经完成：
 
 - `FACT`：灵山胜境事实知识问答
 - `ANALYTICS`：游客行为分析问答
 - `RECOMMEND`：个性化路线推荐
+- 弱 GPS 多轮定位演示
+- 游客端与后台演示页面
 
-同时支持弱 GPS 多轮定位演示、后台分析看板、标准题集回归验证。
+本说明面向**协作者从 GitHub 首次下载项目后，如何跑起完整演示版本**。
 
-## 1. 运行环境
+## 1. 当前版本的重要事实
 
-项目当前默认面向 Windows 本地运行，根目录已经提供了完整的批处理脚本：
+### 1.1 TTS 方案
 
-- `setup_windows.bat`：准备 Python 环境与依赖
-- `build_behavior_data.bat`：构建行为分析数据库
-- `build_knowledge_base.bat`：构建景区知识库
-- `start_windows.bat`：预检并启动系统
+当前项目的 TTS 方案**固定为 `edge-tts`**：
 
-## 2. 首次协作运行流程
+- 不需要下载本地 TTS 模型
+- 运行时必须联网
+- `.env` 中不需要配置任何本地 TTS 模型目录
 
-建议按下面顺序执行，不要跳步：
+### 1.2 模型体积
 
-### 第一步：准备环境
+完整演示模式需要自动下载多个大模型，整体磁盘占用请按 **18GB 到 20GB+** 预留。
 
-双击或运行：
+### 1.3 平台支持
+
+当前只正式支持：
+
+- Windows
+
+### 1.4 前端依赖
+
+当前前端页面仍依赖 CDN 资源，因此运行时建议保持联网。
+
+## 2. 首次运行推荐顺序
+
+协作者第一次从 GitHub 下载后，固定按下面顺序执行：
+
+1. `bootstrap_windows.bat`
+2. 填 `.env`
+3. `build_behavior_data.bat`
+4. `build_knowledge_base.bat`
+5. `start_windows.bat`
+
+不要跳步。
+
+## 3. 第一步：运行 bootstrap
+
+在项目根目录执行：
 
 ```bat
-setup_windows.bat
+bootstrap_windows.bat
 ```
 
-它会做这些事：
+它会完成以下内容：
 
-- 检查 `env\python.exe` 是否存在
-- 自动用 `.env.example` 生成 `.env`（如果本地还没有）
+- 检查系统 Python
+- 创建本地 `.venv`
 - 安装 `requirements.txt`
-- 安装 `SoulX-FlashHead` 运行依赖
+- 安装 `SoulX-FlashHead` 依赖
+- 自动生成 `.env`
+- 自动下载完整演示模式所需模型
 
-### 第二步：填写 `.env`
+如果你只是看到 `setup_windows.bat`，也可以运行它，但它现在只是 `bootstrap_windows.bat` 的兼容入口。
 
-重点确认下面几个字段：
+## 4. 第二步：填写 .env
+
+第一次运行 bootstrap 后，如果根目录还没有 `.env`，脚本会自动从 `.env.example` 生成一份。
+
+协作者至少需要确认：
 
 ```env
 LLM_API_KEY=your_llm_api_key_here
@@ -48,62 +79,58 @@ LLM_API_BASE=https://api.openai.com/v1
 LLM_MODEL_NAME=gpt-4o-mini
 MODEL_EMBEDDING_PATH=./models/bge-large-zh-v1.5
 MODEL_AVATAR_PATH=./models/SoulX-FlashHead-Lite-1.3B
-KNOWLEDGE_BASE_DIR=./data/knowledge_base
-CHROMA_DB_DIR=./data/chroma_db
+MODEL_ASR_PATH=base
+WHISPER_DOWNLOAD_DIR=./models/whisper-cache
+MODEL_TTS_NAME=Edge-TTS
 ```
 
-说明：
+最重要的是：
 
-- `LLM_API_KEY` 必须填真实值，否则联网大模型能力不可用
-- `edge-tts` 运行时需要联网
-- 前端目前仍依赖 CDN 资源
+- `LLM_API_KEY` 必须改成真实值
 
-### 第三步：构建行为分析数据库
+## 5. 第三步：构建行为分析数据库
 
-运行：
+执行：
 
 ```bat
 build_behavior_data.bat
 ```
 
-它会做两件事：
+这个步骤会：
 
-- 把灵山胜境结构化景点资料导入 `attractions`
-- 把比赛方 Excel 导入 `tourist_behavior`
+- 导入灵山胜境结构化景点事实到 `attractions`
+- 导入比赛方行为分析 Excel 到 `tourist_behavior`
 
 注意：
 
-- 比赛方提供的 `data/raw_sql_data/景点景区旅游数据行为分析数据.xlsx` 只用于行为分析
+- `data/raw_sql_data/景点景区旅游数据行为分析数据.xlsx` 只用于行为分析
 - 它**不是**景区事实知识库
 
-### 第四步：构建景区知识库
+## 6. 第四步：构建景区知识库
 
-运行：
+执行：
 
 ```bat
 build_knowledge_base.bat
 ```
 
-它会把 `data/knowledge_base` 下的灵山资料写入 Chroma 向量库，用于景区讲解与补充检索。
+这个步骤会把 `data/knowledge_base/` 下的灵山资料写入 Chroma 向量库，用于景区讲解和补充检索。
 
-### 第五步：启动系统
+## 7. 第五步：启动系统
 
-运行：
+执行：
 
 ```bat
 start_windows.bat
 ```
 
-启动脚本会先执行预检，再启动后端服务。
+启动脚本会先跑：
 
-如果预检失败，优先检查：
+- `scripts/preflight_check.py`
 
-1. `.env` 是否填写完整
-2. 模型目录是否存在
-3. 行为数据库是否已构建
-4. 知识库是否已构建
+只有预检通过后才会启动服务。
 
-## 3. 启动成功后访问地址
+## 8. 启动成功后访问地址
 
 游客前台：
 
@@ -123,30 +150,45 @@ http://localhost:8000/admin
 admin / admin123
 ```
 
-## 4. 推荐的验证方式
+## 9. 自动下载的模型
 
-### 4.1 运行标准题集
+当前完整演示模式默认拉取：
 
-项目已提供第二批标准评测脚本：
+- `BAAI/bge-large-zh-v1.5`
+- `Soul-AILab/SoulX-FlashHead-1_3B`
+- `facebook/wav2vec2-base-960h`
+- Whisper `base` 运行资源
+
+模型清单位置：
+
+- [scripts/model_manifest.json](/D:/Human/scripts/model_manifest.json)
+
+下载脚本位置：
+
+- [scripts/download_models.py](/D:/Human/scripts/download_models.py)
+
+## 10. 推荐的验证方式
+
+### 10.1 标准题集
+
+执行：
 
 ```bat
-env\python.exe tests\run_eval.py
+.venv\Scripts\python.exe tests\run_eval.py
 ```
 
-当前题集分为三类：
+当前题集按三类组织：
 
 - `FACT`
 - `ANALYTICS`
 - `RECOMMEND`
 
-评测文件位置：
+相关文件：
 
 - [tests/manual_eval_questions.json](/D:/Human/tests/manual_eval_questions.json)
 - [tests/run_eval.py](/D:/Human/tests/run_eval.py)
 
-### 4.2 手工验证建议
-
-建议至少验证下面几个问题：
+### 10.2 手工验证建议
 
 事实问答：
 
@@ -166,114 +208,95 @@ env\python.exe tests\run_eval.py
 
 弱 GPS 演示：
 
-1. 打开前台 `GPS 信号极弱`
+1. 在前台打开 `GPS 信号极弱`
 2. 问：`我现在在哪，怎么去梵宫？`
-3. 再补一句：`我附近能看到大佛和一片大广场`
+3. 再补：`我附近能看到大佛和一片大广场`
 
-## 5. 目录说明
+## 11. 当前目录说明
 
 ### 核心后端
 
 - `app/api/`
-  - 接口层
 - `app/rag/`
-  - 问答编排、事实代理、分析代理、推荐代理、位置代理
 - `app/services/`
-  - ASR、TTS、数字人引擎、日志服务
 
 ### 数据与模型
 
 - `data/knowledge_base/`
-  - 灵山景区文档
 - `data/raw_sql_data/`
-  - 比赛方行为分析 Excel
 - `data/processed/`
-  - SQLite 数据库与处理产物
 - `models/`
-  - 本地模型资源
 
-### 文档与测试
+### 协作与测试
 
 - `docs/`
-  - 第二批改造说明、答辩提纲、演示脚本
 - `tests/`
-  - 标准题集与评测脚本
+- `scripts/`
 
-## 6. 当前版本的关键设计约束
+## 12. 常见问题
 
-### 数据分层治理
+### Q1：bootstrap 失败
 
-系统明确区分三层数据：
+优先检查：
 
-1. 景区知识层  
-只回答灵山景区事实问题
+- 本机是否有 Python 3.10+
+- 网络是否能访问 Hugging Face
+- 是否有足够磁盘空间
 
-2. 游客行为分析层  
-只回答偏好、消费、停留、满意度等统计问题
+### Q2：模型下载失败
 
-3. 推荐生成层  
-结合景区知识与行为分析输出路线推荐
+当前默认从 Hugging Face / 官方源拉取。
 
-### 弱 GPS 场景
+请先检查：
 
-当前弱 GPS 不是“假定位”，而是多轮流程：
+- 网络连接
+- Hugging Face 是否可访问
+- 重试 `bootstrap_windows.bat`
 
-1. 识别问路/问位置
-2. 追问地标
-3. 推测候选位置
-4. 输出路线建议
+如果未来你们接入 HF 镜像或私有存储，再补充备用下载源。
 
-## 7. 常见问题
+### Q3：start 预检失败
 
-### Q1：`start_windows.bat` 预检失败
+先看 `scripts/preflight_check.py` 的 JSON 输出，它会明确告诉你：
 
-先按顺序重跑：
+- 缺 `.venv`
+- 缺 `.env`
+- 缺模型
+- 缺行为数据库
+- 缺知识库
+
+通常恢复顺序是：
 
 ```text
-setup_windows.bat
+bootstrap_windows.bat
 build_behavior_data.bat
 build_knowledge_base.bat
 start_windows.bat
 ```
 
-### Q2：前端能开，但回答失败
+### Q4：前台能打开，但回答失败
 
 优先检查：
 
-- `.env` 中的 `LLM_API_KEY`
-- 网络是否可访问 `LLM_API_BASE`
-- `edge-tts` 是否可联网
+- `.env` 里的 `LLM_API_KEY`
+- `LLM_API_BASE` 是否可访问
+- 运行时网络是否可供 `edge-tts` 使用
 
-### Q3：后台没数据
+## 13. 协作者建议工作流
 
-说明日志库还没有积累交互记录。先到前台进行几轮问答，再刷新后台。
-
-### Q4：标准题集运行失败
-
-请确认你是在项目根目录执行：
+如果你要继续开发，建议每次改动后至少跑：
 
 ```bat
-env\python.exe tests\run_eval.py
+.venv\Scripts\python.exe -m compileall app tests scripts
+.venv\Scripts\python.exe tests\run_eval.py
 ```
 
-## 8. 协作者建议工作流
+然后再手工验证前台与后台。
 
-如果你要继续改功能，建议按这个流程：
+## 14. 相关文档
 
-1. 改代码
-2. 跑：
-
-```bat
-env\python.exe -m compileall app tests scripts
-env\python.exe tests\run_eval.py
-```
-
-3. 手工验证前台和后台
-4. 再提交变更
-
-## 9. 相关文档
-
-- [总体设计文档.md](/D:/Human/总体设计文档.md)
+- [docs/协作者快速开始.md](/D:/Human/docs/协作者快速开始.md)
 - [docs/第二批改造说明.md](/D:/Human/docs/第二批改造说明.md)
 - [docs/答辩提纲.md](/D:/Human/docs/答辩提纲.md)
 - [docs/演示脚本.md](/D:/Human/docs/演示脚本.md)
+- [总体设计文档.md](/D:/Human/总体设计文档.md)

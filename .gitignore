@@ -7,6 +7,7 @@ __pycache__/
 # Local environment and secrets
 .env
 env/
+.venv/
 .cache/
 .conda_pkgs/
 .tmp/
