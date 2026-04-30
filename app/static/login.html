@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>景区数字人 - 登录/注册</title>
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Element Plus -->
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <script src="https://unpkg.com/element-plus"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .card-bg {
+            background: rgba(30, 41, 59, 0.9);
+            border: 1px solid #334155;
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            padding: 2rem;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+        [v-cloak] {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="app" v-cloak>
+        <div class="card-bg">
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 bg-blue-600 rounded-full mx-auto flex items-center justify-center font-bold text-3xl mb-4">
+                    AI
+                </div>
+                <h2 class="text-2xl font-bold">{{ isLogin ? '用户登录' : '用户注册' }}</h2>
+                <p class="text-slate-400 mt-2 text-sm">景区导览服务AI数字人系统</p>
+            </div>
+
+            <el-form :model="form" @submit.prevent="handleSubmit" label-position="top">
+                <el-form-item label="用户名">
+                    <el-input v-model="form.username" placeholder="请输入用户名" size="large" />
+                </el-form-item>
+                <el-form-item label="密码">
+                    <el-input v-model="form.password" type="password" placeholder="请输入密码" show-password size="large" />
+                </el-form-item>
+                
+                <el-button type="primary" native-type="submit" class="w-full mt-4" size="large" :loading="loading">
+                    {{ isLogin ? '登录' : '注册' }}
+                </el-button>
+            </el-form>
+
+            <div class="text-center mt-6 text-slate-400 text-sm">
+                {{ isLogin ? '还没有账号？' : '已有账号？' }}
+                <a href="#" @click.prevent="isLogin = !isLogin" class="text-blue-400 hover:text-blue-300">
+                    {{ isLogin ? '立即注册' : '返回登录' }}
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref } = Vue;
+
+        const app = createApp({
+            setup() {
+                const isLogin = ref(true);
+                const loading = ref(false);
+                const form = ref({
+                    username: '',
+                    password: ''
+                });
+
+                const handleSubmit = async () => {
+                    if (!form.value.username || !form.value.password) {
+                        ElementPlus.ElMessage.warning('请填写完整的用户名和密码');
+                        return;
+                    }
+                    
+                    loading.value = true;
+                    try {
+                        const endpoint = isLogin.value ? '/api/v1/auth/login' : '/api/v1/auth/register';
+                        const response = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(form.value)
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (!response.ok) {
+                            throw new Error(data.detail || '请求失败');
+                        }
+                        
+                        if (!isLogin.value) {
+                            ElementPlus.ElMessage.success('注册成功，请登录');
+                            isLogin.value = true;
+                        } else {
+                            ElementPlus.ElMessage.success('登录成功');
+                            localStorage.setItem('auth_token', data.access_token);
+                            localStorage.setItem('username', data.username);
+                            localStorage.setItem('user_role', data.role);
+                            
+                            // Redirect based on role
+                            if (data.role === 'admin') {
+                                window.location.href = '/admin';
+                            } else {
+                                window.location.href = '/';
+                            }
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error(error.message);
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                return {
+                    isLogin,
+                    loading,
+                    form,
+                    handleSubmit
+                };
+            }
+        });
+
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>

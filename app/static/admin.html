@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>景区数字人管理后台 - 数据大屏</title>
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Element Plus -->
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <script src="https://unpkg.com/element-plus"></script>
+    <!-- ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <!-- ECharts WordCloud -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts-wordcloud@2.1.0/dist/echarts-wordcloud.min.js"></script>
+    <!-- Tailwind CSS (for layout) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .card-bg {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid #334155;
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+        }
+        .chart-container {
+            height: 350px;
+            width: 100%;
+        }
+        [v-cloak] {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="app" v-cloak class="min-h-screen p-6">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-8 border-b border-slate-700 pb-4">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-xl">
+                    AI
+                </div>
+                <h1 class="text-2xl font-bold tracking-wider">景区数字人管理后台 <span class="text-blue-400">数据大屏</span></h1>
+            </div>
+            <div class="flex gap-4 items-center">
+                <span class="text-sm">欢迎, <span class="font-bold">{{ username }}</span></span>
+                <el-button type="primary" @click="fetchDashboardData" :loading="loading" plain>
+                    <span class="flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        刷新数据
+                    </span>
+                </el-button>
+                <el-button type="info" plain @click="openVoiceDialog">配置音色</el-button>
+                <el-button type="warning" plain @click="showAvatarDialog = true">更新数字人形象</el-button>
+                <el-button @click="goToFrontend">返回前台</el-button>
+                <el-button type="danger" plain @click="logout">退出</el-button>
+            </div>
+        </header>
+
+        <main v-loading.fullscreen.lock="loading" element-loading-background="rgba(15, 23, 42, 0.9)">
+            <!-- Top Stats Row -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div class="card-bg p-6 flex flex-col items-center justify-center h-40">
+                    <h3 class="text-slate-400 text-lg mb-2">累计接待交互人次</h3>
+                    <div class="text-6xl font-bold text-blue-400">{{ data.total_interactions }}</div>
+                </div>
+                <div class="card-bg p-6 flex flex-col items-center justify-center h-40">
+                    <h3 class="text-slate-400 text-lg mb-2">系统平均响应耗时</h3>
+                    <div class="text-5xl font-bold text-emerald-400">{{ data.avg_cost_time }} <span class="text-2xl text-emerald-600">秒</span></div>
+                </div>
+            </div>
+
+            <!-- Charts Row 1 -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                <!-- Intent Distribution (Pie) -->
+                <div class="card-bg p-6">
+                    <h3 class="text-xl font-semibold mb-4 border-l-4 border-blue-500 pl-3">游客意图分布</h3>
+                    <div id="intentChart" class="chart-container"></div>
+                </div>
+
+                <!-- Sentiment Distribution (Bar) -->
+                <div class="card-bg p-6">
+                    <h3 class="text-xl font-semibold mb-4 border-l-4 border-purple-500 pl-3">游客情感倾向</h3>
+                    <div id="sentimentChart" class="chart-container"></div>
+                </div>
+            </div>
+
+            <!-- Charts Row 2 -->
+            <div class="grid grid-cols-1 gap-6">
+                <!-- Word Cloud -->
+                <div class="card-bg p-6">
+                    <h3 class="text-xl font-semibold mb-4 border-l-4 border-emerald-500 pl-3">热门关注点词云</h3>
+                    <div id="wordcloudChart" class="chart-container" style="height: 400px;"></div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Avatar Update Dialog -->
+        <el-dialog v-model="showAvatarDialog" title="更新数字人默认形象" width="400px" center>
+            <div class="flex flex-col items-center">
+                <el-upload
+                    class="avatar-uploader"
+                    action="#"
+                    :show-file-list="false"
+                    :auto-upload="false"
+                    :on-change="handleAvatarChange"
+                    accept="image/jpeg, image/png, image/webp"
+                >
+                    <img v-if="avatarPreview" :src="avatarPreview" class="w-48 h-48 object-cover rounded-lg border-2 border-dashed border-gray-400" />
+                    <div v-else class="w-48 h-48 border-2 border-dashed border-gray-400 rounded-lg flex flex-col items-center justify-center text-gray-500 cursor-pointer hover:border-blue-500 hover:text-blue-500 transition">
+                        <svg class="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                        <span>选择图片</span>
+                    </div>
+                </el-upload>
+            </div>
+            <template #footer>
+                <span class="dialog-footer">
+                    <el-button @click="showAvatarDialog = false">取消</el-button>
+                    <el-button type="primary" @click="submitAvatar" :loading="avatarUploading" :disabled="!selectedAvatarFile">确认上传</el-button>
+                </span>
+            </template>
+        </el-dialog>
+
+        <!-- TTS Voice Config Dialog -->
+        <el-dialog v-model="showVoiceDialog" title="配置数字人音色" width="450px" center @close="stopPreviewAudio">
+            <div class="flex flex-col items-center gap-4 py-4" v-loading="voiceLoading">
+                <span class="text-gray-300">请选择预设语音 (Edge-TTS)：</span>
+                <div class="flex items-center gap-2">
+                    <el-select v-model="currentVoice" placeholder="选择音色" style="width: 250px;" @change="stopPreviewAudio">
+                        <el-option
+                            v-for="voice in availableVoices"
+                            :key="voice.id"
+                            :label="voice.name"
+                            :value="voice.id">
+                        </el-option>
+                    </el-select>
+                    <el-button type="success" plain @click="previewVoice" :loading="voicePreviewing" :disabled="!currentVoice">试听</el-button>
+                </div>
+                <div v-if="previewAudioUrl" class="mt-2 text-sm text-green-400">正在播放试听...</div>
+            </div>
+            <template #footer>
+                <span class="dialog-footer">
+                    <el-button @click="showVoiceDialog = false">取消</el-button>
+                    <el-button type="primary" @click="submitVoice" :loading="voiceUpdating" :disabled="!currentVoice">确认保存</el-button>
+                </span>
+            </template>
+        </el-dialog>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted, nextTick } = Vue;
+
+        const app = createApp({
+            setup() {
+                const loading = ref(true);
+                const username = ref('');
+                const authToken = ref('');
+                const showAvatarDialog = ref(false);
+                const avatarPreview = ref('');
+                const selectedAvatarFile = ref(null);
+                const avatarUploading = ref(false);
+                const showVoiceDialog = ref(false);
+                const currentVoice = ref('');
+                const availableVoices = ref([]);
+                const voiceLoading = ref(false);
+                const voiceUpdating = ref(false);
+                const voicePreviewing = ref(false);
+                const previewAudioUrl = ref('');
+                let previewAudioElement = null;
+
+                const data = ref({
+                    total_interactions: 0,
+                    avg_cost_time: 0,
+                    sentiment_distribution: {},
+                    intent_distribution: {},
+                    focus_points: []
+                });
+
+                let intentChart = null;
+                let sentimentChart = null;
+                let wordcloudChart = null;
+
+                const initCharts = () => {
+                    if (!intentChart) intentChart = echarts.init(document.getElementById('intentChart'), 'dark');
+                    if (!sentimentChart) sentimentChart = echarts.init(document.getElementById('sentimentChart'), 'dark');
+                    if (!wordcloudChart) wordcloudChart = echarts.init(document.getElementById('wordcloudChart'), 'dark');
+                };
+
+                const renderIntentChart = () => {
+                    const seriesData = Object.entries(data.value.intent_distribution).map(([name, value]) => ({
+                        name, value
+                    }));
+                    
+                    const option = {
+                        backgroundColor: 'transparent',
+                        tooltip: { trigger: 'item', formatter: '{b}: {c}次 ({d}%)' },
+                        legend: { orient: 'vertical', left: 'left', textStyle: { color: '#cbd5e1' } },
+                        series: [
+                            {
+                                type: 'pie',
+                                radius: ['40%', '70%'],
+                                avoidLabelOverlap: false,
+                                itemStyle: {
+                                    borderRadius: 10,
+                                    borderColor: '#1e293b',
+                                    borderWidth: 2
+                                },
+                                label: { show: false, position: 'center' },
+                                emphasis: {
+                                    label: { show: true, fontSize: 20, fontWeight: 'bold' }
+                                },
+                                labelLine: { show: false },
+                                data: seriesData
+                            }
+                        ]
+                    };
+                    intentChart.setOption(option);
+                };
+
+                const renderSentimentChart = () => {
+                    const keys = Object.keys(data.value.sentiment_distribution);
+                    const values = Object.values(data.value.sentiment_distribution);
+                    
+                    // Define colors based on sentiment type
+                    const colors = keys.map(k => {
+                        if (k.includes('正') || k.includes('满意')) return '#10b981'; // green
+                        if (k.includes('负') || k.includes('不满') || k.includes('差')) return '#ef4444'; // red
+                        return '#3b82f6'; // blue (neutral)
+                    });
+
+                    const option = {
+                        backgroundColor: 'transparent',
+                        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+                        xAxis: [
+                            {
+                                type: 'category',
+                                data: keys,
+                                axisTick: { alignWithLabel: true },
+                                axisLabel: { color: '#cbd5e1' }
+                            }
+                        ],
+                        yAxis: [
+                            { type: 'value', axisLabel: { color: '#cbd5e1' }, splitLine: { lineStyle: { color: '#334155' } } }
+                        ],
+                        series: [
+                            {
+                                name: '交互次数',
+                                type: 'bar',
+                                barWidth: '40%',
+                                itemStyle: {
+                                    color: (params) => colors[params.dataIndex],
+                                    borderRadius: [4, 4, 0, 0]
+                                },
+                                data: values
+                            }
+                        ]
+                    };
+                    sentimentChart.setOption(option);
+                };
+
+                const renderWordCloud = () => {
+                    const option = {
+                        backgroundColor: 'transparent',
+                        tooltip: { show: true },
+                        series: [{
+                            type: 'wordCloud',
+                            shape: 'circle',
+                            keepAspect: false,
+                            left: 'center',
+                            top: 'center',
+                            width: '100%',
+                            height: '100%',
+                            right: null,
+                            bottom: null,
+                            sizeRange: [18, 60],
+                            rotationRange: [-90, 90],
+                            rotationStep: 45,
+                            gridSize: 8,
+                            drawOutOfBound: false,
+                            layoutAnimation: true,
+                            textStyle: {
+                                fontFamily: 'sans-serif',
+                                fontWeight: 'bold',
+                                color: function () {
+                                    // Random pleasant colors for dark theme
+                                    const colors = ['#60a5fa', '#34d399', '#a78bfa', '#f472b6', '#fbbf24', '#facc15', '#38bdf8'];
+                                    return colors[Math.floor(Math.random() * colors.length)];
+                                }
+                            },
+                            emphasis: {
+                                focus: 'self',
+                                textStyle: { textShadowBlur: 10, textShadowColor: '#fff' }
+                            },
+                            data: data.value.focus_points
+                        }]
+                    };
+                    wordcloudChart.setOption(option);
+                };
+
+                const fetchDashboardData = async () => {
+                    loading.value = true;
+                    try {
+                        const response = await fetch('/api/v1/admin/dashboard', {
+                            headers: { 'Authorization': `Bearer ${authToken.value}` }
+                        });
+                        if (!response.ok) {
+                            if (response.status === 401 || response.status === 403) {
+                                window.location.href = '/login';
+                                return;
+                            }
+                            throw new Error('Network response was not ok');
+                        }
+                        data.value = await response.json();
+                        
+                        await nextTick();
+                        initCharts();
+                        renderIntentChart();
+                        renderSentimentChart();
+                        renderWordCloud();
+                    } catch (error) {
+                        console.error("Failed to fetch dashboard data:", error);
+                        ElementPlus.ElMessage.error('获取大屏数据失败');
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                const goToFrontend = () => {
+                    window.location.href = '/';
+                };
+
+                const logout = () => {
+                    localStorage.removeItem('auth_token');
+                    localStorage.removeItem('username');
+                    localStorage.removeItem('user_role');
+                    window.location.href = '/login';
+                };
+
+                const handleAvatarChange = (file) => {
+                    selectedAvatarFile.value = file.raw;
+                    avatarPreview.value = URL.createObjectURL(file.raw);
+                };
+
+                const submitAvatar = async () => {
+                    if (!selectedAvatarFile.value) return;
+                    
+                    avatarUploading.value = true;
+                    const formData = new FormData();
+                    formData.append('file', selectedAvatarFile.value);
+                    
+                    try {
+                        const response = await fetch('/api/v1/admin/avatar', {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${authToken.value}` },
+                            body: formData
+                        });
+                        
+                        if (!response.ok) {
+                            const errData = await response.json();
+                            throw new Error(errData.detail || '上传失败');
+                        }
+                        
+                        ElementPlus.ElMessage.success('数字人形象更新成功');
+                        showAvatarDialog.value = false;
+                    } catch (error) {
+                        ElementPlus.ElMessage.error(error.message);
+                    } finally {
+                        avatarUploading.value = false;
+                    }
+                };
+
+                const fetchVoices = async () => {
+                    voiceLoading.value = true;
+                    try {
+                        const response = await fetch('/api/v1/admin/voice/list', {
+                            headers: { 'Authorization': `Bearer ${authToken.value}` }
+                        });
+                        if (!response.ok) throw new Error('Failed to fetch voices');
+                        
+                        const result = await response.json();
+                        availableVoices.value = result.available_voices;
+                        currentVoice.value = result.current_voice;
+                    } catch (error) {
+                        ElementPlus.ElMessage.error(error.message);
+                    } finally {
+                        voiceLoading.value = false;
+                    }
+                };
+
+                const openVoiceDialog = () => {
+                    showVoiceDialog.value = true;
+                    fetchVoices();
+                };
+
+                const submitVoice = async () => {
+                    if (!currentVoice.value) return;
+                    
+                    voiceUpdating.value = true;
+                    try {
+                        const response = await fetch('/api/v1/admin/voice/update', {
+                            method: 'POST',
+                            headers: { 
+                                'Authorization': `Bearer ${authToken.value}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ voice_id: currentVoice.value })
+                        });
+                        
+                        if (!response.ok) {
+                            const errData = await response.json();
+                            throw new Error(errData.detail || '保存失败');
+                        }
+                        
+                        ElementPlus.ElMessage.success('数字人音色更新成功');
+                        showVoiceDialog.value = false;
+                    } catch (error) {
+                        ElementPlus.ElMessage.error(error.message);
+                    } finally {
+                        voiceUpdating.value = false;
+                    }
+                };
+
+                const previewVoice = async () => {
+                    if (!currentVoice.value) return;
+                    
+                    stopPreviewAudio();
+                    voicePreviewing.value = true;
+                    try {
+                        const response = await fetch('/api/v1/admin/voice/preview', {
+                            method: 'POST',
+                            headers: { 
+                                'Authorization': `Bearer ${authToken.value}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ voice_id: currentVoice.value })
+                        });
+                        
+                        if (!response.ok) {
+                            const errData = await response.json();
+                            throw new Error(errData.detail || '试听失败');
+                        }
+                        
+                        const result = await response.json();
+                        previewAudioUrl.value = result.audio_url;
+                        
+                        // 播放音频
+                        previewAudioElement = new Audio(result.audio_url);
+                        previewAudioElement.onended = () => {
+                            previewAudioUrl.value = '';
+                        };
+                        await previewAudioElement.play();
+                    } catch (error) {
+                        ElementPlus.ElMessage.error(error.message);
+                        previewAudioUrl.value = '';
+                    } finally {
+                        voicePreviewing.value = false;
+                    }
+                };
+
+                const stopPreviewAudio = () => {
+                    if (previewAudioElement) {
+                        previewAudioElement.pause();
+                        previewAudioElement.currentTime = 0;
+                        previewAudioElement = null;
+                    }
+                    previewAudioUrl.value = '';
+                };
+
+                onMounted(() => {
+                    const token = localStorage.getItem('auth_token');
+                    const role = localStorage.getItem('user_role');
+                    
+                    if (!token || role !== 'admin') {
+                        window.location.href = '/login';
+                        return;
+                    }
+                    
+                    authToken.value = token;
+                    username.value = localStorage.getItem('username');
+                    
+                    fetchDashboardData();
+                    
+                    // Handle window resize
+                    window.addEventListener('resize', () => {
+                        if (intentChart) intentChart.resize();
+                        if (sentimentChart) sentimentChart.resize();
+                        if (wordcloudChart) wordcloudChart.resize();
+                    });
+                });
+
+                return {
+                    loading,
+                    data,
+                    username,
+                    showAvatarDialog,
+                    avatarPreview,
+                    selectedAvatarFile,
+                    avatarUploading,
+                    showVoiceDialog,
+                    currentVoice,
+                    availableVoices,
+                    voiceLoading,
+                    voiceUpdating,
+                    voicePreviewing,
+                    previewAudioUrl,
+                    fetchDashboardData,
+                    goToFrontend,
+                    logout,
+                    handleAvatarChange,
+                    submitAvatar,
+                    openVoiceDialog,
+                    submitVoice,
+                    previewVoice,
+                    stopPreviewAudio
+                };
+            }
+        });
+
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>

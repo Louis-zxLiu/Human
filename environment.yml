@@ -1,0 +1,28 @@
+name: scenic_avatar
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch=2.1.2
+  - torchvision=0.16.2
+  - torchaudio=2.1.2
+  - pytorch-cuda=11.8
+  - pip:
+    - fastapi==0.109.2
+    - uvicorn[standard]==0.27.1
+    - python-dotenv==1.0.1
+    - websockets==12.0
+    - pydantic==2.6.1
+    - transformers==4.38.1
+    - accelerate==0.27.2
+    - langchain==0.1.9
+    - langchain-community==0.0.24
+    - chromadb==0.4.24
+    - unstructured==0.12.5
+    - python-docx==1.1.0
+    - pandas==2.2.0
+    - openpyxl==3.1.2

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local environment and secrets
+.env
+env/
+.cache/
+.conda_pkgs/
+.tmp/
+.trae/
+24.0
+
+# Logs and runtime artifacts
+logs/
+*.log
+data/temp/
+SoulX-FlashHead/data/temp/
+
+# Generated databases and vector stores
+data/chroma_db/
+data/processed/*.db
+data/processed/*.sqlite
+data/processed/unique_attractions.json
+
+# Large local model assets
+models/
+
+# Editor or OS noise
+.DS_Store
+Thumbs.db
