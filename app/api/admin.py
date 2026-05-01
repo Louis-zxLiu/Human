@@ -443,9 +443,8 @@ async def update_default_avatar(
     current_admin: Dict[str, Any] = Depends(get_current_admin),
 ):
     try:
-        avatar_dir = resolve_path("data/processed")
-        os.makedirs(avatar_dir, exist_ok=True)
-        target_path = os.path.join(avatar_dir, "default_avatar.jpg")
+        target_path = resolve_path(settings.AVATAR_DEFAULT_IMAGE_PATH)
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
         with open(target_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         avatar_engine = get_avatar_engine()
@@ -496,7 +495,7 @@ async def update_avatar_runtime(
         settings.AVATAR_WARMUP_SECONDS = profile["warmup_seconds"]
         reset_avatar_engines()
         avatar_engine = get_avatar_engine()
-        default_avatar_path = resolve_path("data/processed/default_avatar.jpg")
+        default_avatar_path = resolve_path(settings.AVATAR_DEFAULT_IMAGE_PATH)
         if os.path.exists(default_avatar_path):
             avatar_engine.update_base_image(default_avatar_path)
         if not avatar_engine.is_loaded:

@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     AVATAR_VIDEO_CRF: int = 20
     AVATAR_EMPTY_CACHE_BEFORE_INFER: bool = True
     AVATAR_EMPTY_CACHE_AFTER_INFER: bool = True
+    AVATAR_DEFAULT_IMAGE_PATH: str = "data/processed/default_avatar.jpg"
 
     MODEL_ASR_NAME: str = "Whisper"
     MODEL_ASR_PATH: str = "base"

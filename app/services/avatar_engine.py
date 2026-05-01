@@ -2,7 +2,7 @@ import os
 import sys
 import time
 
-from app.core.config import settings
+from app.core.config import resolve_path, settings
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SOULX_ROOT = os.path.join(PROJECT_ROOT, "SoulX-FlashHead")
@@ -101,8 +101,10 @@ class AvatarEngine:
                 device=self.device,
             )
             
-            # Initialize a default driving condition
-            self.current_image_path = os.path.join(soulx_path, "assets", "demo_image.jpg")
+            # Prefer the managed default avatar uploaded/prepared by the project.
+            default_avatar_path = resolve_path(settings.AVATAR_DEFAULT_IMAGE_PATH)
+            fallback_image_path = os.path.join(soulx_path, "assets", "demo_image.jpg")
+            self.current_image_path = default_avatar_path if os.path.exists(default_avatar_path) else fallback_image_path
             
             # 【核心修复】：SoulX-FlashHead 必须先执行 get_base_data 来向 pipeline 注入 frame_num 等必要参数
             if not os.path.exists(self.current_image_path):

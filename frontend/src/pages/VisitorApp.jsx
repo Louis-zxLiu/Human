@@ -97,6 +97,7 @@ export function VisitorApp() {
   const [draftTitle, setDraftTitle] = useState("");
   const [isSessionMenuOpen, setIsSessionMenuOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [isPresetOpen, setIsPresetOpen] = useState(false);
 
   const currentSessionRef = useRef(currentSession);
   const chatRef = useRef(null);
@@ -571,35 +572,60 @@ export function VisitorApp() {
                 </div>
               ) : (
                 <>
-                  <div className="prompt-row">
-                    {DEMO_ROUTES.map((route) => (
-                      <button
-                        type="button"
-                        key={route.label}
-                        className="demo-route-card"
-                        onClick={() => submitTextMessage(route.prompt)}
-                        disabled={loading}
-                      >
-                        <span className="demo-route-card__label">{route.label}</span>
-                        <strong>{route.title}</strong>
-                        <span>{route.duration}</span>
-                        <small>{route.focus}</small>
-                        <em>{route.behavior}</em>
-                      </button>
-                    ))}
-                  </div>
+                  <div className={`preset-tray ${isPresetOpen ? "is-open" : ""}`}>
+                    <button
+                      type="button"
+                      className="preset-tray__toggle"
+                      onClick={() => setIsPresetOpen((value) => !value)}
+                      aria-expanded={isPresetOpen}
+                    >
+                      <span>
+                        <strong>预设问题与演示路线</strong>
+                        <small>3 条路线 · 3 个高命中问题</small>
+                      </span>
+                      <b>{isPresetOpen ? "收起" : "展开"}</b>
+                    </button>
 
-                  <div className="prompt-row">
-                    {QUICK_PROMPTS.map((prompt) => (
-                      <button
-                        type="button"
-                        key={prompt}
-                        className="prompt-chip"
-                        onClick={() => setInputText(prompt)}
-                      >
-                        {prompt}
-                      </button>
-                    ))}
+                    {isPresetOpen ? (
+                      <div className="preset-tray__content">
+                        <div className="prompt-row prompt-row--routes">
+                          {DEMO_ROUTES.map((route) => (
+                            <button
+                              type="button"
+                              key={route.label}
+                              className="demo-route-card"
+                              onClick={() => {
+                                setIsPresetOpen(false);
+                                submitTextMessage(route.prompt);
+                              }}
+                              disabled={loading}
+                            >
+                              <span className="demo-route-card__label">{route.label}</span>
+                              <strong>{route.title}</strong>
+                              <span>{route.duration}</span>
+                              <small>{route.focus}</small>
+                              <em>{route.behavior}</em>
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="prompt-row">
+                          {QUICK_PROMPTS.map((prompt) => (
+                            <button
+                              type="button"
+                              key={prompt}
+                              className="prompt-chip"
+                              onClick={() => {
+                                setInputText(prompt);
+                                setIsPresetOpen(false);
+                              }}
+                            >
+                              {prompt}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="composer-row">
