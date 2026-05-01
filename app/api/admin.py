@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 from app.api.auth import get_current_admin
 from app.core.config import resolve_path, settings
-from app.services.asr_tts import tts_service
-from app.services.avatar_engine import avatar_engine
+from app.services.asr_tts import get_tts_service
+from app.services.avatar_engine import get_avatar_engine
 
 router = APIRouter()
 
@@ -209,6 +209,7 @@ async def update_default_avatar(
         target_path = os.path.join(avatar_dir, "default_avatar.jpg")
         with open(target_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        avatar_engine = get_avatar_engine()
         avatar_engine.update_base_image(target_path)
         return JSONResponse(content={"message": "Default avatar image updated successfully"})
     except Exception as exc:
@@ -221,6 +222,7 @@ class UpdateVoiceRequest(BaseModel):
 
 @router.get("/voice/list")
 async def get_available_voices(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    tts_service = get_tts_service()
     return JSONResponse(
         content={
             "current_voice": tts_service.get_current_voice(),
@@ -234,6 +236,7 @@ async def update_tts_voice(
     request: UpdateVoiceRequest,
     current_admin: Dict[str, Any] = Depends(get_current_admin),
 ):
+    tts_service = get_tts_service()
     success = tts_service.set_voice(request.voice_id)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid voice ID")
@@ -245,6 +248,7 @@ async def preview_tts_voice(
     request: UpdateVoiceRequest,
     current_admin: Dict[str, Any] = Depends(get_current_admin),
 ):
+    tts_service = get_tts_service()
     voice_info = next((v for v in tts_service.available_voices if v["id"] == request.voice_id), None)
     if not voice_info:
         raise HTTPException(status_code=400, detail="Invalid voice ID")
@@ -259,6 +263,7 @@ async def preview_tts_voice(
 
     def run_tts() -> None:
         try:
+            tts_service = get_tts_service()
             tts_service.synthesize(preview_text, audio_output_path, voice_id=request.voice_id)
         except Exception as exc:
             tts_error.append(exc)

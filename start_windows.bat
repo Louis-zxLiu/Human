@@ -1,38 +1,57 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 chcp 65001 >nul
 
 set "PROJECT_ROOT=%~dp0"
-set "PYTHON_EXE=%PROJECT_ROOT%.venv\Scripts\python.exe"
+set "CONDA_ENV_PREFIX=%PROJECT_ROOT%env"
+set "CONDA_PYTHON=%CONDA_ENV_PREFIX%\python.exe"
+set "CONDARC=%PROJECT_ROOT%.condarc"
+set "CONDA_PKGS_DIRS=%PROJECT_ROOT%.conda_pkgs"
+set "HOST=127.0.0.1"
+set "PORT=8000"
+
 cd /d "%PROJECT_ROOT%"
 
-echo [START] Running runtime preflight checks...
-
-if not exist "%PYTHON_EXE%" (
-    echo [ERROR] Python runtime not found in .venv.
+if not exist "%CONDA_PYTHON%" (
+    echo [ERROR] Conda environment is missing: %CONDA_ENV_PREFIX%
     echo [HINT] Run bootstrap_windows.bat first.
     pause
     exit /b 1
 )
 
-set "PYTHONPATH=%PROJECT_ROOT%;%PROJECT_ROOT%SoulX-FlashHead;%PYTHONPATH%"
-
-"%PYTHON_EXE%" "%PROJECT_ROOT%scripts\preflight_check.py"
+"%CONDA_PYTHON%" -m app.cli runtime-health --quiet
 if errorlevel 1 (
-    echo.
-    echo [ERROR] Preflight failed.
-    echo [HINT] Check the JSON report above and follow the suggested next steps.
+    echo [ERROR] Current env is not healthy enough to start the system.
+    echo [HINT] Remove D:\Human\env and rerun bootstrap_windows.bat.
     pause
     exit /b 1
 )
 
-echo [START] Launching backend at http://localhost:8000 ...
-start "FastAPI-Backend" cmd /c "title FastAPI-Backend && cd /d "%PROJECT_ROOT%" && "%PYTHON_EXE%" -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+start "Human Backend" cmd /k "chcp 65001 >nul && cd /d ""%PROJECT_ROOT%"" && set ""CONDARC=%CONDARC%"" && set ""CONDA_PKGS_DIRS=%CONDA_PKGS_DIRS%"" && call conda run -p ""%CONDA_ENV_PREFIX%"" python -m app.cli start --host %HOST% --port %PORT%"
 
-timeout /t 5 /nobreak >nul
-start http://localhost:8000/
+set "READY="
+for /l %%I in (1,1,20) do (
+    powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing http://%HOST%:%PORT%/health -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul
+    if not errorlevel 1 (
+        set "READY=1"
+        goto :ready
+    )
+    timeout /t 1 /nobreak >nul
+)
 
-echo [SUCCESS] Frontend: http://localhost:8000/
-echo [SUCCESS] Admin:    http://localhost:8000/admin
-echo [INFO] Default admin account: admin / admin123
-pause
+:ready
+if defined READY (
+    echo [SUCCESS] Service started.
+    echo [URL] Visitor: http://%HOST%:%PORT%/
+    echo [URL] Admin:   http://%HOST%:%PORT%/admin
+    echo [URL] Login:   http://%HOST%:%PORT%/login
+    start "" "http://%HOST%:%PORT%/"
+    exit /b 0
+)
+
+echo [INFO] Backend window has been opened, but health check did not pass in time.
+echo [INFO] Check the "Human Backend" window and then open:
+echo [URL] Visitor: http://%HOST%:%PORT%/
+echo [URL] Admin:   http://%HOST%:%PORT%/admin
+echo [URL] Login:   http://%HOST%:%PORT%/login
+exit /b 1

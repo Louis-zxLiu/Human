@@ -1,302 +1,232 @@
 # Human
 
-景区导览服务 AI 数字人项目。
+景区导览服务 AI 数字人工程版。
 
-当前版本已经完成：
+当前版本已经收敛为一套可复现、可协作、可演示的完整工程主链路：
 
-- `FACT`：灵山胜境事实知识问答
-- `ANALYTICS`：游客行为分析问答
-- `RECOMMEND`：个性化路线推荐
-- 弱 GPS 多轮定位演示
-- 游客端与后台演示页面
+- 统一使用项目内 Conda 前缀环境 `env`
+- 主依赖只保留一个正式入口：`environment.yml`
+- GPU 版 `torch / torchvision / torchaudio` 自动按 CUDA 版本单独安装
+- `openai-whisper` 单独安装，避免构建隔离问题
+- 前端为 React + Vite，后端为 FastAPI
+- `start_windows.bat` 会单独弹出后端窗口、自动探活并打开浏览器
 
-本说明面向**协作者从 GitHub 首次下载项目后，如何跑起完整演示版本**。
+## 1. 当前工程结构
 
-## 1. 当前版本的重要事实
+### 后端
 
-### 1.1 TTS 方案
+- `app/api/`：接口层
+- `app/rag/`：问答编排、知识检索、推荐与定位
+- `app/services/`：ASR、TTS、数字人和日志服务
+- `app/tasks/`：数据准备、环境诊断、模型准备、评测任务
+- `app/cli.py`：统一工程入口
 
-当前项目的 TTS 方案**固定为 `edge-tts`**：
+### 前端
 
-- 不需要下载本地 TTS 模型
-- 运行时必须联网
-- `.env` 中不需要配置任何本地 TTS 模型目录
+- `frontend/`：React + Vite 工程
+- 构建产物输出到 `app/static/dist/`
 
-### 1.2 模型体积
+### 数据
 
-完整演示模式需要自动下载多个大模型，整体磁盘占用请按 **18GB 到 20GB+** 预留。
+- `data/knowledge_base/`：灵山景区知识文档
+- `data/raw_sql_data/`：赛事方行为分析 Excel
+- `data/processed/`：SQLite 处理结果
+- `models/`：模型缓存目录
 
-### 1.3 平台支持
+## 2. 依赖与环境
 
-当前只正式支持：
+主项目现在只保留一个正式依赖入口：
 
-- Windows
+- `environment.yml`
 
-### 1.4 前端依赖
+依赖策略如下：
 
-当前前端页面仍依赖 CDN 资源，因此运行时建议保持联网。
+- Conda：安装 Python、Node、本地二进制基础包
+- `environment.yml` 的 `pip:` 子段：安装主项目应用层依赖
+- GPU PyTorch：单独从官方 CUDA wheel 源安装
+- Whisper：单独安装，避免构建隔离问题
 
-## 2. 首次运行推荐顺序
+镜像与下载源：
 
-协作者第一次从 GitHub 下载后，固定按下面顺序执行：
+- Conda：清华源
+- pip：清华 PyPI 源
+- Hugging Face：`hf-mirror.com`
+- GPU PyTorch：`https://download.pytorch.org/whl/cu126`
 
-1. `bootstrap_windows.bat`
-2. 填 `.env`
-3. `build_behavior_data.bat`
-4. `build_knowledge_base.bat`
-5. `start_windows.bat`
+`.env` 至少建议确认：
 
-不要跳步。
+```env
+LLM_API_KEY=your_real_key
+LLM_API_BASE=https://api.openai.com/v1
+LLM_MODEL_NAME=gpt-4o-mini
+MODEL_TTS_NAME=Edge-TTS
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+HF_ENDPOINT=https://hf-mirror.com
+TORCH_WHL_INDEX_URL=https://download.pytorch.org/whl/cu126
+OPENAI_WHISPER_REQUIREMENT=openai-whisper==20250625
+```
 
-## 3. 第一步：运行 bootstrap
+## 3. 首次运行流程
 
-在项目根目录执行：
+### 1. 准备环境
 
 ```bat
 bootstrap_windows.bat
 ```
 
-它会完成以下内容：
+它会负责：
 
-- 检查系统 Python
-- 创建本地 `.venv`
-- 安装 `requirements.txt`
-- 安装 `SoulX-FlashHead` 依赖
-- 自动生成 `.env`
-- 自动下载完整演示模式所需模型
+- 创建、更新，或在损坏时重建 `D:\Human\env`
+- 根据 `environment.yml` 安装主项目依赖
+- 单独安装 GPU 版 `torch / torchvision / torchaudio`
+- 单独安装 `openai-whisper`
+- 校验核心运行时依赖是否完整
+- 下载主项目模型
 
-如果你只是看到 `setup_windows.bat`，也可以运行它，但它现在只是 `bootstrap_windows.bat` 的兼容入口。
+### 2. 填写 `.env`
 
-## 4. 第二步：填写 .env
+写入真实的 LLM API Key 与 API Base。
 
-第一次运行 bootstrap 后，如果根目录还没有 `.env`，脚本会自动从 `.env.example` 生成一份。
-
-协作者至少需要确认：
-
-```env
-LLM_API_KEY=your_llm_api_key_here
-LLM_API_BASE=https://api.openai.com/v1
-LLM_MODEL_NAME=gpt-4o-mini
-MODEL_EMBEDDING_PATH=./models/bge-large-zh-v1.5
-MODEL_AVATAR_PATH=./models/SoulX-FlashHead-Lite-1.3B
-MODEL_ASR_PATH=base
-WHISPER_DOWNLOAD_DIR=./models/whisper-cache
-MODEL_TTS_NAME=Edge-TTS
-```
-
-最重要的是：
-
-- `LLM_API_KEY` 必须改成真实值
-
-## 5. 第三步：构建行为分析数据库
-
-执行：
+### 3. 准备数据
 
 ```bat
 build_behavior_data.bat
-```
-
-这个步骤会：
-
-- 导入灵山胜境结构化景点事实到 `attractions`
-- 导入比赛方行为分析 Excel 到 `tourist_behavior`
-
-注意：
-
-- `data/raw_sql_data/景点景区旅游数据行为分析数据.xlsx` 只用于行为分析
-- 它**不是**景区事实知识库
-
-## 6. 第四步：构建景区知识库
-
-执行：
-
-```bat
 build_knowledge_base.bat
 ```
 
-这个步骤会把 `data/knowledge_base/` 下的灵山资料写入 Chroma 向量库，用于景区讲解和补充检索。
+### 4. 构建前端
 
-## 7. 第五步：启动系统
+```bat
+conda run -p "D:/Human/env" python -m app.cli build-frontend
+```
 
-执行：
+### 5. 启动系统
 
 ```bat
 start_windows.bat
 ```
 
-启动脚本会先跑：
+当前启动脚本会：
 
-- `scripts/preflight_check.py`
+- 先做环境健康检查
+- 单独弹出 `Human Backend` 后端窗口
+- 自动轮询 `http://127.0.0.1:8000/health`
+- 成功后自动打印访问地址
+- 自动打开浏览器首页
 
-只有预检通过后才会启动服务。
+访问地址：
 
-## 8. 启动成功后访问地址
+- 前台：`http://127.0.0.1:8000/`
+- 后台：`http://127.0.0.1:8000/admin`
+- 登录：`http://127.0.0.1:8000/login`
 
-游客前台：
-
-```text
-http://localhost:8000/
-```
-
-管理后台：
-
-```text
-http://localhost:8000/admin
-```
-
-默认管理员账号：
+默认管理员：
 
 ```text
 admin / admin123
 ```
 
-## 9. 自动下载的模型
+## 4. 统一 CLI
 
-当前完整演示模式默认拉取：
-
-- `BAAI/bge-large-zh-v1.5`
-- `Soul-AILab/SoulX-FlashHead-1_3B`
-- `facebook/wav2vec2-base-960h`
-- Whisper `base` 运行资源
-
-模型清单位置：
-
-- [scripts/model_manifest.json](/D:/Human/scripts/model_manifest.json)
-
-下载脚本位置：
-
-- [scripts/download_models.py](/D:/Human/scripts/download_models.py)
-
-## 10. 推荐的验证方式
-
-### 10.1 标准题集
-
-执行：
+统一入口：
 
 ```bat
-.venv\Scripts\python.exe tests\run_eval.py
+conda run -p "D:/Human/env" python -m app.cli <command>
 ```
 
-当前题集按三类组织：
+常用命令：
 
-- `FACT`
-- `ANALYTICS`
-- `RECOMMEND`
+```bat
+conda run -p "D:/Human/env" python -m app.cli bootstrap
+conda run -p "D:/Human/env" python -m app.cli doctor
+conda run -p "D:/Human/env" python -m app.cli runtime-health
+conda run -p "D:/Human/env" python -m app.cli prepare-data
+conda run -p "D:/Human/env" python -m app.cli prepare-kb
+conda run -p "D:/Human/env" python -m app.cli build-frontend
+conda run -p "D:/Human/env" python -m app.cli start
+conda run -p "D:/Human/env" python -m app.cli dev
+conda run -p "D:/Human/env" python -m app.cli eval
+```
 
-相关文件：
+## 5. 业务分层
 
-- [tests/manual_eval_questions.json](/D:/Human/tests/manual_eval_questions.json)
-- [tests/run_eval.py](/D:/Human/tests/run_eval.py)
+系统统一分为三类问答链路：
 
-### 10.2 手工验证建议
+1. `FACT`
+   只回答灵山景区事实问题。
+2. `ANALYTICS`
+   只回答游客行为统计与偏好问题。
+3. `RECOMMEND`
+   结合景区知识和行为分析生成推荐路线。
 
-事实问答：
+赛事方提供的行为分析 Excel：
 
-- 灵山梵宫开放时间是什么？
-- 灵山大佛在哪里？
-- 九龙灌浴有什么看点？
+- 只用于分析层
+- 不作为景区事实知识库
 
-推荐问答：
+## 6. 验证方式
 
-- 给我推荐一条适合历史爱好者的路线
-- 我喜欢自然风光，怎么逛比较合适
+### 环境诊断
 
-分析问答：
+```bat
+conda run -p "D:/Human/env" python -m app.cli doctor
+```
 
-- 女性游客更喜欢什么类型的景点？
-- 人均消费大概多少？
+### 运行时健康检查
 
-弱 GPS 演示：
+```bat
+conda run -p "D:/Human/env" python -m app.cli runtime-health
+```
 
-1. 在前台打开 `GPS 信号极弱`
-2. 问：`我现在在哪，怎么去梵宫？`
-3. 再补：`我附近能看到大佛和一片大广场`
+### 代码检查
 
-## 11. 当前目录说明
+```bat
+conda run -p "D:/Human/env" python -m compileall app
+```
 
-### 核心后端
+### 题集评测
 
-- `app/api/`
-- `app/rag/`
-- `app/services/`
+```bat
+conda run -p "D:/Human/env" python -m app.cli eval
+```
 
-### 数据与模型
+## 7. 常见问题
 
-- `data/knowledge_base/`
-- `data/raw_sql_data/`
-- `data/processed/`
-- `models/`
-
-### 协作与测试
-
-- `docs/`
-- `tests/`
-- `scripts/`
-
-## 12. 常见问题
-
-### Q1：bootstrap 失败
+### `bootstrap_windows.bat` 失败
 
 优先检查：
 
-- 本机是否有 Python 3.10+
-- 网络是否能访问 Hugging Face
+- `conda` 是否在 PATH 中
+- `.condarc` 是否存在
+- 清华镜像与 `hf-mirror.com` 是否可达
 - 是否有足够磁盘空间
 
-### Q2：模型下载失败
+如果 `doctor` 或 `runtime-health` 提示环境损坏，标准恢复路径：
 
-当前默认从 Hugging Face / 官方源拉取。
-
-请先检查：
-
-- 网络连接
-- Hugging Face 是否可访问
-- 重试 `bootstrap_windows.bat`
-
-如果未来你们接入 HF 镜像或私有存储，再补充备用下载源。
-
-### Q3：start 预检失败
-
-先看 `scripts/preflight_check.py` 的 JSON 输出，它会明确告诉你：
-
-- 缺 `.venv`
-- 缺 `.env`
-- 缺模型
-- 缺行为数据库
-- 缺知识库
-
-通常恢复顺序是：
-
-```text
-bootstrap_windows.bat
-build_behavior_data.bat
-build_knowledge_base.bat
-start_windows.bat
+```powershell
+Remove-Item -Recurse -Force D:\Human\env
+.\bootstrap_windows.bat
 ```
 
-### Q4：前台能打开，但回答失败
+### `build_knowledge_base.bat` 失败
+
+先跑：
+
+```bat
+conda run -p "D:/Human/env" python -m app.cli runtime-health
+```
+
+确认 `torch / langchain / chromadb / sentence_transformers / whisper / edge_tts` 都通过。
+
+### 页面能打开但回答失败
 
 优先检查：
 
-- `.env` 里的 `LLM_API_KEY`
-- `LLM_API_BASE` 是否可访问
-- 运行时网络是否可供 `edge-tts` 使用
+- `LLM_API_KEY`
+- `LLM_API_BASE`
+- 当前网络是否可供 `edge-tts` 和 LLM API 使用
 
-## 13. 协作者建议工作流
+## 8. 主文档
 
-如果你要继续开发，建议每次改动后至少跑：
-
-```bat
-.venv\Scripts\python.exe -m compileall app tests scripts
-.venv\Scripts\python.exe tests\run_eval.py
-```
-
-然后再手工验证前台与后台。
-
-## 14. 相关文档
-
-- [docs/协作者快速开始.md](/D:/Human/docs/协作者快速开始.md)
-- [docs/第二批改造说明.md](/D:/Human/docs/第二批改造说明.md)
-- [docs/答辩提纲.md](/D:/Human/docs/答辩提纲.md)
-- [docs/演示脚本.md](/D:/Human/docs/演示脚本.md)
+- [README.md](/D:/Human/README.md)
 - [总体设计文档.md](/D:/Human/总体设计文档.md)

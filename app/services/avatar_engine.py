@@ -436,7 +436,14 @@ class AvatarEngine:
             
         return frames
 
-avatar_engine = AvatarEngine()
+_avatar_engine = None
+
+
+def get_avatar_engine() -> AvatarEngine:
+    global _avatar_engine
+    if _avatar_engine is None:
+        _avatar_engine = AvatarEngine()
+    return _avatar_engine
 
 if __name__ == "__main__":
     print("[AvatarEngine] Running as standalone service...")

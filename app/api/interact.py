@@ -18,8 +18,8 @@ from app.core.config import resolve_path
 from app.rag.location_agent import ScenicLocationAgent
 from app.rag.pipeline import ScenicRAGPipeline
 from app.rag.router import get_query_intent
-from app.services.asr_tts import asr_service, tts_service
-from app.services.avatar_engine import avatar_engine
+from app.services.asr_tts import get_asr_service, get_tts_service
+from app.services.avatar_engine import get_avatar_engine
 from app.services.log_service import log_service
 
 router = APIRouter()
@@ -88,6 +88,8 @@ def synthesize_chunk_payload(text: str) -> Optional[Dict[str, Any]]:
     if not clean_text or not re.search(r"[\w\u4e00-\u9fa5]", clean_text):
         return None
 
+    tts_service = get_tts_service()
+    avatar_engine = get_avatar_engine()
     sentence_id = str(uuid.uuid4())
     audio_path = os.path.join(TEMP_DIR, f"{sentence_id}.mp3")
     tts_service.synthesize(clean_text, audio_path)
@@ -269,6 +271,7 @@ def generate_avatar_response(
 
             def run_tts() -> None:
                 try:
+                    tts_service = get_tts_service()
                     tts_service.synthesize(clean_text_for_tts, audio_output_path)
                 except Exception as exc:
                     tts_error.append(exc)
@@ -286,6 +289,7 @@ def generate_avatar_response(
     video_ready = False
     if audio_ready:
         try:
+            avatar_engine = get_avatar_engine()
             success_path = avatar_engine.generate_avatar_video(audio_output_path, video_output_path)
             video_ready = bool(success_path and os.path.exists(video_output_path))
         except Exception as exc:
@@ -328,6 +332,7 @@ async def interact_stream_ws(websocket: WebSocket):
                 image_path = os.path.join(TEMP_DIR, f"{image_req_id}_avatar.jpg")
                 with open(image_path, "wb") as file_obj:
                     file_obj.write(image_bytes)
+                avatar_engine = get_avatar_engine()
                 avatar_engine.update_base_image(image_path)
 
             user_text = ""
@@ -346,6 +351,7 @@ async def interact_stream_ws(websocket: WebSocket):
                 with open(temp_audio_path, "wb") as file_obj:
                     file_obj.write(audio_bytes)
                 try:
+                    asr_service = get_asr_service()
                     asr_result = asr_service.transcribe(temp_audio_path)
                     user_text = asr_result.strip() if isinstance(asr_result, str) else str(asr_result)
                     if not user_text:
@@ -430,6 +436,7 @@ async def interact_audio(
         image_path = os.path.join(TEMP_DIR, f"{request_id}_avatar.jpg")
         with open(image_path, "wb") as buffer:
             shutil.copyfileobj(avatar_image.file, buffer)
+        avatar_engine = get_avatar_engine()
         avatar_engine.update_base_image(image_path)
 
     temp_audio_path = os.path.join(TEMP_DIR, f"{request_id}_input.webm")
@@ -437,6 +444,7 @@ async def interact_audio(
         shutil.copyfileobj(audio.file, buffer)
 
     try:
+        asr_service = get_asr_service()
         asr_result = asr_service.transcribe(temp_audio_path)
         user_text = asr_result.strip() if isinstance(asr_result, str) else str(asr_result)
         if not user_text:
@@ -481,6 +489,7 @@ async def interact_text(
         image_path = os.path.join(TEMP_DIR, f"{request_id}_avatar.jpg")
         with open(image_path, "wb") as buffer:
             shutil.copyfileobj(avatar_image.file, buffer)
+        avatar_engine = get_avatar_engine()
         avatar_engine.update_base_image(image_path)
 
     result = generate_avatar_response(text, username, gps_status, client_session_id=client_session_id)

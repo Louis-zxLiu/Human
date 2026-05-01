@@ -3,23 +3,26 @@ setlocal
 chcp 65001 >nul
 
 set "PROJECT_ROOT=%~dp0"
-set "PYTHON_EXE=%PROJECT_ROOT%.venv\Scripts\python.exe"
+set "CONDA_ENV_PREFIX=%PROJECT_ROOT%env"
+set "CONDA_PYTHON=%CONDA_ENV_PREFIX%\python.exe"
+set "CONDARC=%PROJECT_ROOT%.condarc"
+set "CONDA_PKGS_DIRS=%PROJECT_ROOT%.conda_pkgs"
 cd /d "%PROJECT_ROOT%"
 
-if not exist "%PYTHON_EXE%" (
-    echo [ERROR] Python runtime not found in .venv.
+if not exist "%CONDA_PYTHON%" (
+    echo [ERROR] Conda environment is missing: %CONDA_ENV_PREFIX%
     echo [HINT] Run bootstrap_windows.bat first.
     pause
     exit /b 1
 )
 
-echo [BUILD] Building scenic knowledge base from local Lingshan documents...
-"%PYTHON_EXE%" -m app.rag.init_db
+"%CONDA_PYTHON%" -m app.cli runtime-health --quiet
 if errorlevel 1 (
-    echo [ERROR] Knowledge base build failed.
+    echo [ERROR] Current env is not healthy enough to run prepare-kb.
+    echo [HINT] Remove D:\Human\env and rerun bootstrap_windows.bat.
     pause
     exit /b 1
 )
 
-echo [SUCCESS] Scenic knowledge base is ready.
+call conda run -p "%CONDA_ENV_PREFIX%" python -m app.cli prepare-kb
 pause

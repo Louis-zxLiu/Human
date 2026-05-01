@@ -4,11 +4,11 @@ import torch
 from app.core.chroma_telemetry import disable_chroma_telemetry
 disable_chroma_telemetry()
 
-from langchain_community.document_loaders import Docx2txtLoader, UnstructuredExcelLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
 from app.core.config import settings, resolve_path
+from app.rag.document_loader import load_docx_with_tables, load_excel
 
 def init_knowledge_base():
     """
@@ -114,16 +114,14 @@ def init_knowledge_base():
             mtime = current_files[file_path]
             if file_path.endswith('.docx'):
                 print(f"[RAG] Parsing DOCX: {file_path}")
-                loader = Docx2txtLoader(file_path)
-                docs = loader.load()
+                docs = load_docx_with_tables(file_path, chunk_size=settings.CHUNK_SIZE, overlap=settings.CHUNK_OVERLAP)
                 for doc in docs:
                     doc.metadata['mtime'] = mtime
                     doc.metadata['source'] = file_path
                 documents.extend(docs)
             elif file_path.endswith('.xlsx'):
                 print(f"[RAG] Parsing EXCEL: {file_path}")
-                loader = UnstructuredExcelLoader(file_path, mode="elements")
-                docs = loader.load()
+                docs = load_excel(file_path, chunk_size=settings.CHUNK_SIZE, overlap=settings.CHUNK_OVERLAP)
                 for doc in docs:
                     doc.metadata['mtime'] = mtime
                     doc.metadata['source'] = file_path

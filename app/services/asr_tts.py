@@ -92,5 +92,19 @@ class TTSService:
             
         return output_path
 
-asr_service = ASRService()
-tts_service = TTSService()
+_asr_service = None
+_tts_service = None
+
+
+def get_asr_service() -> ASRService:
+    global _asr_service
+    if _asr_service is None:
+        _asr_service = ASRService()
+    return _asr_service
+
+
+def get_tts_service() -> TTSService:
+    global _tts_service
+    if _tts_service is None:
+        _tts_service = TTSService()
+    return _tts_service
