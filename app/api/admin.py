@@ -11,10 +11,12 @@ from pydantic import BaseModel
 
 from app.api.auth import get_current_admin
 from app.core.config import persist_env_overrides, resolve_path, settings
+from app.rag.recommendation_agent import get_recommendation_display_label
 from app.services.asr_tts import get_tts_service
 from app.services.avatar_engine import get_avatar_engine, reset_avatar_engines
 
 router = APIRouter()
+KNOWN_QUERY_SCOPES = {"FACT", "RECOMMEND", "ANALYTICS"}
 
 AVATAR_RUNTIME_PROFILES = {
     "memory_saver": {
@@ -120,10 +122,16 @@ async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current
             ).fetchall()
         }
         intent_distribution = {
-            row["query_scope"] or "UNKNOWN": row["count"]
+            row["query_scope"]: row["count"]
             for row in cursor.execute(
-                "SELECT query_scope, COUNT(*) AS count FROM interaction_logs GROUP BY query_scope"
+                """
+                SELECT query_scope, COUNT(*) AS count
+                FROM interaction_logs
+                WHERE query_scope IS NOT NULL AND query_scope != ''
+                GROUP BY query_scope
+                """
             ).fetchall()
+            if row["query_scope"] in KNOWN_QUERY_SCOPES
         }
         focus_points = [
             {"name": row["focus_point"], "value": row["count"]}
@@ -185,17 +193,21 @@ async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current
                 """
             ).fetchall()
         ][::-1]
-        recommendation_label_distribution = {
-            row["recommendation_label"]: row["count"]
-            for row in cursor.execute(
-                """
-                SELECT recommendation_label, COUNT(*) AS count
-                FROM interaction_logs
-                WHERE recommendation_label IS NOT NULL AND recommendation_label != ''
-                GROUP BY recommendation_label
-                """
-            ).fetchall()
-        }
+        recommendation_label_distribution: Dict[str, int] = {}
+        for row in cursor.execute(
+            """
+            SELECT recommendation_label, COUNT(*) AS count
+            FROM interaction_logs
+            WHERE recommendation_label IS NOT NULL AND recommendation_label != ''
+            GROUP BY recommendation_label
+            """
+        ).fetchall():
+            display_label = get_recommendation_display_label(row["recommendation_label"])
+            if not display_label:
+                continue
+            recommendation_label_distribution[display_label] = (
+                recommendation_label_distribution.get(display_label, 0) + row["count"]
+            )
         recent_failed_samples = [
             {
                 "user_query": row["user_query"],

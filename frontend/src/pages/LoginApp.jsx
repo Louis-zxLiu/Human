@@ -60,9 +60,9 @@ export function LoginApp() {
         <div className="auth-layout">
           <section className="panel panel-dark auth-hero">
             <div className="eyebrow">灵山胜境数字人系统</div>
-            <h1 className="hero-title">把游客接待、数字人展示和运营后台整理成一套更像产品的前端。</h1>
+            <h1 className="hero-title">把游客接待、数字人展示和运营后台整理成一套更完整的前端体验。</h1>
             <p className="hero-copy">
-              新版前台围绕真实接待路径重做：游客端以数字人舞台为主，历史会话按用户名保存在本地，后台则聚焦运营判断最需要的几组信号。
+              前台围绕真实接待路径设计：游客端以数字人舞台为主，历史会话按用户名保存在本地，后台则聚焦运营判断最需要的几组信号。
             </p>
 
             <div className="auth-feature-list">
@@ -95,8 +95,8 @@ export function LoginApp() {
 
             <p className="panel-copy">
               {isLogin
-                ? "使用游客或管理员账号进入新版前台。"
-                : "新建游客账号后，登录将直接进入新的会话界面。"}
+                ? "使用游客或管理员账号进入前台。"
+                : "创建游客账号后，登录将直接进入对话界面。"}
             </p>
 
             <form className="auth-form" onSubmit={handleSubmit}>

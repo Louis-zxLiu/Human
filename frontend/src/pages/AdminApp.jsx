@@ -21,12 +21,11 @@ const INTENT_LABELS = {
   FACT: "景点问答",
   RECOMMEND: "路线推荐",
   ANALYTICS: "数据分析",
-  UNKNOWN: "未分类",
 };
 
 function formatLabel(value, labelMap = {}) {
   const normalized = String(value || "").trim();
-  if (!normalized) return "未分类";
+  if (!normalized) return "";
   return labelMap[normalized] || normalized.replace(/_/g, " ");
 }
 
@@ -55,6 +54,7 @@ function formatDateTime(value) {
 function toBarItems(data, labelMap) {
   return Object.entries(data || {})
     .map(([label, value]) => ({ label: formatLabel(label, labelMap), value: Number(value || 0) }))
+    .filter((item) => item.label && item.value > 0)
     .sort((left, right) => right.value - left.value);
 }
 
