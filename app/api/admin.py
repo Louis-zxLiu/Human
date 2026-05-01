@@ -10,11 +10,30 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.api.auth import get_current_admin
-from app.core.config import resolve_path, settings
+from app.core.config import persist_env_overrides, resolve_path, settings
 from app.services.asr_tts import get_tts_service
-from app.services.avatar_engine import get_avatar_engine
+from app.services.avatar_engine import get_avatar_engine, reset_avatar_engines
 
 router = APIRouter()
+
+AVATAR_RUNTIME_PROFILES = {
+    "memory_saver": {
+        "id": "memory_saver",
+        "label": "省显存",
+        "summary": "优先压低显存占用和首包压力。",
+        "description": "使用 float16 和 0 秒 warmup，更省显存、更快，但画面稳定性和细节可能略差。",
+        "torch_dtype": "float16",
+        "warmup_seconds": 0.0,
+    },
+    "quality": {
+        "id": "quality",
+        "label": "高质量",
+        "summary": "优先画面稳定度和数字人观感。",
+        "description": "使用 bfloat16 和 0.5 秒 warmup，画质通常更稳，但会增加显存占用和启动开销。",
+        "torch_dtype": "bfloat16",
+        "warmup_seconds": 0.5,
+    },
+}
 
 
 def get_db_path() -> str:
@@ -38,6 +57,25 @@ def build_data_status() -> Dict[str, Any]:
         "behavior_db_ready": behavior_ready,
         "knowledge_doc_count": len(kb_docs),
         "knowledge_documents": kb_docs[:10],
+    }
+
+
+def get_avatar_runtime_profile_id() -> str:
+    current_dtype = str(settings.AVATAR_TORCH_DTYPE).lower()
+    current_warmup = float(settings.AVATAR_WARMUP_SECONDS)
+    if current_dtype == "bfloat16" and current_warmup >= 0.5:
+        return "quality"
+    return "memory_saver"
+
+
+def build_avatar_runtime_payload() -> Dict[str, Any]:
+    return {
+        "current_profile_id": get_avatar_runtime_profile_id(),
+        "current_settings": {
+            "torch_dtype": str(settings.AVATAR_TORCH_DTYPE).lower(),
+            "warmup_seconds": float(settings.AVATAR_WARMUP_SECONDS),
+        },
+        "profiles": list(AVATAR_RUNTIME_PROFILES.values()),
     }
 
 
@@ -220,6 +258,10 @@ class UpdateVoiceRequest(BaseModel):
     voice_id: str
 
 
+class UpdateAvatarRuntimeRequest(BaseModel):
+    profile_id: str
+
+
 @router.get("/voice/list")
 async def get_available_voices(current_admin: Dict[str, Any] = Depends(get_current_admin)):
     tts_service = get_tts_service()
@@ -229,6 +271,51 @@ async def get_available_voices(current_admin: Dict[str, Any] = Depends(get_curre
             "available_voices": tts_service.available_voices,
         }
     )
+
+
+@router.get("/avatar/runtime")
+async def get_avatar_runtime(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    return JSONResponse(content=build_avatar_runtime_payload())
+
+
+@router.post("/avatar/runtime")
+async def update_avatar_runtime(
+    request: UpdateAvatarRuntimeRequest,
+    current_admin: Dict[str, Any] = Depends(get_current_admin),
+):
+    profile = AVATAR_RUNTIME_PROFILES.get(request.profile_id)
+    if not profile:
+        raise HTTPException(status_code=400, detail="Invalid avatar runtime profile")
+
+    previous_dtype = settings.AVATAR_TORCH_DTYPE
+    previous_warmup = settings.AVATAR_WARMUP_SECONDS
+
+    try:
+        settings.AVATAR_TORCH_DTYPE = profile["torch_dtype"]
+        settings.AVATAR_WARMUP_SECONDS = profile["warmup_seconds"]
+        reset_avatar_engines()
+        avatar_engine = get_avatar_engine()
+        default_avatar_path = resolve_path("data/processed/default_avatar.jpg")
+        if os.path.exists(default_avatar_path):
+            avatar_engine.update_base_image(default_avatar_path)
+        if not avatar_engine.is_loaded:
+            raise RuntimeError("Avatar engine failed to reload with the selected profile.")
+
+        persist_env_overrides(
+            {
+                "AVATAR_TORCH_DTYPE": str(profile["torch_dtype"]),
+                "AVATAR_WARMUP_SECONDS": str(profile["warmup_seconds"]),
+            }
+        )
+    except Exception as exc:
+        settings.AVATAR_TORCH_DTYPE = previous_dtype
+        settings.AVATAR_WARMUP_SECONDS = previous_warmup
+        reset_avatar_engines()
+        raise HTTPException(status_code=500, detail=f"Failed to switch avatar runtime profile: {exc}")
+
+    payload = build_avatar_runtime_payload()
+    payload["message"] = f"Avatar runtime switched to {profile['label']}"
+    return JSONResponse(content=payload)
 
 
 @router.post("/voice/update")

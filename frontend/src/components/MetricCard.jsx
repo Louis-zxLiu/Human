@@ -1,11 +1,11 @@
 import React from "react";
 
-export function MetricCard({ title, value, hint }) {
+export function MetricCard({ title, value, hint, accent = "sky" }) {
   return (
-    <div className="card" style={{ padding: 20 }}>
-      <div className="muted" style={{ fontSize: 14 }}>{title}</div>
-      <div className="metric-value" style={{ marginTop: 10 }}>{value}</div>
-      {hint ? <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{hint}</div> : null}
-    </div>
+    <article className={`panel metric-card tone-${accent}`}>
+      <span className="metric-card__label">{title}</span>
+      <strong className="metric-card__value">{value}</strong>
+      {hint ? <span className="metric-card__hint">{hint}</span> : null}
+    </article>
   );
 }

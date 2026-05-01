@@ -1,8 +1,11 @@
 import os
+import subprocess
+import numpy as np
 import torch
 import whisper
 import asyncio
 import edge_tts
+import imageio_ffmpeg
 
 from app.core.config import resolve_path, settings
 
@@ -22,15 +25,39 @@ class ASRService:
         self.model = whisper.load_model(self.model_name, device=self.device, download_root=download_root)
         self.is_loaded = True
 
+    def _decode_audio(self, audio_path: str) -> np.ndarray:
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [
+            ffmpeg_exe,
+            "-nostdin",
+            "-threads",
+            "0",
+            "-i",
+            audio_path,
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-",
+        ]
+        out = subprocess.run(cmd, capture_output=True, check=True).stdout
+        audio = np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+        return audio
+
     def transcribe(self, audio_path: str) -> str:
         """
         Transcribe audio file to text.
         """
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
-            
+
         print(f"[ASR] Transcribing {audio_path}...")
-        result = self.model.transcribe(audio_path)
+        audio_array = self._decode_audio(audio_path)
+        result = self.model.transcribe(audio_array)
         return result["text"]
 
 class TTSService:

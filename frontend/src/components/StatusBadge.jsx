@@ -3,11 +3,14 @@ import React from "react";
 export function StatusBadge({ state, children }) {
   const className =
     state === "success"
-      ? "pill status-success"
+      ? "status-badge status-success"
       : state === "warning"
-        ? "pill status-warning"
+        ? "status-badge status-warning"
         : state === "danger"
-          ? "pill status-danger"
-          : "pill status-info";
+          ? "status-badge status-danger"
+          : state === "neutral"
+            ? "status-badge status-neutral"
+            : "status-badge status-info";
+
   return <span className={className}>{children}</span>;
 }

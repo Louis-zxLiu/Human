@@ -29,19 +29,28 @@ class AvatarEngine:
     Wrapper for Soul-AILab/SoulX-FlashHead Lite 1.3B model.
     Handles digital avatar rendering and lip-sync synchronization.
     """
-    def __init__(self):
+    def __init__(self, device_override: str | None = None):
         self.model_path = os.path.abspath(settings.MODEL_AVATAR_PATH)
         self.fps_target = 25
         self.lip_sync_error_margin = 100  # ms
+        requested_device = device_override if device_override in {"cuda", "cpu"} else settings.AVATAR_DEVICE
         self.device = (
-            settings.AVATAR_DEVICE
-            if settings.AVATAR_DEVICE in {"cuda", "cpu"}
+            requested_device
+            if requested_device in {"cuda", "cpu"}
             else ("cuda" if torch.cuda.is_available() else "cpu")
         )
         if self.device == "cuda" and not torch.cuda.is_available():
             self.device = "cpu"
         self.current_image_path = None
         self._load_model()
+
+    def sync_base_image_from(self, other: "AvatarEngine") -> None:
+        if not other or not other.current_image_path:
+            return
+        if self.current_image_path == other.current_image_path:
+            return
+        if os.path.exists(other.current_image_path):
+            self.update_base_image(other.current_image_path)
 
     def _load_model(self):
         """
@@ -194,17 +203,17 @@ class AvatarEngine:
         """
         import sys
         start_time = time.time()
-        
+
         if not self.is_loaded:
             print("[AvatarEngine] Engine not loaded, cannot generate video.")
             sys.stdout.flush()
             return None
-            
+
         try:
-            import librosa
-            import subprocess
             import imageio
             import imageio_ffmpeg
+            import librosa
+            import subprocess
             from collections import deque
             from flash_head.inference import get_infer_params
 
@@ -216,18 +225,15 @@ class AvatarEngine:
             motion_frames_num = int(infer_params["motion_frames_num"])
             slice_len = frame_num - motion_frames_num
 
-            # 1) Load audio (match SoulX config)
             print(f"[AvatarEngine] Loading audio from {audio_path} (sr={sample_rate})...")
             sys.stdout.flush()
             audio_array, sr = librosa.load(audio_path, sr=sample_rate, mono=True)
 
-            # Optional warmup (prepend silence only for generation; final video trims it away)
             warmup_duration = float(settings.AVATAR_WARMUP_SECONDS or 0.0)
             if warmup_duration > 0:
                 warmup_samples = int(sr * warmup_duration)
                 audio_array = np.concatenate([np.zeros(warmup_samples, dtype=audio_array.dtype), audio_array])
 
-            # 2) Stream-style chunking (prevents CUDA OOM on long audios)
             human_speech_array_slice_len = slice_len * sample_rate // tgt_fps
             remainder = len(audio_array) % human_speech_array_slice_len
             if remainder > 0:
@@ -238,15 +244,43 @@ class AvatarEngine:
             audio_end_idx = cached_audio_duration * tgt_fps
             audio_start_idx = audio_end_idx - frame_num
             audio_dq = deque([0.0] * cached_audio_length_sum, maxlen=cached_audio_length_sum)
-
             slices = audio_array.reshape(-1, human_speech_array_slice_len)
 
-            # 3) Write video incrementally to avoid holding all frames in RAM/VRAM
-            os.makedirs(os.path.dirname(os.path.abspath(output_video_path)), exist_ok=True)
-            temp_video_path = output_video_path.replace(".mp4", "_tmp.mp4")
-
+            generated_list = []
             if self.device == "cuda" and settings.AVATAR_EMPTY_CACHE_BEFORE_INFER:
                 torch.cuda.empty_cache()
+
+            for chunk_idx, chunk_audio in enumerate(slices):
+                audio_dq.extend(chunk_audio.tolist())
+                audio_ctx = np.array(audio_dq, dtype=np.float32)
+
+                if self.device == "cuda":
+                    torch.cuda.synchronize()
+                chunk_start = time.time()
+
+                with torch.inference_mode():
+                    audio_embedding = get_audio_embedding(
+                        self.pipeline,
+                        audio_ctx,
+                        audio_start_idx,
+                        audio_end_idx,
+                    )
+                    video = run_pipeline(self.pipeline, audio_embedding)
+                    video = video[motion_frames_num:]
+
+                if self.device == "cuda":
+                    torch.cuda.synchronize()
+                print(f"[AvatarEngine] chunk-{chunk_idx} generated in {time.time() - chunk_start:.2f}s")
+                sys.stdout.flush()
+
+                generated_list.append(video.cpu())
+                del audio_embedding, video
+
+                if self.device == "cuda" and settings.AVATAR_EMPTY_CACHE_AFTER_INFER:
+                    torch.cuda.empty_cache()
+
+            os.makedirs(os.path.dirname(os.path.abspath(output_video_path)), exist_ok=True)
+            temp_video_path = output_video_path.replace(".mp4", "_tmp.mp4")
 
             with imageio.get_writer(
                 temp_video_path,
@@ -256,31 +290,11 @@ class AvatarEngine:
                 codec="h264",
                 ffmpeg_params=["-bf", "0", "-crf", str(settings.AVATAR_VIDEO_CRF)],
             ) as writer:
-                for chunk_idx, chunk_audio in enumerate(slices):
-                    audio_dq.extend(chunk_audio.tolist())
-                    audio_ctx = np.array(audio_dq, dtype=np.float32)
-
-                    with torch.inference_mode():
-                        audio_embedding = get_audio_embedding(
-                            self.pipeline, audio_ctx, audio_start_idx, audio_end_idx
-                        )
-                        video = run_pipeline(self.pipeline, audio_embedding)
-
-                    # remove motion overlap for subsequent chunks
-                    if chunk_idx != 0:
-                        video = video[motion_frames_num:]
-
-                    frames = video.detach().cpu().numpy().astype(np.uint8)
+                for video_cpu in generated_list:
+                    frames = video_cpu.numpy().astype(np.uint8)
                     for i in range(frames.shape[0]):
                         writer.append_data(frames[i])
 
-                    # aggressive cleanup to reduce VRAM fragmentation
-                    del audio_embedding, video, frames
-                    if self.device == "cuda":
-                        torch.cuda.empty_cache()
-
-            # 4) Merge original audio + (optionally) trim warmup from video
-            # Trim is applied on video stream only; audio starts at t=0.
             trim_ss = f"{max(warmup_duration, 0.0):.3f}"
             ffmpeg_cmd = [
                 imageio_ffmpeg.get_ffmpeg_exe(),
@@ -303,6 +317,7 @@ class AvatarEngine:
                 print(f"[AvatarEngine] FFmpeg Error: {result.stderr}")
                 sys.stdout.flush()
                 return None
+
             try:
                 os.remove(temp_video_path)
             except Exception:
@@ -312,19 +327,26 @@ class AvatarEngine:
             print(f"[AvatarEngine] Video generated successfully at {output_video_path} in {processing_time:.2f}s")
             sys.stdout.flush()
             return output_video_path
-            
-        except torch.cuda.OutOfMemoryError as e:
+
+        except torch.cuda.OutOfMemoryError:
             if self.device == "cuda":
                 torch.cuda.empty_cache()
             import traceback
             print("[AvatarEngine] CUDA OOM during video generation.")
-            print("建议：1) EMBEDDING_DEVICE=cpu 2) AVATAR_WARMUP_SECONDS=0.0~0.5 3) 关闭并发视频生成 4) 重启进程释放显存")
             print(traceback.format_exc())
             sys.stdout.flush()
             return None
-        except Exception as e:
+        except torch.AcceleratorError as exc:
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
             import traceback
-            print(f"[AvatarEngine] Video generation failed: {e}")
+            print(f"[AvatarEngine] CUDA accelerator error during video generation: {exc}")
+            print(traceback.format_exc())
+            sys.stdout.flush()
+            return None
+        except Exception as exc:
+            import traceback
+            print(f"[AvatarEngine] Video generation failed: {exc}")
             print(traceback.format_exc())
             sys.stdout.flush()
             return None
@@ -436,14 +458,23 @@ class AvatarEngine:
             
         return frames
 
-_avatar_engine = None
+_avatar_engines: dict[str, AvatarEngine] = {}
 
 
-def get_avatar_engine() -> AvatarEngine:
-    global _avatar_engine
-    if _avatar_engine is None:
-        _avatar_engine = AvatarEngine()
-    return _avatar_engine
+def get_avatar_engine(device_override: str | None = None) -> AvatarEngine:
+    requested_device = device_override if device_override in {"cuda", "cpu"} else settings.AVATAR_DEVICE
+    cache_key = requested_device if requested_device in {"cuda", "cpu"} else "auto"
+
+    if cache_key not in _avatar_engines:
+        _avatar_engines[cache_key] = AvatarEngine(device_override=requested_device)
+    return _avatar_engines[cache_key]
+
+
+def reset_avatar_engines() -> None:
+    global _avatar_engines
+    _avatar_engines = {}
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 if __name__ == "__main__":
     print("[AvatarEngine] Running as standalone service...")

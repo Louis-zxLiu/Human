@@ -3,38 +3,33 @@ import React from "react";
 import { RecommendationCard } from "./RecommendationCard";
 import { StatusBadge } from "./StatusBadge";
 
-
 function gpsStatusText(meta) {
-  if (meta.gps_state === "awaiting_landmarks") return "弱 GPS：等待用户补充地标";
-  if (meta.gps_state === "ambiguous") return `弱 GPS：候选位置 ${meta.gps_candidates?.join(" / ") || ""}`;
-  if (meta.gps_state === "resolved" || meta.gps_state === "resolved_recommendation") return `弱 GPS：已推测位置 ${meta.matched_attraction || ""}`;
+  if (meta?.gps_state === "awaiting_landmarks") return "弱 GPS：等待补充地标描述";
+  if (meta?.gps_state === "ambiguous") return `弱 GPS：候选位置 ${meta.gps_candidates?.join(" / ") || ""}`;
+  if (meta?.gps_state === "resolved" || meta?.gps_state === "resolved_recommendation") {
+    return `弱 GPS：已匹配 ${meta.matched_attraction || "当前位置"}`;
+  }
   return null;
 }
 
-
 export function ChatMessage({ message }) {
-  const alignRight = message.role === "user";
+  const isUser = message.role === "user";
   const badgeText = message.meta ? gpsStatusText(message.meta) : null;
+  const badgeState = message.meta?.gps_state === "resolved" || message.meta?.gps_state === "resolved_recommendation"
+    ? "success"
+    : "warning";
+
   return (
-    <div style={{ display: "flex", justifyContent: alignRight ? "flex-end" : "flex-start" }}>
-      <div
-        className="card"
-        style={{
-          maxWidth: "86%",
-          padding: 16,
-          background: alignRight ? "#e0f2fe" : "#ffffff",
-        }}
-      >
-        <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
-          {alignRight ? "游客" : "数字人导游"}
-        </div>
-        {badgeText ? <StatusBadge state={message.meta.gps_state === "resolved" ? "success" : "warning"}>{badgeText}</StatusBadge> : null}
+    <div className={`chat-message ${isUser ? "is-user" : ""}`}>
+      <div className={`message-bubble ${isUser ? "message-bubble--user" : "message-bubble--assistant"}`}>
+        <div className="message-role">{isUser ? "游客" : "数字人导游"}</div>
+        {badgeText ? <StatusBadge state={badgeState}>{badgeText}</StatusBadge> : null}
         {message.meta?.recommendation ? (
-          <div style={{ marginTop: 12 }}>
+          <div className="message-recommendation">
             <RecommendationCard recommendation={message.meta.recommendation} />
           </div>
         ) : null}
-        <div style={{ marginTop: 12, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{message.content}</div>
+        <div className="message-content">{message.content}</div>
       </div>
     </div>
   );

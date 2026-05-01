@@ -2,16 +2,20 @@ import React from "react";
 
 export function RecommendationCard({ recommendation }) {
   if (!recommendation) return null;
+
   return (
-    <div className="card" style={{ padding: 16, borderColor: "#fde68a", background: "#fffbeb" }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>{recommendation.title}</div>
-      <div style={{ fontSize: 14, marginBottom: 8 }}>{recommendation.reason}</div>
-      <div style={{ fontSize: 14, marginBottom: 8 }}>预计游览时长：{recommendation.estimated_duration}</div>
-      <div className="grid">
+    <div className="recommendation-card">
+      <div className="recommendation-card__eyebrow">路线建议</div>
+      <div className="recommendation-card__title">{recommendation.title}</div>
+      <div className="recommendation-card__reason">{recommendation.reason}</div>
+      <div className="recommendation-card__duration">
+        预计游览时长：{recommendation.estimated_duration}
+      </div>
+      <div className="recommendation-card__items">
         {recommendation.route_items?.map((item, index) => (
-          <div key={`${item.name}-${index}`} className="card" style={{ padding: 12 }}>
-            <div style={{ fontWeight: 600 }}>{index + 1}. {item.name}</div>
-            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{item.summary}</div>
+          <div key={`${item.name}-${index}`} className="recommendation-card__item">
+            <div className="recommendation-card__item-title">{index + 1}. {item.name}</div>
+            <div className="recommendation-card__item-summary">{item.summary}</div>
           </div>
         ))}
       </div>

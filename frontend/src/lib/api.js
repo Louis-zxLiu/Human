@@ -2,10 +2,12 @@ async function request(url, options = {}) {
   const response = await fetch(url, options);
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+
   if (!response.ok) {
     const message = typeof payload === "string" ? payload : payload.detail || payload.message || "Request failed";
     throw new Error(message);
   }
+
   return payload;
 }
 
@@ -34,12 +36,11 @@ export function register(payload) {
   });
 }
 
-export function fetchProfile() {
-  return request("/api/v1/interact/profile", { headers: authHeaders() });
-}
-
-export function fetchHistory(limit = 10) {
-  return request(`/api/v1/interact/history?limit=${limit}`, { headers: authHeaders() });
+export function logout() {
+  return request("/api/v1/auth/logout", {
+    method: "POST",
+    headers: authHeaders(),
+  });
 }
 
 export function sendTextMessage(formData) {
@@ -64,6 +65,18 @@ export function fetchDashboard() {
 
 export function fetchVoices() {
   return request("/api/v1/admin/voice/list", { headers: authHeaders() });
+}
+
+export function fetchAvatarRuntime() {
+  return request("/api/v1/admin/avatar/runtime", { headers: authHeaders() });
+}
+
+export function updateAvatarRuntime(profileId) {
+  return request("/api/v1/admin/avatar/runtime", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ profile_id: profileId }),
+  });
 }
 
 export function updateVoice(voiceId) {
