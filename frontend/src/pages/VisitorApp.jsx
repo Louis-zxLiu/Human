@@ -26,6 +26,39 @@ const QUICK_PROMPTS = [
   "我现在在梵宫附近，下一站适合去哪里",
   "灵山大佛的历史背景是什么",
 ];
+const DEMO_ROUTES = [
+  {
+    label: "历史文化",
+    title: "祥符禅寺 -> 灵山大佛 -> 灵山梵宫",
+    duration: "约 2.5-3.5 小时",
+    prompt: "我是历史文化爱好者，请给我一条灵山胜境深度讲解路线，并说明每个节点讲什么。",
+    focus: "玄奘渊源、五方五佛、梵宫佛教艺术",
+    behavior: "结合历史文化类与展馆类游客停留和满意度偏好。",
+  },
+  {
+    label: "亲子家庭",
+    title: "百子戏弥勒 -> 九龙灌浴 -> 佛教文化博览馆 -> 灵山大佛",
+    duration: "约 2.5-3 小时",
+    prompt: "我们带孩子来玩，请推荐一条亲子友好的路线，要有互动点和讲解重点。",
+    focus: "吉祥寓意、动态表演、轻知识讲解",
+    behavior: "优先选择更易互动、节奏舒缓的节点。",
+  },
+  {
+    label: "自然风光",
+    title: "五明桥 -> 菩提大道 -> 灵山大佛 -> 五印坛城",
+    duration: "约 2-3 小时",
+    prompt: "我喜欢自然风光和拍照打卡，请推荐一条适合拍照的路线，并说明为什么适合多数游客。",
+    focus: "太湖视野、中轴线取景、佛像远景",
+    behavior: "结合风景名胜与休闲度假类游客偏好。",
+  },
+];
+const PROCESS_STAGE_ORDER = ["idle", "heard", "retrieving", "generating", "avatar", "done"];
+const PROCESS_STAGES = [
+  { key: "heard", title: "听懂游客意图", detail: "识别文本或语音输入，锁定本轮问题。" },
+  { key: "retrieving", title: "检索可信资料", detail: "按意图访问 DOCX 知识库、行为数据或路线融合链路。" },
+  { key: "generating", title: "生成讲解回答", detail: "组织事实证据、路线节点和游客可听懂的讲解。" },
+  { key: "avatar", title: "数字人出镜", detail: "合成语音和口型视频，形成可演示的多模态反馈。" },
+];
 
 function buildCurrentSessionDisplay(currentSession, messages) {
   const summary = summarizeMessages(messages);
@@ -52,6 +85,8 @@ export function VisitorApp() {
   const [inputText, setInputText] = useState("");
   const [isGpsWeak, setIsGpsWeak] = useState(localStorage.getItem("gps_weak_mode") === "true");
   const [loading, setLoading] = useState(false);
+  const [processStage, setProcessStage] = useState("idle");
+  const [activeQuestion, setActiveQuestion] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [archives, setArchives] = useState([]);
@@ -67,10 +102,15 @@ export function VisitorApp() {
   const chatRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const stageTimersRef = useRef([]);
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
   }, [currentSession]);
+
+  useEffect(() => () => {
+    stageTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
 
   const selectedArchive = archives.find((item) => item.id === selectedArchiveId) || null;
   const isArchiveView = Boolean(selectedArchive);
@@ -137,12 +177,40 @@ export function VisitorApp() {
     setInputText("");
     setVideoUrl("");
     setLoading(false);
+    setProcessStage("idle");
+    setActiveQuestion("");
   }
 
   function updateVideoFromResult(result) {
     if (result.video_stream_url) {
       setVideoUrl(`${result.video_stream_url}?t=${Date.now()}`);
     }
+  }
+
+  function clearStageTimers() {
+    stageTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    stageTimersRef.current = [];
+  }
+
+  function scheduleProcessingStages(question, startStage = "heard") {
+    clearStageTimers();
+    setActiveQuestion(question);
+    setProcessStage(startStage);
+    const plan = startStage === "heard"
+      ? [
+          ["retrieving", 700],
+          ["generating", 1600],
+        ]
+      : [
+          ["generating", 900],
+        ];
+    stageTimersRef.current = plan.map(([stage, delay]) => window.setTimeout(() => setProcessStage(stage), delay));
+  }
+
+  function completeProcessing(result) {
+    clearStageTimers();
+    setProcessStage(result.video_stream_url ? "avatar" : "done");
+    stageTimersRef.current = [window.setTimeout(() => setProcessStage("done"), 1800)];
   }
 
   async function handleLogout() {
@@ -156,20 +224,21 @@ export function VisitorApp() {
     window.location.href = "/login";
   }
 
-  async function handleSendText() {
-    if (!inputText.trim() || loading || isArchiveView) return;
+  async function submitTextMessage(text) {
+    if (!text.trim() || loading || isArchiveView) return;
 
-    const text = inputText.trim();
+    const normalizedText = text.trim();
     setInputText("");
+    scheduleProcessingStages(normalizedText);
 
-    const nextMessages = [...messages, { role: "user", content: text, meta: null }];
+    const nextMessages = [...messages, { role: "user", content: normalizedText, meta: null }];
     setMessages(nextMessages);
     persistMessages(nextMessages);
     setLoading(true);
 
     try {
       const formData = new FormData();
-      formData.append("text", text);
+      formData.append("text", normalizedText);
       formData.append("gps_status", isGpsWeak ? "weak" : "normal");
       formData.append("client_session_id", currentSessionRef.current.id);
       const result = await sendTextMessage(formData);
@@ -183,7 +252,10 @@ export function VisitorApp() {
         return updatedMessages;
       });
       updateVideoFromResult(result);
+      completeProcessing(result);
     } catch (err) {
+      clearStageTimers();
+      setProcessStage("done");
       setMessages((previous) => {
         const updatedMessages = [
           ...previous,
@@ -195,6 +267,10 @@ export function VisitorApp() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSendText() {
+    await submitTextMessage(inputText);
   }
 
   async function ensureRecorder() {
@@ -211,6 +287,7 @@ export function VisitorApp() {
       const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
       audioChunksRef.current = [];
       setLoading(true);
+      scheduleProcessingStages("正在识别语音输入...", "retrieving");
 
       try {
         const formData = new FormData();
@@ -218,6 +295,7 @@ export function VisitorApp() {
         formData.append("gps_status", isGpsWeak ? "weak" : "normal");
         formData.append("client_session_id", currentSessionRef.current.id);
         const result = await sendAudioMessage(formData);
+        setActiveQuestion(result.user_text || "语音提问");
 
         setMessages((previous) => {
           const updatedMessages = [
@@ -229,7 +307,10 @@ export function VisitorApp() {
           return updatedMessages;
         });
         updateVideoFromResult(result);
+        completeProcessing(result);
       } catch (err) {
+        clearStageTimers();
+        setProcessStage("done");
         setMessages((previous) => {
           const updatedMessages = [
             ...previous,
@@ -249,6 +330,8 @@ export function VisitorApp() {
 
     try {
       await ensureRecorder();
+      setActiveQuestion("正在聆听语音提问...");
+      setProcessStage("heard");
       setIsRecording(true);
       mediaRecorderRef.current.start();
     } catch (err) {
@@ -489,6 +572,24 @@ export function VisitorApp() {
               ) : (
                 <>
                   <div className="prompt-row">
+                    {DEMO_ROUTES.map((route) => (
+                      <button
+                        type="button"
+                        key={route.label}
+                        className="demo-route-card"
+                        onClick={() => submitTextMessage(route.prompt)}
+                        disabled={loading}
+                      >
+                        <span className="demo-route-card__label">{route.label}</span>
+                        <strong>{route.title}</strong>
+                        <span>{route.duration}</span>
+                        <small>{route.focus}</small>
+                        <em>{route.behavior}</em>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="prompt-row">
                     {QUICK_PROMPTS.map((prompt) => (
                       <button
                         type="button"
@@ -553,6 +654,33 @@ export function VisitorApp() {
               <StatusBadge state={isGpsWeak ? "warning" : "success"}>
                 {isGpsWeak ? "弱 GPS 模式" : "正常定位"}
               </StatusBadge>
+            </div>
+
+            <div className="process-panel">
+              <div className="process-panel__header">
+                <span>{loading ? "本轮生成进度" : "演示闭环状态"}</span>
+                <strong>{activeQuestion || "等待游客提问"}</strong>
+              </div>
+              <div className="process-steps">
+                {PROCESS_STAGES.map((stage) => {
+                  const currentIndex = PROCESS_STAGE_ORDER.indexOf(processStage);
+                  const stageIndex = PROCESS_STAGE_ORDER.indexOf(stage.key);
+                  const isActive = processStage === stage.key;
+                  const isDone = currentIndex > stageIndex || processStage === "done";
+                  return (
+                    <div
+                      key={stage.key}
+                      className={`process-step ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""}`}
+                    >
+                      <span className="process-step__dot" />
+                      <div>
+                        <strong>{stage.title}</strong>
+                        <small>{stage.detail}</small>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="media-stage">

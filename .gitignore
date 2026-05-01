@@ -19,6 +19,7 @@ logs/
 *.log
 data/temp/
 SoulX-FlashHead/data/temp/
+reports/
 
 # Generated databases and vector stores
 data/chroma_db/

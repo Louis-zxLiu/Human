@@ -10,15 +10,36 @@ RECOMMEND_KEYWORDS = (
     "行程",
     "怎么逛",
     "怎么玩",
+    "怎么走",
+    "怎么安排",
+    "去哪里",
+    "后面去哪里",
     "一日游",
     "半日游",
     "爱好者",
     "感兴趣",
+    "关注",
+    "重点看",
+    "重点听",
+    "互动感",
     "安排一下",
+    "安排",
     "不想太累",
 )
 
-RECOMMEND_INTEREST_HINTS = ("历史", "文化", "自然", "风光", "亲子", "建筑", "艺术", "慢游", "轻松")
+RECOMMEND_INTEREST_HINTS = (
+    "历史",
+    "文化",
+    "自然",
+    "风光",
+    "亲子",
+    "建筑",
+    "艺术",
+    "慢游",
+    "轻松",
+    "拍照",
+    "打卡",
+)
 
 ANALYTICS_KEYWORDS = (
     "游客",
@@ -38,6 +59,12 @@ ANALYTICS_KEYWORDS = (
     "分析",
     "数据",
     "人均",
+    "同行",
+    "团体",
+    "记录",
+    "访问量",
+    "月份",
+    "景点类型",
     "最受欢迎",
 )
 
@@ -65,9 +92,13 @@ FACT_KEYWORDS = (
 def get_query_intent(query: str) -> QueryIntent:
     lowered = query.strip().lower()
 
-    if any(keyword in lowered for keyword in RECOMMEND_KEYWORDS):
-        return "RECOMMEND"
     if "喜欢" in lowered and any(keyword in lowered for keyword in RECOMMEND_INTEREST_HINTS):
+        return "RECOMMEND"
+
+    if "路线" in lowered and any(keyword in lowered for keyword in ("会重点", "为什么适合", "适合看哪些")):
+        return "FACT"
+
+    if any(keyword in lowered for keyword in RECOMMEND_KEYWORDS):
         return "RECOMMEND"
 
     has_fact_signal = any(keyword in lowered for keyword in FACT_KEYWORDS)
@@ -77,7 +108,24 @@ def get_query_intent(query: str) -> QueryIntent:
         return "ANALYTICS"
 
     if has_analytics_signal and any(
-        keyword in lowered for keyword in ("满意度", "消费", "停留", "人均", "偏好", "趋势", "女性", "男性", "年龄", "游客")
+        keyword in lowered
+        for keyword in (
+            "满意度",
+            "消费",
+            "停留",
+            "人均",
+            "偏好",
+            "趋势",
+            "女性",
+            "男性",
+            "年龄",
+            "游客",
+            "同行",
+            "记录",
+            "访问量",
+            "月份",
+            "景点类型",
+        )
     ):
         return "ANALYTICS"
 

@@ -3,6 +3,9 @@ import shutil
 import sqlite3
 import threading
 import uuid
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -46,20 +49,204 @@ def build_data_status() -> Dict[str, Any]:
     chroma_dir = resolve_path(settings.CHROMA_DB_DIR)
     behavior_db = resolve_path("data/processed/tourist_behavior.db")
     kb_dir = resolve_path(settings.KNOWLEDGE_BASE_DIR)
+    raw_behavior_dir = resolve_path("data/raw_sql_data")
 
     chroma_ready = os.path.exists(chroma_dir) and bool(os.listdir(chroma_dir))
     behavior_ready = os.path.exists(behavior_db)
     kb_docs = []
     if os.path.exists(kb_dir):
-        kb_docs = [name for name in os.listdir(kb_dir) if name.lower().endswith((".docx", ".xlsx", ".txt", ".csv"))]
+        kb_docs = [
+            build_file_status(Path(kb_dir) / name)
+            for name in os.listdir(kb_dir)
+            if name.lower().endswith((".docx", ".xlsx", ".txt", ".csv"))
+        ]
+    behavior_files = []
+    if os.path.exists(raw_behavior_dir):
+        behavior_files = [
+            build_file_status(Path(raw_behavior_dir) / name)
+            for name in os.listdir(raw_behavior_dir)
+            if name.lower().endswith((".xlsx", ".xls", ".csv"))
+        ]
 
     return {
         "preflight_ok": chroma_ready and behavior_ready,
         "knowledge_base_ready": chroma_ready,
         "behavior_db_ready": behavior_ready,
         "knowledge_doc_count": len(kb_docs),
-        "knowledge_documents": kb_docs[:10],
+        "knowledge_documents": [doc["name"] for doc in kb_docs[:10]],
+        "knowledge_document_details": kb_docs,
+        "behavior_file_count": len(behavior_files),
+        "behavior_files": behavior_files,
+        "last_knowledge_build_time": get_path_mtime(chroma_dir),
+        "last_behavior_build_time": get_path_mtime(behavior_db),
+        "rebuild_commands": {
+            "knowledge_base": 'conda run -p "D:/Human/env" python -m app.cli prepare-kb',
+            "behavior_data": 'conda run -p "D:/Human/env" python -m app.cli prepare-data',
+            "unified_eval": 'conda run -p "D:/Human/env" python -m app.cli eval-unified',
+            "demo_seed": 'conda run -p "D:/Human/env" python -m app.cli seed-demo-logs --reset',
+        },
     }
+
+
+def build_file_status(path: Path) -> Dict[str, Any]:
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "size_kb": round(stat.st_size / 1024, 1),
+        "updated_at": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+        "extension": path.suffix.lower().lstrip("."),
+    }
+
+
+def get_path_mtime(path: str) -> str | None:
+    if not os.path.exists(path):
+        return None
+    return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")
+
+
+def build_eval_status() -> Dict[str, Any]:
+    report_path = Path(resolve_path("reports/unified_eval_report.json"))
+    if not report_path.exists():
+        return {
+            "ok": False,
+            "available": False,
+            "overall_score": None,
+            "case_count": 0,
+            "failure_count": None,
+            "updated_at": None,
+            "summary": "尚未生成统一评测报告。",
+            "command": 'conda run -p "D:/Human/env" python -m app.cli eval-unified',
+        }
+
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "available": False,
+            "overall_score": None,
+            "case_count": 0,
+            "failure_count": None,
+            "updated_at": get_path_mtime(str(report_path)),
+            "summary": f"统一评测报告读取失败：{exc}",
+            "command": 'conda run -p "D:/Human/env" python -m app.cli eval-unified',
+        }
+
+    source_scores = {
+        key: {
+            "accuracy": value.get("accuracy"),
+            "pass_rate": value.get("pass_rate"),
+            "count": value.get("count"),
+        }
+        for key, value in (payload.get("by_gold_source") or {}).items()
+    }
+    failure_count = len(payload.get("failures") or [])
+    overall_score = payload.get("overall_score")
+    return {
+        "ok": bool(payload.get("ok")),
+        "available": True,
+        "overall_score": overall_score,
+        "case_count": payload.get("case_count", 0),
+        "failure_count": failure_count,
+        "updated_at": get_path_mtime(str(report_path)),
+        "source_scores": source_scores,
+        "summary": f"统一评测 {overall_score}/100，失败样例 {failure_count} 个。",
+        "command": 'conda run -p "D:/Human/env" python -m app.cli eval-unified',
+    }
+
+
+def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, str]]:
+    recommendations = []
+    data_status = snapshot.get("data_status") or {}
+    eval_status = snapshot.get("unified_eval") or {}
+    failed_samples = snapshot.get("recent_failed_samples") or []
+    recommendation_distribution = snapshot.get("recommendation_label_distribution") or {}
+    avg_cost_time = float(snapshot.get("avg_cost_time") or 0)
+    total_interactions = int(snapshot.get("total_interactions") or 0)
+
+    if not data_status.get("preflight_ok"):
+        recommendations.append(
+            {
+                "priority": "高",
+                "title": "先补齐知识库和行为库预检",
+                "detail": "评委会重点看本地知识库与游客行为数据能否稳定支撑回答，建议先运行数据准备命令。",
+                "action": "运行 prepare-data 与 prepare-kb 后刷新后台。",
+            }
+        )
+
+    if eval_status.get("available"):
+        score = float(eval_status.get("overall_score") or 0)
+        if score >= 95:
+            recommendations.append(
+                {
+                    "priority": "高",
+                    "title": "把统一评测分数放进演示亮点",
+                    "detail": f"当前统一评测 {score}/100，可直接支撑“事实问答准确率高于 90%”这一赛题要求。",
+                    "action": "PPT 和演示视频中展示评测报告截图。",
+                }
+            )
+        else:
+            recommendations.append(
+                {
+                    "priority": "高",
+                    "title": "优先修复统一评测低分项",
+                    "detail": "当前评测未达到演示安全线，建议先处理失败样例再录制视频。",
+                    "action": "运行 eval-unified 并查看 reports/unified_eval_report.md。",
+                }
+            )
+
+    if failed_samples:
+        first_query = failed_samples[0].get("user_query", "最近失败样例")
+        recommendations.append(
+            {
+                "priority": "中",
+                "title": "把拒答样例转成知识库维护动作",
+                "detail": f"最近出现“{first_query}”这类需要关注的问题，可作为后台知识库管理价值展示。",
+                "action": "补充对应 DOCX 资料或在演示中说明系统会拒绝无证据问题。",
+            }
+        )
+
+    if recommendation_distribution:
+        top_label = max(recommendation_distribution.items(), key=lambda item: item[1])[0]
+        recommendations.append(
+            {
+                "priority": "中",
+                "title": f"{top_label}路线关注度较高",
+                "detail": "推荐标签分布可以转化为景区运营洞察，说明系统不只会问答，也能帮助规划讲解资源。",
+                "action": "演示后台推荐标签图表，并切到对应前台路线卡。",
+            }
+        )
+
+    if avg_cost_time > 5:
+        recommendations.append(
+            {
+                "priority": "中",
+                "title": "演示前控制长回答和视频生成耗时",
+                "detail": f"当前平均响应耗时约 {avg_cost_time}s，语音视频链路建议使用短问短答展示。",
+                "action": "演示时优先选择 20-40 秒口播问题。",
+            }
+        )
+
+    if total_interactions == 0:
+        recommendations.append(
+            {
+                "priority": "高",
+                "title": "开场前预热演示数据",
+                "detail": "后台空图表会削弱管理端观感，建议开场前注入一组演示日志。",
+                "action": '运行 conda run -p "D:/Human/env" python -m app.cli seed-demo-logs --reset。',
+            }
+        )
+
+    recommendations.append(
+        {
+            "priority": "低",
+            "title": "演示默认切换数字人高质量模式",
+            "detail": "赛题 20 分体验项会看口型同步、语音合成和表情观感，后台高质量模式更适合录屏。",
+            "action": "后台选择“高质量”，确认音色试听正常后再录制。",
+        }
+    )
+
+    return recommendations[:5]
 
 
 def get_avatar_runtime_profile_id() -> str:
@@ -85,22 +272,23 @@ def build_avatar_runtime_payload() -> Dict[str, Any]:
 async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current_admin)):
     db_path = get_db_path()
     if not os.path.exists(db_path):
-        return JSONResponse(
-            content={
-                "total_interactions": 0,
-                "daily_interactions": 0,
-                "avg_cost_time": 0.0,
-                "sentiment_distribution": {},
-                "intent_distribution": {},
-                "focus_points": [],
-                "hot_analytics_questions": [],
-                "top_attraction_preferences": [],
-                "satisfaction_trend": [],
-                "recommendation_label_distribution": {},
-                "recent_failed_samples": [],
-                "data_status": build_data_status(),
-            }
-        )
+        payload = {
+            "total_interactions": 0,
+            "daily_interactions": 0,
+            "avg_cost_time": 0.0,
+            "sentiment_distribution": {},
+            "intent_distribution": {},
+            "focus_points": [],
+            "hot_analytics_questions": [],
+            "top_attraction_preferences": [],
+            "satisfaction_trend": [],
+            "recommendation_label_distribution": {},
+            "recent_failed_samples": [],
+            "data_status": build_data_status(),
+            "unified_eval": build_eval_status(),
+        }
+        payload["operation_recommendations"] = build_operation_recommendations(payload)
+        return JSONResponse(content=payload)
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -226,22 +414,23 @@ async def get_dashboard_data(current_admin: Dict[str, Any] = Depends(get_current
             ).fetchall()
         ]
 
-        return JSONResponse(
-            content={
-                "total_interactions": total_interactions,
-                "daily_interactions": daily_interactions,
-                "avg_cost_time": round(avg_cost_time, 2),
-                "sentiment_distribution": sentiment_distribution,
-                "intent_distribution": intent_distribution,
-                "focus_points": focus_points,
-                "hot_analytics_questions": hot_analytics_questions,
-                "top_attraction_preferences": top_attraction_preferences,
-                "satisfaction_trend": satisfaction_trend,
-                "recommendation_label_distribution": recommendation_label_distribution,
-                "recent_failed_samples": recent_failed_samples,
-                "data_status": build_data_status(),
-            }
-        )
+        payload = {
+            "total_interactions": total_interactions,
+            "daily_interactions": daily_interactions,
+            "avg_cost_time": round(avg_cost_time, 2),
+            "sentiment_distribution": sentiment_distribution,
+            "intent_distribution": intent_distribution,
+            "focus_points": focus_points,
+            "hot_analytics_questions": hot_analytics_questions,
+            "top_attraction_preferences": top_attraction_preferences,
+            "satisfaction_trend": satisfaction_trend,
+            "recommendation_label_distribution": recommendation_label_distribution,
+            "recent_failed_samples": recent_failed_samples,
+            "data_status": build_data_status(),
+            "unified_eval": build_eval_status(),
+        }
+        payload["operation_recommendations"] = build_operation_recommendations(payload)
+        return JSONResponse(content=payload)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"获取大屏数据失败: {exc}")
     finally:

@@ -549,6 +549,12 @@ a {
   color: var(--text-faint);
 }
 
+.message-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .message-content {
   white-space: pre-wrap;
   line-height: 1.72;
@@ -563,11 +569,28 @@ a {
   border: 1px solid rgba(255, 191, 71, 0.2);
 }
 
+.recommendation-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
 .recommendation-card__eyebrow {
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: #ffd37f;
+}
+
+.recommendation-card__label {
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #ffe3a8;
+  background: rgba(255, 191, 71, 0.12);
+  border: 1px solid rgba(255, 191, 71, 0.22);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .recommendation-card__title,
@@ -588,6 +611,30 @@ a {
   gap: 10px;
 }
 
+.recommendation-card__insight {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.recommendation-card__insight strong {
+  color: #ffe1a3;
+}
+
+.recommendation-card__insight span {
+  color: var(--text-muted);
+  line-height: 1.55;
+  font-size: 14px;
+}
+
+.recommendation-card__insight--data {
+  background: rgba(47, 214, 164, 0.08);
+  border-color: rgba(47, 214, 164, 0.18);
+}
+
 .recommendation-card__item {
   border-radius: 16px;
   padding: 12px 14px;
@@ -606,6 +653,56 @@ a {
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.demo-route-card {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  padding: 16px;
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 191, 71, 0.12), transparent 46%),
+    rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 191, 71, 0.16);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.demo-route-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 191, 71, 0.32);
+}
+
+.demo-route-card:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.demo-route-card__label {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgba(85, 198, 255, 0.12);
+  color: #b9ebff;
+  border: 1px solid rgba(85, 198, 255, 0.2);
+  font-size: 12px;
+}
+
+.demo-route-card span,
+.demo-route-card small,
+.demo-route-card em {
+  color: var(--text-muted);
+  line-height: 1.45;
+  font-style: normal;
+}
+
+.demo-route-card em {
+  color: var(--tone-mint);
+  font-size: 12px;
 }
 
 .prompt-chip {
@@ -774,6 +871,90 @@ a {
   padding: 16px 24px 0;
 }
 
+.process-panel {
+  margin: 18px 24px 0;
+  padding: 16px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: grid;
+  gap: 14px;
+}
+
+.process-panel__header {
+  display: grid;
+  gap: 6px;
+}
+
+.process-panel__header span {
+  color: var(--tone-sky);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.process-panel__header strong {
+  color: var(--text-muted);
+  line-height: 1.55;
+  font-size: 14px;
+}
+
+.process-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.process-step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--text-faint);
+}
+
+.process-step__dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.process-step strong {
+  display: block;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.process-step small {
+  display: block;
+  margin-top: 5px;
+  line-height: 1.45;
+}
+
+.process-step.is-active {
+  border-color: rgba(85, 198, 255, 0.3);
+  background: rgba(85, 198, 255, 0.08);
+}
+
+.process-step.is-active .process-step__dot {
+  background: var(--tone-sky);
+  box-shadow: 0 0 0 5px rgba(85, 198, 255, 0.12);
+}
+
+.process-step.is-done .process-step__dot {
+  background: var(--tone-mint);
+}
+
+.process-step.is-done strong {
+  color: #bfffe8;
+}
+
 .media-stage {
   margin: 18px 24px 0;
   aspect-ratio: 4 / 5;
@@ -885,6 +1066,78 @@ a {
   font-size: 14px;
 }
 
+.note-card code {
+  color: #b9ebff;
+  background: rgba(85, 198, 255, 0.08);
+  border: 1px solid rgba(85, 198, 255, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.note-card--highlight {
+  background: rgba(85, 198, 255, 0.07);
+  border-color: rgba(85, 198, 255, 0.18);
+}
+
+.doc-status-list,
+.recommendation-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.doc-status-card,
+.operation-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.doc-status-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.doc-status-card div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.doc-status-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-status-card span,
+.doc-status-card em,
+.operation-card p,
+.operation-card span {
+  color: var(--text-muted);
+  line-height: 1.55;
+  font-size: 14px;
+  font-style: normal;
+}
+
+.operation-card__header {
+  display: grid;
+  gap: 10px;
+}
+
+.operation-card p {
+  margin: 0;
+}
+
+.operation-card span {
+  color: #b9ebff;
+}
+
 .compact-link {
   min-height: auto;
   padding: 10px 14px;
@@ -958,6 +1211,11 @@ a {
 .tone-coral {
   border-color: rgba(255, 122, 89, 0.2);
   box-shadow: inset 0 0 0 1px rgba(255, 122, 89, 0.1);
+}
+
+.tone-indigo {
+  border-color: rgba(140, 140, 255, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(140, 140, 255, 0.12);
 }
 
 .admin-grid {
@@ -1264,6 +1522,10 @@ a {
     aspect-ratio: 16 / 10;
   }
 
+  .process-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .metric-grid,
   .admin-grid {
     grid-template-columns: 1fr;
@@ -1317,6 +1579,15 @@ a {
     margin-left: 18px;
     margin-right: 18px;
     min-height: 300px;
+  }
+
+  .process-panel {
+    margin-left: 18px;
+    margin-right: 18px;
+  }
+
+  .process-steps {
+    grid-template-columns: 1fr;
   }
 
   .composer-row {

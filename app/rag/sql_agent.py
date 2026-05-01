@@ -137,8 +137,58 @@ Rules:
             answer = "基于游客行为数据分析，" + answer
         return answer
 
+    def _format_ranked_rows(
+        self,
+        rows: List[Dict[str, Any]],
+        name_key: str,
+        value_key: str,
+        value_label: str,
+        limit: int = 3,
+    ) -> Optional[str]:
+        if not rows or "error" in rows[0]:
+            return None
+        parts = []
+        for index, row in enumerate(rows[:limit], start=1):
+            parts.append(f"{index}. {row[name_key]}（{value_label}{row[value_key]}）")
+        return "基于游客行为数据分析，" + "；".join(parts) + "。"
+
+    def _format_single_value(self, rows: List[Dict[str, Any]], key: str, label: str, unit: str = "") -> Optional[str]:
+        if not rows or "error" in rows[0]:
+            return None
+        return f"基于游客行为数据分析，{label}{rows[0][key]}{unit}。"
+
+    def _format_month_rows(self, rows: List[Dict[str, Any]], value_key: str, value_label: str) -> Optional[str]:
+        if not rows or "error" in rows[0]:
+            return None
+        parts = [f"{row['month']}：{row[value_key]}" for row in rows]
+        return f"基于游客行为数据分析，{value_label}按月变化为：" + "；".join(parts) + "。"
+
+    def _has_source_conflict(self, query: str) -> bool:
+        docx_terms = ("docx", "DOCX", "景区介绍文档", "介绍文档", "景区文档", "资料文档")
+        behavior_terms = ("行为数据", "游客消费数据", "游客行为 Excel", "游客行为数据")
+        behavior_metric_terms = ("游客", "男性", "女性", "消费", "满意度", "访问量", "平均", "统计", "偏好")
+        fact_metric_terms = ("开放时间", "官方开放", "门票价格", "票价", "铜壁板", "佛体", "玄奘", "历史", "文化内涵")
+        if any(term in query for term in docx_terms) and any(term in query for term in behavior_metric_terms):
+            return True
+        if any(term in query for term in behavior_terms) and any(term in query for term in fact_metric_terms):
+            return True
+        if "当作" in query and any(term in query for term in ("门票", "票价", "开放时间", "文化内涵")):
+            return True
+        return False
+
     def _rule_based_response(self, user_query: str) -> Optional[str]:
         query = user_query
+
+        if self._has_source_conflict(query):
+            return "抱歉，这个问题要求混用错误的数据源。游客行为数据只能用于统计分析，景区 DOCX 资料只能用于景点事实、历史文化和讲解内容，我不能把一种数据源当作另一种事实依据。"
+
+        if "平均同行人数" in query or "同行人数" in query or "平均团体人数" in query:
+            rows = self.execute_sql("select round(avg(cast(group_size as real)), 2) as avg_group_size from tourist_behavior")
+            return self._format_single_value(rows, "avg_group_size", "样本游客平均同行人数约为", "人")
+
+        if "一共有多少条" in query or "多少条记录" in query or "总记录" in query:
+            rows = self.execute_sql("select count(*) as record_count from tourist_behavior")
+            return self._format_single_value(rows, "record_count", "当前游客行为数据共有", "条记录")
 
         if "女性" in query and ("喜欢" in query or "偏好" in query) and ("类型" in query or "景点" in query):
             rows = self.execute_sql(
@@ -160,34 +210,161 @@ Rules:
                 summary = "，".join(f"{row['attraction_type']}（{row['visits']}次）" for row in rows)
                 return f"基于游客行为数据分析，男性游客最常选择的景点类型主要是：{summary}。"
 
-        if ("平均消费" in query or "人均消费" in query or "总消费" in query or "人均花费" in query or "花费" in query) and "餐" not in query:
+        if "女性游客平均总消费" in query:
+            rows = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior where gender='女'")
+            return self._format_single_value(rows, "avg_total_cost", "女性游客平均总消费约为", "元")
+
+        if "男性游客平均总消费" in query:
+            rows = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior where gender='男'")
+            return self._format_single_value(rows, "avg_total_cost", "男性游客平均总消费约为", "元")
+
+        if "女性游客平均满意度" in query:
+            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where gender='女'")
+            return self._format_single_value(rows, "avg_satisfaction", "女性游客平均满意度约为", "分")
+
+        if "男性游客平均满意度" in query:
+            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where gender='男'")
+            return self._format_single_value(rows, "avg_satisfaction", "男性游客平均满意度约为", "分")
+
+        if "女性游客平均停留" in query:
+            rows = self.execute_sql("select round(avg(cast(stay_duration as real)), 2) as avg_stay from tourist_behavior where gender='女'")
+            return self._format_single_value(rows, "avg_stay", "女性游客平均停留时长约为", "小时")
+
+        if "男性游客平均停留" in query:
+            rows = self.execute_sql("select round(avg(cast(stay_duration as real)), 2) as avg_stay from tourist_behavior where gender='男'")
+            return self._format_single_value(rows, "avg_stay", "男性游客平均停留时长约为", "小时")
+
+        if "女性游客访问量最高" in query:
+            rows = self.execute_sql(
+                "select attraction_name, count(*) as visits from tourist_behavior where gender='女' "
+                "group by attraction_name order by visits desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_name", "visits", "访问量")
+
+        if "男性游客访问量最高" in query:
+            rows = self.execute_sql(
+                "select attraction_name, count(*) as visits from tourist_behavior where gender='男' "
+                "group by attraction_name order by visits desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_name", "visits", "访问量")
+
+        if (
+            ("平均消费" in query or "人均消费" in query or "总消费" in query or "人均花费" in query or "花费" in query)
+            and "餐" not in query
+            and not any(keyword in query for keyword in ("最高", "排名", "按月", "上半年", "下半年", "岁", "景点类型", "前3", "女性游客", "男性游客"))
+        ):
             rows = self.execute_sql("select round(avg(total_cost), 2) as avg_total_cost from tourist_behavior")
             if rows and "error" not in rows[0]:
                 return f"基于游客行为数据分析，样本游客的人均总消费约为{rows[0]['avg_total_cost']}元。"
 
-        if "餐" in query or "吃饭" in query or "food_cost" in query:
+        if (
+            ("餐" in query or "吃饭" in query or "food_cost" in query)
+            and "最高" not in query
+            and "景点类型" not in query
+        ):
             rows = self.execute_sql("select round(avg(food_cost), 2) as avg_food_cost from tourist_behavior")
             if rows and "error" not in rows[0]:
                 return f"基于游客行为数据分析，样本游客的人均餐饮消费约为{rows[0]['avg_food_cost']}元。"
 
-        if "停留" in query and "最长" in query:
+        if "停留" in query and "最长" in query and "景点类型" not in query:
+            limit = 3 if any(keyword in query for keyword in ("哪几个", "前3", "排名")) else 1
             rows = self.execute_sql(
                 "select attraction_name, round(avg(stay_duration), 2) as avg_stay "
-                "from tourist_behavior group by attraction_name order by avg_stay desc limit 1"
+                f"from tourist_behavior group by attraction_name order by avg_stay desc limit {limit}"
             )
-            if rows and "error" not in rows[0]:
-                row = rows[0]
-                return f"基于游客行为数据分析，平均停留时间最长的景点是{row['attraction_name']}，平均停留约{row['avg_stay']}小时。"
+            return self._format_ranked_rows(rows, "attraction_name", "avg_stay", "平均停留", limit=limit)
 
-        if "满意度" in query and "最高" in query:
+        if "满意度" in query and "最高" in query and "景点类型" not in query and "月份" not in query:
+            limit = 3 if any(keyword in query for keyword in ("哪几个", "前3", "排名")) else 1
             rows = self.execute_sql(
                 "select attraction_name, round(avg(satisfaction), 2) as avg_satisfaction "
                 "from tourist_behavior group by attraction_name having count(*) >= 30 "
-                "order by avg_satisfaction desc limit 1"
+                f"order by avg_satisfaction desc limit {limit}"
             )
-            if rows and "error" not in rows[0]:
-                row = rows[0]
-                return f"基于游客行为数据分析，平均满意度较高的景点是{row['attraction_name']}，平均满意度约{row['avg_satisfaction']}分。"
+            return self._format_ranked_rows(rows, "attraction_name", "avg_satisfaction", "平均满意度", limit=limit)
+
+        if "平均总消费最高" in query and "景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
+                "from tourist_behavior group by attraction_type order by avg_total_cost desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_total_cost", "平均总消费")
+
+        if "平均满意度最高" in query and "景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
+                "from tourist_behavior group by attraction_type order by avg_satisfaction desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_satisfaction", "平均满意度")
+
+        if "平均满意度最低" in query and "景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
+                "from tourist_behavior group by attraction_type order by avg_satisfaction asc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_satisfaction", "平均满意度")
+
+        if "平均停留时间最长" in query and "景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(stay_duration as real)), 2) as avg_stay "
+                "from tourist_behavior group by attraction_type order by avg_stay desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_stay", "平均停留")
+
+        if "停留时间最短" in query and "景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(stay_duration as real)), 2) as avg_stay "
+                "from tourist_behavior group by attraction_type order by avg_stay asc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_stay", "平均停留")
+
+        if "各景点类型的访问量" in query or "景点类型的访问量排名" in query:
+            rows = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior "
+                "group by attraction_type order by visits desc limit 8"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "visits", "访问量", limit=8)
+
+        if "各景点类型的人均总消费" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
+                "from tourist_behavior group by attraction_type order by avg_total_cost desc"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_total_cost", "人均总消费", limit=8)
+
+        if "各景点类型的平均满意度" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
+                "from tourist_behavior group by attraction_type order by avg_satisfaction desc"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_satisfaction", "平均满意度", limit=8)
+
+        if "各景点类型的平均停留" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(stay_duration as real)), 2) as avg_stay "
+                "from tourist_behavior group by attraction_type order by avg_stay desc"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_stay", "平均停留", limit=8)
+
+        if "古镇水乡" in query and ("访问记录" in query or "访问量" in query):
+            rows = self.execute_sql("select count(*) as visits from tourist_behavior where attraction_type='古镇水乡'")
+            return self._format_single_value(rows, "visits", "古镇水乡类景点访问记录为", "条")
+
+        if "主题乐园类" in query and "平均满意度" in query:
+            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where attraction_type='主题乐园'")
+            return self._format_single_value(rows, "avg_satisfaction", "主题乐园类景点平均满意度约为", "分")
+
+        if "历史文化类" in query and "平均满意度" in query:
+            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where attraction_type='历史文化'")
+            return self._format_single_value(rows, "avg_satisfaction", "历史文化类景点平均满意度约为", "分")
+
+        if "风景名胜与休闲度假类" in query and "平均停留" in query:
+            rows = self.execute_sql("select round(avg(cast(stay_duration as real)), 2) as avg_stay from tourist_behavior where attraction_type='风景名胜与休闲度假'")
+            return self._format_single_value(rows, "avg_stay", "风景名胜与休闲度假类景点平均停留时长约为", "小时")
+
+        if "现代地标类" in query and "平均购物消费" in query:
+            rows = self.execute_sql("select round(avg(cast(shopping_cost as real)), 2) as avg_shopping_cost from tourist_behavior where attraction_type='现代地标'")
+            return self._format_single_value(rows, "avg_shopping_cost", "现代地标类景点平均购物消费约为", "元")
 
         if "热门" in query and "类型" in query:
             rows = self.execute_sql(
@@ -210,6 +387,155 @@ Rules:
                     f"{total[0]['avg_total_cost']}元，当前出现频次最高的景点类型是"
                     f"{top_type[0]['attraction_type']}。这说明游客消费主要集中在高频热门类型景点。"
                 )
+
+        if "每个月" in query and ("记录量" in query or "访问量" in query):
+            rows = self.execute_sql(
+                "select substr(visit_date, 1, 7) as month, count(*) as visits "
+                "from tourist_behavior group by month order by month"
+            )
+            return self._format_month_rows(rows, "visits", "访问量")
+
+        if "平均满意度按月" in query:
+            rows = self.execute_sql(
+                "select substr(visit_date, 1, 7) as month, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
+                "from tourist_behavior group by month order by month"
+            )
+            return self._format_month_rows(rows, "avg_satisfaction", "平均满意度")
+
+        if "平均总消费按月" in query:
+            rows = self.execute_sql(
+                "select substr(visit_date, 1, 7) as month, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
+                "from tourist_behavior group by month order by month"
+            )
+            return self._format_month_rows(rows, "avg_total_cost", "平均总消费")
+
+        if "访问量最高" in query and "月份" in query:
+            rows = self.execute_sql(
+                "select substr(visit_date, 1, 7) as month, count(*) as visits "
+                "from tourist_behavior group by month order by visits desc limit 1"
+            )
+            return self._format_ranked_rows(rows, "month", "visits", "访问量", limit=1)
+
+        if "平均消费最高" in query and "月份" in query:
+            rows = self.execute_sql(
+                "select substr(visit_date, 1, 7) as month, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
+                "from tourist_behavior group by month order by avg_total_cost desc limit 1"
+            )
+            return self._format_ranked_rows(rows, "month", "avg_total_cost", "平均总消费", limit=1)
+
+        if "平均满意度最高" in query and "月份" in query:
+            rows = self.execute_sql(
+                "select substr(visit_date, 1, 7) as month, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
+                "from tourist_behavior group by month order by avg_satisfaction desc limit 1"
+            )
+            return self._format_ranked_rows(rows, "month", "avg_satisfaction", "平均满意度", limit=1)
+
+        if "平均停留时间最高" in query and "月份" in query:
+            rows = self.execute_sql(
+                "select substr(visit_date, 1, 7) as month, round(avg(cast(stay_duration as real)), 2) as avg_stay "
+                "from tourist_behavior group by month order by avg_stay desc limit 1"
+            )
+            return self._format_ranked_rows(rows, "month", "avg_stay", "平均停留", limit=1)
+
+        if "20到30岁" in query and "偏好" in query:
+            rows = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior where cast(age as real) between 20 and 30 "
+                "group by attraction_type order by visits desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "visits", "访问量")
+
+        if "31到45岁" in query and "偏好" in query:
+            rows = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior where cast(age as real) between 31 and 45 "
+                "group by attraction_type order by visits desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "visits", "访问量")
+
+        if "46岁以上" in query and "偏好" in query:
+            rows = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior where cast(age as real) >= 46 "
+                "group by attraction_type order by visits desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "visits", "访问量")
+
+        if "30岁以下游客平均消费" in query:
+            rows = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior where cast(age as real)<30")
+            return self._format_single_value(rows, "avg_total_cost", "30岁以下游客平均消费约为", "元")
+
+        if "50岁以上游客平均消费" in query:
+            rows = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior where cast(age as real)>50")
+            return self._format_single_value(rows, "avg_total_cost", "50岁以上游客平均消费约为", "元")
+
+        if "30岁以下游客平均满意度" in query:
+            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where cast(age as real)<30")
+            return self._format_single_value(rows, "avg_satisfaction", "30岁以下游客平均满意度约为", "分")
+
+        if "50岁以上游客平均满意度" in query:
+            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where cast(age as real)>50")
+            return self._format_single_value(rows, "avg_satisfaction", "50岁以上游客平均满意度约为", "分")
+
+        if "消费最高的前3个景点" in query:
+            rows = self.execute_sql(
+                "select attraction_name, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
+                "from tourist_behavior group by attraction_name having count(*) >= 30 order by avg_total_cost desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_name", "avg_total_cost", "平均总消费")
+
+        if "餐饮消费最高的景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(food_cost as real)), 2) as avg_food_cost "
+                "from tourist_behavior group by attraction_type order by avg_food_cost desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_food_cost", "平均餐饮消费")
+
+        if "购物消费最高的景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(shopping_cost as real)), 2) as avg_shopping_cost "
+                "from tourist_behavior group by attraction_type order by avg_shopping_cost desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_shopping_cost", "平均购物消费")
+
+        if "交通消费最高的景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(transport_cost as real)), 2) as avg_transport_cost "
+                "from tourist_behavior group by attraction_type order by avg_transport_cost desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_transport_cost", "平均交通消费")
+
+        if "娱乐消费最高的景点类型" in query:
+            rows = self.execute_sql(
+                "select attraction_type, round(avg(cast(entertainment_cost as real)), 2) as avg_entertainment_cost "
+                "from tourist_behavior group by attraction_type order by avg_entertainment_cost desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "avg_entertainment_cost", "平均娱乐消费")
+
+        if "低满意度记录最多" in query:
+            rows = self.execute_sql(
+                "select attraction_type, count(*) as low_satisfaction_count from tourist_behavior where cast(satisfaction as real)<3 "
+                "group by attraction_type order by low_satisfaction_count desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "low_satisfaction_count", "低满意度记录数")
+
+        if "高满意度记录最多" in query:
+            rows = self.execute_sql(
+                "select attraction_type, count(*) as high_satisfaction_count from tourist_behavior where cast(satisfaction as real)=5 "
+                "group by attraction_type order by high_satisfaction_count desc limit 3"
+            )
+            return self._format_ranked_rows(rows, "attraction_type", "high_satisfaction_count", "高满意度记录数")
+
+        if "上半年" in query and "平均总消费" in query:
+            rows = self.execute_sql(
+                "select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior "
+                "where visit_date >= '2025-01-01' and visit_date < '2025-07-01'"
+            )
+            return self._format_single_value(rows, "avg_total_cost", "2025年上半年样本游客平均总消费约为", "元")
+
+        if "下半年" in query and "平均总消费" in query:
+            rows = self.execute_sql(
+                "select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior "
+                "where visit_date >= '2025-07-01' and visit_date < '2026-01-01'"
+            )
+            return self._format_single_value(rows, "avg_total_cost", "2025年下半年样本游客平均总消费约为", "元")
 
         if "不同人群偏好" in query or "人群偏好差异" in query:
             female = self.execute_sql(

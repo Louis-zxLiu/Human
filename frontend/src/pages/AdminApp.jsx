@@ -238,6 +238,11 @@ export function AdminApp() {
   const questionItems = (data.hot_analytics_questions || []).map((item) => ({ label: item.question, value: item.count }));
   const attractionItems = (data.top_attraction_preferences || []).map((item) => ({ label: item.name, value: item.value }));
   const knowledgeDocuments = status.knowledge_documents || [];
+  const knowledgeDetails = status.knowledge_document_details || [];
+  const behaviorFiles = status.behavior_files || [];
+  const rebuildCommands = status.rebuild_commands || {};
+  const evalStatus = data.unified_eval || {};
+  const operationRecommendations = data.operation_recommendations || [];
 
   return (
     <div className="page-shell">
@@ -281,6 +286,12 @@ export function AdminApp() {
           <MetricCard title="当日互动量" value={data.daily_interactions} hint="今天新增的互动记录" accent="amber" />
           <MetricCard title="平均响应耗时" value={`${data.avg_cost_time}s`} hint="从提问到返回的整体耗时" accent="mint" />
           <MetricCard title="知识文档数" value={status.knowledge_doc_count || 0} hint="当前接入知识源数量" accent="coral" />
+          <MetricCard
+            title="统一评测"
+            value={evalStatus.available ? `${evalStatus.overall_score}` : "--"}
+            hint={evalStatus.available ? `${evalStatus.case_count} 题 / 失败 ${evalStatus.failure_count} 个` : "尚未生成评测报告"}
+            accent="indigo"
+          />
         </section>
 
         <section className="admin-grid admin-grid--charts">
@@ -329,8 +340,8 @@ export function AdminApp() {
           <article className="panel ops-card">
             <div className="panel-header panel-header--tight">
               <div>
-                <div className="eyebrow">运行状态</div>
-                <h2 className="panel-title">数据与知识库健康度</h2>
+                <div className="eyebrow">评测与健康度</div>
+                <h2 className="panel-title">提交前最关键的稳定性信号</h2>
               </div>
             </div>
 
@@ -344,12 +355,73 @@ export function AdminApp() {
               <StatusBadge state={status.behavior_db_ready ? "success" : "warning"}>
                 {status.behavior_db_ready ? "行为库就绪" : "行为库未就绪"}
               </StatusBadge>
+              <StatusBadge state={evalStatus.ok ? "success" : "warning"}>
+                {evalStatus.available ? `统一评测 ${evalStatus.overall_score}/100` : "评测待生成"}
+              </StatusBadge>
+            </div>
+
+            <div className="note-list">
+              <div className="note-card note-card--highlight">
+                <strong>统一评测报告</strong>
+                <span>{evalStatus.summary || "统一评测用于证明事实问答准确率、行为数据分析和边界拒答能力。"}</span>
+                <code>{evalStatus.command || rebuildCommands.unified_eval}</code>
+              </div>
+              <div className="note-card">
+                <strong>知识文档清单</strong>
+                <span>{knowledgeDocuments.length ? knowledgeDocuments.join("、") : "当前未检测到文档列表。"}</span>
+              </div>
+              <div className="note-card">
+                <strong>知识库最近构建</strong>
+                <span>{status.last_knowledge_build_time || "暂未检测到向量库构建时间。"}</span>
+                <code>{rebuildCommands.knowledge_base}</code>
+              </div>
+              <div className="note-card">
+                <strong>行为数据最近构建</strong>
+                <span>{status.last_behavior_build_time || "暂未检测到行为库构建时间。"}；原始数据文件 {status.behavior_file_count || 0} 个。</span>
+                <code>{rebuildCommands.behavior_data}</code>
+              </div>
+            </div>
+          </article>
+
+          <article className="panel ops-card">
+            <div className="panel-header panel-header--tight">
+              <div>
+                <div className="eyebrow">知识库管理</div>
+                <h2 className="panel-title">可上传、可维护、可验证的资料链路</h2>
+              </div>
+            </div>
+
+            <div className="doc-status-list">
+              {knowledgeDetails.length ? (
+                knowledgeDetails.map((doc) => (
+                  <div key={doc.name} className="doc-status-card">
+                    <div>
+                      <strong>{doc.name}</strong>
+                      <span>{doc.extension.toUpperCase()} / {doc.size_kb} KB</span>
+                    </div>
+                    <em>{doc.updated_at}</em>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-state empty-state--compact">
+                  <strong>暂未检测到知识文档</strong>
+                </div>
+              )}
             </div>
 
             <div className="note-list">
               <div className="note-card">
-                <strong>知识文档清单</strong>
-                <span>{knowledgeDocuments.length ? knowledgeDocuments.join("、") : "当前未检测到文档列表。"}</span>
+                <strong>游客行为数据源</strong>
+                <span>
+                  {behaviorFiles.length
+                    ? behaviorFiles.map((file) => `${file.name}（${file.size_kb} KB）`).join("、")
+                    : "暂未检测到 Excel 或 CSV 行为数据。"}
+                </span>
+              </div>
+              <div className="note-card">
+                <strong>演示数据预热</strong>
+                <span>录屏或答辩前可写入一组高质量演示日志，避免后台图表为空。</span>
+                <code>{rebuildCommands.demo_seed}</code>
               </div>
             </div>
           </article>
@@ -435,6 +507,36 @@ export function AdminApp() {
         </section>
 
         <section className="admin-grid admin-grid--insights">
+          <article className="panel insight-card">
+            <div className="panel-header panel-header--tight">
+              <div>
+                <div className="eyebrow">运营建议</div>
+                <h2 className="panel-title">把数据变成景区动作</h2>
+              </div>
+            </div>
+
+            <div className="recommendation-list">
+              {operationRecommendations.length ? (
+                operationRecommendations.map((item) => (
+                  <div key={`${item.priority}-${item.title}`} className="operation-card">
+                    <div className="operation-card__header">
+                      <StatusBadge state={item.priority === "高" ? "danger" : item.priority === "中" ? "warning" : "info"}>
+                        {item.priority}优先级
+                      </StatusBadge>
+                      <strong>{item.title}</strong>
+                    </div>
+                    <p>{item.detail}</p>
+                    <span>{item.action}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-state empty-state--compact">
+                  <strong>暂无运营建议</strong>
+                </div>
+              )}
+            </div>
+          </article>
+
           <article className="panel insight-card">
             <div className="panel-header panel-header--tight">
               <div>

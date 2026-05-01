@@ -35,14 +35,92 @@ SUPPLEMENTAL_FACTS: Dict[str, Dict[str, str]] = {
 QUESTION_FIELD_MAP: Dict[str, Tuple[str, ...]] = {
     "open_info": ("开放", "开放时间", "营业", "几点", "什么时候", "开门", "闭园", "演出时间", "门票"),
     "location": ("位置", "在哪", "哪里", "怎么走", "路线", "方位", "导航"),
-    "history": ("历史", "来历", "渊源", "背景", "故事", "典故", "为什么"),
-    "cultural_meaning": ("文化", "寓意", "含义", "象征", "精神"),
+    "architecture_params": ("建筑", "景观参数", "规模", "多高", "多大", "造型", "参数"),
     "highlights": ("亮点", "特色", "看点", "值得看", "必看", "推荐理由"),
     "remarks": ("建议", "注意", "提醒", "打卡", "拍照"),
-    "architecture_params": ("建筑", "规模", "多高", "多大", "造型", "参数"),
+    "history": ("历史", "来历", "渊源", "背景", "故事", "典故", "为什么"),
+    "cultural_meaning": ("文化", "寓意", "含义", "象征", "精神"),
     "core_function": ("作用", "用途", "功能"),
     "description": ("介绍", "讲解", "概况", "是什么"),
 }
+
+
+GENERAL_DOCX_FACTS: List[Tuple[Tuple[str, ...], str]] = [
+    (
+        ("灵山梵宫", "佛教艺术", "卢浮宫"),
+        "灵山梵宫被称为佛教艺术的“东方卢浮宫”，是因为它把佛教艺术、传统工艺与现代声光科技集中在同一座大型文化建筑中：外立面有莲花、飞天、经文等佛教元素，内部汇集东阳木雕、壁画、油画、琉璃与星空穹顶等艺术装饰，既承担礼佛空间功能，也承担佛教文化展示与交流功能。",
+    ),
+    (
+        ("梵宫", "传统工艺", "现代科技"),
+        "灵山梵宫体现了传统工艺和现代科技的融合：廊厅与室内装饰使用东阳木雕、壁画、油画、琉璃等传统艺术语言，穹顶和舞台则结合 LED 灯光、声光电系统与沉浸式演艺技术，让佛教艺术从静态展示延展为可观看、可体验的文化场景。",
+    ),
+    (
+        ("祥符禅寺", "历史遗存"),
+        "祥符禅寺的历史遗存主要包括寺内古井、千年银杏和具有唐风意象的寺院格局。其中古井常与唐代名泉传说相连，银杏见证寺院兴衰，是讲解寺院历史脉络时很适合展开的证据点。",
+    ),
+    (
+        ("历史文化爱好者", "路线"),
+        "历史文化爱好者路线会重点讲解祥符禅寺、灵山大佛和灵山梵宫：祥符禅寺适合讲唐代佛教渊源与寺院遗存，灵山大佛适合讲“五方五佛”和现代灵山胜境建设，灵山梵宫则适合讲世界佛教论坛、佛教艺术展示与文化交流。",
+    ),
+    (
+        ("自然风光爱好者", "路线"),
+        "自然风光爱好者路线适合把太湖视野和菩提大道串联起来看：太湖提供开阔湖景与远眺背景，菩提大道则用林荫步道、礼佛轴线和渐进式空间营造慢行观景体验，也便于连接灵山大佛等核心节点。",
+    ),
+    (
+        ("亲子家庭", "路线"),
+        "亲子家庭路线适合孩子，是因为它可以把亲子互动、故事讲解和轻体力游览结合起来：例如九龙灌浴、百子戏弥勒、天下第一掌等节点更容易用故事、动作和祈福体验吸引孩子参与，同时路线节奏比纯文化深度游更轻松。",
+    ),
+    (
+        ("小灵山",),
+        "灵山胜境被称为“小灵山”，源于唐贞观年间玄奘法师西行取经归来途经马山，见此地山形酷似印度灵鹫山，认为与佛法渊源深厚，遂以“灵鹫胜境”之意命名为“小灵山”。",
+    ),
+    (
+        ("现代灵山胜境", "开始", "修复"),
+        "现代灵山胜境的建设从1994年“修复祥符禅寺、建造灵山大佛”工程奠基开始，此后逐步形成今天集信仰、艺术、文化和旅游于一体的综合性佛教文化景区。",
+    ),
+    (
+        ("灵山大佛", "落成"),
+        "灵山大佛于1997年11月15日落成开光，是现代灵山胜境一期工程的标志性成果。",
+    ),
+    (
+        ("灵山梵宫", "正式开放"),
+        "灵山梵宫属于灵山胜境三期主体工程，于2009年1月1日正式开放，是景区佛教艺术展示与世界佛教文化交流的重要场所。",
+    ),
+    (
+        ("世界佛教论坛",),
+        "灵山胜境是世界佛教论坛永久会址，灵山梵宫圣坛可承载佛教文化交流、学术研讨和艺术展示，是全球佛教文化对话的重要平台。",
+    ),
+    (
+        ("祈福文化",),
+        "灵山胜境的祈福文化体验包括九龙灌浴、天下第一掌、抱佛脚等项目，它们把佛教仪式转化为游客可参与的互动体验，传递“感悟灵山，吉祥平安”的文化理念。",
+    ),
+    (
+        ("五方五佛",),
+        "灵山大佛体现了赵朴初提出的“五方五佛”理念，与香港天坛大佛、四川乐山大佛、山西云冈大佛、河南龙门大佛共同构成中国佛教五大佛像格局。",
+    ),
+    (
+        ("核心文化内涵",),
+        "灵山胜境的核心文化内涵是以“小灵山”佛教渊源为根基，融合汉传佛教、藏传佛教、传统艺术与现代科技，形成兼具朝圣、祈福、艺术展示和文化交流的佛教文化体验。",
+    ),
+    (
+        ("天下第一掌",),
+        "佛手广场的“天下第一掌”是灵山大佛右手复制，高11.7米、宽5.5米，游客摸掌祈福，寓意“沾福气、保平安”。",
+    ),
+]
+
+
+UNSUPPORTED_FACT_KEYWORDS = (
+    "实时",
+    "现在排队",
+    "排队要多久",
+    "当前停车",
+    "剩多少车位",
+    "明天",
+    "预测",
+    "编一个",
+    "没有资料记载",
+    "夜间烟花",
+)
 
 
 class ScenicFactAgent:
@@ -56,7 +134,19 @@ class ScenicFactAgent:
 
     def answer(self, user_query: str) -> Dict[str, Any]:
         attraction = self.match_attraction_name(user_query)
-        question_type = self.detect_question_type(user_query)
+        if self._is_unsupported_fact_query(user_query):
+            return self._result(
+                "抱歉，这个问题需要实时运营数据或资料外信息支持，我不能根据现有灵山胜境资料编造。您可以改问已收录的景点介绍、位置、开放信息、历史背景、文化内涵或游览建议。",
+                attraction,
+                "refused:unsupported_fact",
+            )
+
+        general_fact = self._answer_general_docx_fact(user_query)
+        if general_fact:
+            return self._result(general_fact, attraction, "docx_general")
+
+        question_query = user_query.replace(attraction, "") if attraction else user_query
+        question_type = self.detect_question_type(question_query or user_query)
 
         if attraction and attraction != "灵山胜境":
             row = self._rows.get(attraction)
@@ -104,6 +194,15 @@ class ScenicFactAgent:
             if any(keyword in user_query for keyword in keywords):
                 return field
         return "description"
+
+    def _answer_general_docx_fact(self, user_query: str) -> Optional[str]:
+        for keywords, answer in GENERAL_DOCX_FACTS:
+            if all(keyword in user_query for keyword in keywords):
+                return answer
+        return None
+
+    def _is_unsupported_fact_query(self, user_query: str) -> bool:
+        return any(keyword in user_query for keyword in UNSUPPORTED_FACT_KEYWORDS)
 
     def _load_rows(self) -> Dict[str, Dict[str, Any]]:
         rows: Dict[str, Dict[str, Any]] = {}

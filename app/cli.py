@@ -194,6 +194,47 @@ def cmd_eval(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval_unified(args: argparse.Namespace) -> int:
+    ensure_runtime_env()
+    if not ensure_runtime_health(profile="full"):
+        return 1
+    from app.tasks.unified_eval import score_unified_eval
+
+    dataset_path = Path(args.dataset).resolve()
+    report_path = Path(args.report).resolve() if args.report else None
+    markdown_report_path = Path(args.markdown_report).resolve() if args.markdown_report else None
+    payload = score_unified_eval(
+        dataset_path=dataset_path,
+        report_path=report_path,
+        markdown_report_path=markdown_report_path,
+        suites=args.suite,
+        limit=args.limit,
+    )
+    print_json(
+        {
+            "ok": payload["ok"],
+            "case_count": payload["case_count"],
+            "overall_score": payload["overall_score"],
+            "by_gold_source": payload["by_gold_source"],
+            "report": str(report_path) if report_path else None,
+            "markdown_report": str(markdown_report_path) if markdown_report_path else None,
+            "failure_count": len(payload["failures"]),
+        }
+    )
+    if args.no_fail or not args.strict:
+        return 0
+    return 0 if payload["overall_score"] >= args.fail_under and payload["ok"] else 1
+
+
+def cmd_seed_demo_logs(args: argparse.Namespace) -> int:
+    ensure_runtime_env()
+    from app.tasks.seed_demo_logs import seed_demo_logs
+
+    payload = seed_demo_logs(reset=args.reset)
+    print_json(payload)
+    return 0 if payload["ok"] else 1
+
+
 def cmd_runtime_health(args: argparse.Namespace) -> int:
     payload = runtime_health_payload(profile=args.profile)
     if not args.quiet or not payload["ok"]:
@@ -295,6 +336,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     eval_parser = subparsers.add_parser("eval")
     eval_parser.set_defaults(func=cmd_eval)
+
+    eval_unified = subparsers.add_parser("eval-unified")
+    eval_unified.add_argument("--dataset", default=str(PROJECT_ROOT / "tests" / "unified_eval_cases.jsonl"))
+    eval_unified.add_argument("--report", default=str(PROJECT_ROOT / "reports" / "unified_eval_report.json"))
+    eval_unified.add_argument("--markdown-report", default=str(PROJECT_ROOT / "reports" / "unified_eval_report.md"))
+    eval_unified.add_argument("--suite", action="append", help="Filter by suite name. Can be passed multiple times.")
+    eval_unified.add_argument("--limit", type=int, default=None)
+    eval_unified.add_argument("--fail-under", type=float, default=90.0)
+    eval_unified.add_argument("--strict", action="store_true", help="Exit non-zero when thresholds are not met.")
+    eval_unified.add_argument("--no-fail", action="store_true", help="Always exit 0 after writing reports.")
+    eval_unified.set_defaults(func=cmd_eval_unified)
+
+    seed_demo_logs = subparsers.add_parser("seed-demo-logs")
+    seed_demo_logs.add_argument("--reset", action="store_true", help="Remove previous demo_visitor rows before seeding.")
+    seed_demo_logs.set_defaults(func=cmd_seed_demo_logs)
 
     runtime_health = subparsers.add_parser("runtime-health")
     runtime_health.add_argument("--profile", choices=["core", "full"], default="full")
