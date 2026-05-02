@@ -122,6 +122,25 @@ start_windows.bat
 admin / admin123
 ```
 
+## 决赛 AutoDL 4090 演示
+
+推荐把 AutoDL 实例作为完整云端演示机，统一使用实例内 `6006` 端口承载前端、FastAPI、RAG、ASR/TTS 和数字人视频生成。
+
+在 AutoDL 实例中执行：
+
+```bash
+bash scripts/autodl_prepare.sh
+bash scripts/autodl_start.sh
+```
+
+访问方式：
+
+- 主链路：打开 AutoDL「自定义服务」中 `6006` 对应的公网地址。
+- 备用链路：本地执行 `ssh -CNg -L 6006:127.0.0.1:6006 root@<AutoDL主机> -p <SSH端口>`，再访问 <http://127.0.0.1:6006>。
+- 上台前预检：服务启动后运行 `bash scripts/finals_preflight.sh`，它会检查 GPU、运行时、TTS 网络、`/health` 和一次短问答链路。
+
+游客端默认启用“实时流式”演示模式：文本/语音输入后会通过 WebSocket 分段显示回答、播放语音并刷新数字人帧；如果流式链路失败，会自动回退到稳定的 POST + MP4 生成模式。
+
 ## 统一 CLI
 
 统一入口：

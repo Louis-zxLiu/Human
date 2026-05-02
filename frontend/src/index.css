@@ -1082,6 +1082,13 @@ select.input-field option:disabled {
   background: #03070d;
 }
 
+.media-stage__stream-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #03070d;
+}
+
 .media-stage__placeholder {
   display: grid;
   gap: 10px;
@@ -1092,6 +1099,17 @@ select.input-field option:disabled {
 
 .media-actions {
   padding: 18px 24px 0;
+}
+
+.stream-notice {
+  margin: 12px 24px 0;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: rgba(85, 198, 255, 0.08);
+  border: 1px solid rgba(85, 198, 255, 0.16);
+  color: #b9ebff;
+  line-height: 1.55;
+  font-size: 13px;
 }
 
 .media-footnote {
@@ -1179,7 +1197,7 @@ select.input-field option:disabled {
   border: 1px solid rgba(85, 198, 255, 0.12);
   border-radius: 12px;
   padding: 10px 12px;
-  white-space: normal;
+  white-space: pre-wrap;
   line-height: 1.5;
 }
 

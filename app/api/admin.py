@@ -14,22 +14,34 @@ from pydantic import BaseModel
 
 from app.api.auth import get_current_admin
 from app.core.config import persist_env_overrides, resolve_path, settings
+from app.core.runtime import CONDA_ENV_PREFIX
 from app.rag.recommendation_agent import get_recommendation_display_label
 from app.services.asr_tts import get_tts_service
 from app.services.avatar_engine import get_avatar_engine, reset_avatar_engines
 
 router = APIRouter()
 KNOWN_QUERY_SCOPES = {"FACT", "RECOMMEND", "ANALYTICS"}
-UNIFIED_EVAL_COMMAND = (
-    'conda run -p "D:/Human/env" python -m app.cli eval-unified '
+
+
+def build_cli_command(args: str) -> str:
+    env_prefix = CONDA_ENV_PREFIX.as_posix()
+    return "\n".join(
+        [
+            f'Windows: conda run -p "{env_prefix}" python -m app.cli {args}',
+            f'Linux/AutoDL: conda run -p "$(pwd)/env" python -m app.cli {args}',
+        ]
+    )
+
+
+UNIFIED_EVAL_ARGS = (
+    "eval-unified "
     "--report reports/unified_eval_report.json "
     "--markdown-report reports/unified_eval_report.md "
     "--strict --fail-under 90"
 )
-GENERATE_UNIFIED_EVAL_COMMAND = (
-    'conda run -p "D:/Human/env" python -m app.cli generate-unified-eval '
-    "--target 1200 --output tests/unified_eval_cases.jsonl"
-)
+GENERATE_UNIFIED_EVAL_ARGS = "generate-unified-eval --target 1200 --output tests/unified_eval_cases.jsonl"
+UNIFIED_EVAL_COMMAND = build_cli_command(UNIFIED_EVAL_ARGS)
+GENERATE_UNIFIED_EVAL_COMMAND = build_cli_command(GENERATE_UNIFIED_EVAL_ARGS)
 
 AVATAR_RUNTIME_PROFILES = {
     "memory_saver": {
@@ -90,11 +102,11 @@ def build_data_status() -> Dict[str, Any]:
         "last_knowledge_build_time": get_path_mtime(chroma_dir),
         "last_behavior_build_time": get_path_mtime(behavior_db),
         "rebuild_commands": {
-            "knowledge_base": 'conda run -p "D:/Human/env" python -m app.cli prepare-kb',
-            "behavior_data": 'conda run -p "D:/Human/env" python -m app.cli prepare-data',
+            "knowledge_base": build_cli_command("prepare-kb"),
+            "behavior_data": build_cli_command("prepare-data"),
             "unified_eval": UNIFIED_EVAL_COMMAND,
             "generate_unified_eval": GENERATE_UNIFIED_EVAL_COMMAND,
-            "demo_seed": 'conda run -p "D:/Human/env" python -m app.cli seed-demo-logs --reset',
+            "demo_seed": build_cli_command("seed-demo-logs --reset"),
         },
     }
 

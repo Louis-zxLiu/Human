@@ -23,6 +23,16 @@ ATTRACTION_COLUMNS = [
 
 
 SUPPLEMENTAL_FACTS: Dict[str, Dict[str, str]] = {
+    "祥符禅寺": {
+        "location": "位于灵山胜境中轴核心、灵山大佛基座之下，四周绿树环绕，环境清幽，是景区内历史最悠久的人文景观。",
+        "architecture_params": "唐代古刹，占地约30亩，整体采用仿唐重檐歇山式建筑风格，布局完整，包含弥勒殿、大雄宝殿、钟楼、鼓楼；寺内还有六角井、八角井、白莲池、千年古银杏等历史遗迹，钟楼内悬挂重12.8吨的“祥符禅钟”。",
+        "core_function": "承担宗教活动开展、千年古刹瞻仰与佛教礼佛祈福功能，同时展示江南禅宗文化，兼具宗教体验、历史科普与人文观赏功能。",
+        "cultural_meaning": "祥符禅寺始建于唐贞观年间，由玄奘法师的弟子窥基大师开坛讲经，北宋年间正式更名为“祥符禅寺”；历经千年风雨洗礼，香火绵延不绝，是江南地区重要的千年禅宗祖庭，也是佛教文化传承与传播的重要场所。",
+        "description": "祥符禅寺布局严谨、错落有致，整体采用仿唐重檐歇山式建筑风格，红墙黛瓦、飞檐翘角。大雄宝殿内供奉释迦牟尼佛及迦叶、阿难两大弟子；钟楼内悬挂重12.8吨的“祥符禅钟”。寺内六角井、八角井、白莲池和千年古银杏共同构成寺院历史遗存。",
+        "highlights": "适合礼佛祈福、虔诚朝拜，聆听祥符禅钟的浑厚钟声，观赏唐代古建与千年历史遗迹；秋季还可欣赏千年银杏的金黄景致，感受古刹静谧庄严。",
+        "open_info": "全天开放，宗教活动正常开展；钟楼定时有钟声表演，具体时间以景区广播通知为准，寺内禁止大声喧哗，需保持庄严肃穆。",
+        "remarks": "建议保持安静、尊重宗教礼仪，可把祥符禅寺安排在灵山大佛前后讲解，形成古刹渊源、礼佛祈福与现代景区建设的连续叙事。",
+    },
     "灵山大佛": {
         "core_function": "灵山胜境的核心礼佛地标，也是游客俯瞰景区中轴线和太湖景观的重要节点。",
         "cultural_meaning": "作为神州五方五佛之一的东方佛，灵山大佛象征佛教文化在江南地区的弘扬，也承载着祈福平安、感悟慈悲智慧的文化内涵。",
@@ -58,7 +68,7 @@ GENERAL_DOCX_FACTS: List[Tuple[Tuple[str, ...], str]] = [
     ),
     (
         ("祥符禅寺", "历史遗存"),
-        "祥符禅寺的历史遗存主要包括寺内古井、千年银杏和具有唐风意象的寺院格局。其中古井常与唐代名泉传说相连，银杏见证寺院兴衰，是讲解寺院历史脉络时很适合展开的证据点。",
+        "祥符禅寺的历史遗存主要包括千年银杏、六角井、八角井等，它们共同见证了寺院的历史脉络和古刹兴衰，是讲解祥符禅寺时很适合展开的证据点。",
     ),
     (
         ("历史文化爱好者", "路线"),
@@ -226,7 +236,8 @@ class ScenicFactAgent:
                 return f"根据 DOCX 历史文化资料，{entity}在{topic}方面的关键信息是：{facts}{suffix}"
 
             must_include = [str(term) for term in item.get("must_include") or [] if str(term)]
-            if entity and entity in user_query and any(term in user_query for term in must_include):
+            trigger_terms = [term for term in must_include if term != entity and term in user_query]
+            if entity and entity in user_query and trigger_terms:
                 facts = str(item.get("facts") or "").strip()
                 keywords = "、".join(must_include)
                 return f"根据 DOCX 历史文化资料，{entity}的相关事实是：{facts}关键依据包括：{keywords}。"

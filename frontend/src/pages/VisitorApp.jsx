@@ -13,7 +13,7 @@ import {
   saveChatSession,
   summarizeMessages,
 } from "../lib/chatArchives";
-import { logout, sendAudioMessage, sendTextMessage } from "../lib/api";
+import { getInteractStreamUrl, logout, sendAudioMessage, sendTextMessage } from "../lib/api";
 
 const AUTH_KEYS = ["auth_token", "username", "user_role"];
 const GREETING_MESSAGE = {
@@ -59,6 +59,7 @@ const PROCESS_STAGES = [
   { key: "generating", title: "生成讲解回答", detail: "组织事实证据、路线节点和游客可听懂的讲解。" },
   { key: "avatar", title: "数字人出镜", detail: "合成语音和口型视频，形成可演示的多模态反馈。" },
 ];
+const STREAMING_FRAME_INTERVAL_MS = 40;
 
 function buildCurrentSessionDisplay(currentSession, messages) {
   const summary = summarizeMessages(messages);
@@ -77,6 +78,27 @@ function buildCurrentSessionDisplay(currentSession, messages) {
   };
 }
 
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = String(reader.result || "");
+      resolve(result.includes(",") ? result.split(",")[1] : result);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function base64ToBlobUrl(base64, mimeType) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+}
+
 export function VisitorApp() {
   const username = localStorage.getItem("username") || "游客";
   const role = localStorage.getItem("user_role") || "user";
@@ -84,10 +106,13 @@ export function VisitorApp() {
   const [messages, setMessages] = useState([GREETING_MESSAGE]);
   const [inputText, setInputText] = useState("");
   const [isGpsWeak, setIsGpsWeak] = useState(localStorage.getItem("gps_weak_mode") === "true");
+  const [isRealtimeMode, setIsRealtimeMode] = useState(localStorage.getItem("realtime_demo_mode") !== "false");
   const [loading, setLoading] = useState(false);
   const [processStage, setProcessStage] = useState("idle");
   const [activeQuestion, setActiveQuestion] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
+  const [streamFrameUrl, setStreamFrameUrl] = useState("");
+  const [streamNotice, setStreamNotice] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [archives, setArchives] = useState([]);
   const [selectedArchiveId, setSelectedArchiveId] = useState(null);
@@ -104,13 +129,25 @@ export function VisitorApp() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const stageTimersRef = useRef([]);
+  const streamFrameQueueRef = useRef([]);
+  const streamFrameTimerRef = useRef(null);
+  const streamAudioUrlsRef = useRef([]);
+  const messagesRef = useRef(messages);
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
   }, [currentSession]);
 
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   useEffect(() => () => {
     stageTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    if (streamFrameTimerRef.current) {
+      window.clearInterval(streamFrameTimerRef.current);
+    }
+    streamAudioUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
   const selectedArchive = archives.find((item) => item.id === selectedArchiveId) || null;
@@ -177,14 +214,64 @@ export function VisitorApp() {
     setDraftTitle("");
     setInputText("");
     setVideoUrl("");
+    resetStreamingMedia();
     setLoading(false);
     setProcessStage("idle");
     setActiveQuestion("");
   }
 
   function updateVideoFromResult(result) {
+    resetStreamingMedia();
     if (result.video_stream_url) {
       setVideoUrl(`${result.video_stream_url}?t=${Date.now()}`);
+    }
+  }
+
+  function resetStreamingMedia() {
+    if (streamFrameTimerRef.current) {
+      window.clearInterval(streamFrameTimerRef.current);
+      streamFrameTimerRef.current = null;
+    }
+    streamFrameQueueRef.current = [];
+    streamAudioUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    streamAudioUrlsRef.current = [];
+    setStreamFrameUrl("");
+    setStreamNotice("");
+  }
+
+  function pumpStreamingFrames() {
+    if (streamFrameTimerRef.current) return;
+    streamFrameTimerRef.current = window.setInterval(() => {
+      const nextFrame = streamFrameQueueRef.current.shift();
+      if (!nextFrame) {
+        window.clearInterval(streamFrameTimerRef.current);
+        streamFrameTimerRef.current = null;
+        return;
+      }
+      setStreamFrameUrl(nextFrame);
+    }, STREAMING_FRAME_INTERVAL_MS);
+  }
+
+  function enqueueStreamingFrames(frames = []) {
+    if (!frames.length) return;
+    setVideoUrl("");
+    streamFrameQueueRef.current.push(...frames.map((frame) => `data:image/jpeg;base64,${frame}`));
+    pumpStreamingFrames();
+  }
+
+  async function playStreamingAudio(audioBase64) {
+    if (!audioBase64) return;
+    const audioUrl = base64ToBlobUrl(audioBase64, "audio/mpeg");
+    streamAudioUrlsRef.current.push(audioUrl);
+    const audio = new Audio(audioUrl);
+    audio.onended = () => {
+      URL.revokeObjectURL(audioUrl);
+      streamAudioUrlsRef.current = streamAudioUrlsRef.current.filter((url) => url !== audioUrl);
+    };
+    try {
+      await audio.play();
+    } catch {
+      setStreamNotice("浏览器拦截了自动播放，点击数字人舞台上的音频控件可继续听取。");
     }
   }
 
@@ -225,6 +312,177 @@ export function VisitorApp() {
     window.location.href = "/login";
   }
 
+  function replaceMessagesAndPersist(nextMessages) {
+    setMessages(nextMessages);
+    persistMessages(nextMessages);
+  }
+
+  function updateAssistantMessage(index, patch, shouldPersist = false) {
+    setMessages((previous) => {
+      const updatedMessages = previous.map((message, messageIndex) => (
+        messageIndex === index ? { ...message, ...patch } : message
+      ));
+      if (shouldPersist) {
+        persistMessages(updatedMessages);
+      }
+      return updatedMessages;
+    });
+  }
+
+  async function runStableTextMessage(normalizedText) {
+    const formData = new FormData();
+    formData.append("text", normalizedText);
+    formData.append("gps_status", isGpsWeak ? "weak" : "normal");
+    formData.append("client_session_id", currentSessionRef.current.id);
+    const result = await sendTextMessage(formData);
+
+    setMessages((previous) => {
+      const updatedMessages = [
+        ...previous,
+        { role: "assistant", content: result.assistant_text, meta: result.rag_metadata || null },
+      ];
+      persistMessages(updatedMessages);
+      return updatedMessages;
+    });
+    updateVideoFromResult(result);
+    completeProcessing(result);
+  }
+
+  async function runRealtimeInteraction(payload, options = {}) {
+    const { baseMessages, appendRecognizedUser = false } = options;
+    resetStreamingMedia();
+    setStreamNotice("实时流式链路连接中...");
+
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(getInteractStreamUrl());
+      let assistantIndex = appendRecognizedUser ? null : baseMessages.length;
+      let workingMessages = baseMessages;
+      let assistantText = "";
+      let opened = false;
+      let receivedAny = false;
+      let streamedMedia = false;
+      let settled = false;
+
+      const closeSocket = () => {
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        socket.onclose = null;
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+      };
+
+      const ensureAssistantPlaceholder = () => {
+        if (assistantIndex !== null) return;
+        assistantIndex = workingMessages.length;
+        workingMessages = [...workingMessages, { role: "assistant", content: "", meta: null }];
+        setMessages(workingMessages);
+      };
+
+      const failBeforeStreaming = (message) => {
+        if (settled) return;
+        settled = true;
+        closeSocket();
+        setStreamNotice("实时流式链路暂不可用，正在切换到稳定 MP4 模式。");
+        reject(new Error(message));
+      };
+
+      socket.onopen = () => {
+        opened = true;
+        if (!appendRecognizedUser) {
+          workingMessages = [...baseMessages, { role: "assistant", content: "", meta: null }];
+          replaceMessagesAndPersist(workingMessages);
+        }
+        socket.send(JSON.stringify({
+          ...payload,
+          gps_status: isGpsWeak ? "weak" : "normal",
+          client_session_id: currentSessionRef.current.id,
+        }));
+        setStreamNotice("实时链路已连接，正在分段生成文本、语音和数字人画面。");
+      };
+
+      socket.onmessage = async (event) => {
+        receivedAny = true;
+        let message;
+        try {
+          message = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        if (message.type === "error") {
+          settled = true;
+          closeSocket();
+          reject(new Error(message.message || "实时链路返回错误"));
+          return;
+        }
+
+        if (message.type === "text_user" && appendRecognizedUser) {
+          const recognizedText = message.text || "语音提问";
+          setActiveQuestion(recognizedText);
+          workingMessages = [...baseMessages, { role: "user", content: recognizedText, meta: null }];
+          assistantIndex = workingMessages.length;
+          workingMessages = [...workingMessages, { role: "assistant", content: "", meta: null }];
+          replaceMessagesAndPersist(workingMessages);
+          return;
+        }
+
+        if (message.type === "text_token") {
+          ensureAssistantPlaceholder();
+          assistantText += message.text || "";
+          updateAssistantMessage(assistantIndex, { content: assistantText });
+          setProcessStage("generating");
+          return;
+        }
+
+        if (message.type === "chunk") {
+          setProcessStage("avatar");
+          streamedMedia = true;
+          enqueueStreamingFrames(message.frames || []);
+          await playStreamingAudio(message.audio);
+          return;
+        }
+
+        if (message.type === "done") {
+          ensureAssistantPlaceholder();
+          const finalText = message.full_text || assistantText;
+          updateAssistantMessage(
+            assistantIndex,
+            { content: finalText, meta: message.rag_metadata || null },
+            true,
+          );
+          setStreamNotice("实时流式回答完成。");
+          completeProcessing({ video_stream_url: streamedMedia ? "__stream__" : "" });
+          settled = true;
+          closeSocket();
+          resolve(message);
+        }
+      };
+
+      socket.onerror = () => {
+        if (settled) return;
+        if (!opened || !receivedAny) {
+          failBeforeStreaming("实时 WebSocket 连接失败");
+          return;
+        }
+        settled = true;
+        closeSocket();
+        reject(new Error("实时 WebSocket 中断"));
+      };
+
+      socket.onclose = () => {
+        if (settled) return;
+        if (!opened || !receivedAny) {
+          failBeforeStreaming("实时 WebSocket 未能建立连接");
+          return;
+        }
+        settled = true;
+        reject(new Error("实时 WebSocket 提前关闭"));
+      };
+    });
+  }
+
   async function submitTextMessage(text) {
     if (!text.trim() || loading || isArchiveView) return;
 
@@ -233,27 +491,20 @@ export function VisitorApp() {
     scheduleProcessingStages(normalizedText);
 
     const nextMessages = [...messages, { role: "user", content: normalizedText, meta: null }];
-    setMessages(nextMessages);
-    persistMessages(nextMessages);
+    replaceMessagesAndPersist(nextMessages);
     setLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.append("text", normalizedText);
-      formData.append("gps_status", isGpsWeak ? "weak" : "normal");
-      formData.append("client_session_id", currentSessionRef.current.id);
-      const result = await sendTextMessage(formData);
-
-      setMessages((previous) => {
-        const updatedMessages = [
-          ...previous,
-          { role: "assistant", content: result.assistant_text, meta: result.rag_metadata || null },
-        ];
-        persistMessages(updatedMessages);
-        return updatedMessages;
-      });
-      updateVideoFromResult(result);
-      completeProcessing(result);
+      if (isRealtimeMode) {
+        try {
+          await runRealtimeInteraction({ text: normalizedText }, { baseMessages: nextMessages });
+        } catch {
+          replaceMessagesAndPersist(nextMessages);
+          await runStableTextMessage(normalizedText);
+        }
+      } else {
+        await runStableTextMessage(normalizedText);
+      }
     } catch (err) {
       clearStageTimers();
       setProcessStage("done");
@@ -291,24 +542,53 @@ export function VisitorApp() {
       scheduleProcessingStages("正在识别语音输入...", "retrieving");
 
       try {
-        const formData = new FormData();
-        formData.append("audio", blob, "voice.webm");
-        formData.append("gps_status", isGpsWeak ? "weak" : "normal");
-        formData.append("client_session_id", currentSessionRef.current.id);
-        const result = await sendAudioMessage(formData);
-        setActiveQuestion(result.user_text || "语音提问");
+        if (isRealtimeMode) {
+          try {
+            const audioBase64 = await blobToBase64(blob);
+            await runRealtimeInteraction(
+              { audio: audioBase64 },
+              { baseMessages: messagesRef.current, appendRecognizedUser: true },
+            );
+          } catch {
+            const formData = new FormData();
+            formData.append("audio", blob, "voice.webm");
+            formData.append("gps_status", isGpsWeak ? "weak" : "normal");
+            formData.append("client_session_id", currentSessionRef.current.id);
+            const result = await sendAudioMessage(formData);
+            setActiveQuestion(result.user_text || "语音提问");
 
-        setMessages((previous) => {
-          const updatedMessages = [
-            ...previous,
-            { role: "user", content: result.user_text, meta: null },
-            { role: "assistant", content: result.assistant_text, meta: result.rag_metadata || null },
-          ];
-          persistMessages(updatedMessages);
-          return updatedMessages;
-        });
-        updateVideoFromResult(result);
-        completeProcessing(result);
+            setMessages((previous) => {
+              const updatedMessages = [
+                ...previous,
+                { role: "user", content: result.user_text, meta: null },
+                { role: "assistant", content: result.assistant_text, meta: result.rag_metadata || null },
+              ];
+              persistMessages(updatedMessages);
+              return updatedMessages;
+            });
+            updateVideoFromResult(result);
+            completeProcessing(result);
+          }
+        } else {
+          const formData = new FormData();
+          formData.append("audio", blob, "voice.webm");
+          formData.append("gps_status", isGpsWeak ? "weak" : "normal");
+          formData.append("client_session_id", currentSessionRef.current.id);
+          const result = await sendAudioMessage(formData);
+          setActiveQuestion(result.user_text || "语音提问");
+
+          setMessages((previous) => {
+            const updatedMessages = [
+              ...previous,
+              { role: "user", content: result.user_text, meta: null },
+              { role: "assistant", content: result.assistant_text, meta: result.rag_metadata || null },
+            ];
+            persistMessages(updatedMessages);
+            return updatedMessages;
+          });
+          updateVideoFromResult(result);
+          completeProcessing(result);
+        }
       } catch (err) {
         clearStageTimers();
         setProcessStage("done");
@@ -359,6 +639,14 @@ export function VisitorApp() {
     const nextValue = !isGpsWeak;
     setIsGpsWeak(nextValue);
     localStorage.setItem("gps_weak_mode", String(nextValue));
+  }
+
+  function toggleRealtimeMode() {
+    if (loading || isArchiveView) return;
+    const nextValue = !isRealtimeMode;
+    setIsRealtimeMode(nextValue);
+    localStorage.setItem("realtime_demo_mode", String(nextValue));
+    setStreamNotice(nextValue ? "已切换到实时流式演示模式。" : "已切换到稳定 MP4 回退模式。");
   }
 
   function beginRenameSession(session, fallbackTitle) {
@@ -680,6 +968,9 @@ export function VisitorApp() {
               <StatusBadge state={isGpsWeak ? "warning" : "success"}>
                 {isGpsWeak ? "弱 GPS 模式" : "正常定位"}
               </StatusBadge>
+              <StatusBadge state={isRealtimeMode ? "success" : "neutral"}>
+                {isRealtimeMode ? "实时流式" : "稳定 MP4"}
+              </StatusBadge>
             </div>
 
             <div className="process-panel">
@@ -710,7 +1001,9 @@ export function VisitorApp() {
             </div>
 
             <div className="media-stage">
-              {videoUrl ? (
+              {streamFrameUrl ? (
+                <img src={streamFrameUrl} alt="实时数字人画面" className="media-stage__stream-frame" />
+              ) : videoUrl ? (
                 <video key={videoUrl} src={videoUrl} controls autoPlay className="media-stage__video" />
               ) : (
                 <div className="media-stage__placeholder">
@@ -719,6 +1012,8 @@ export function VisitorApp() {
                 </div>
               )}
             </div>
+
+            {streamNotice ? <div className="stream-notice">{streamNotice}</div> : null}
 
             <div className="media-actions">
               <button
@@ -738,6 +1033,15 @@ export function VisitorApp() {
                 disabled={loading || isArchiveView}
               >
                 {isRecording ? "松开发送语音" : "按住进行语音提问"}
+              </button>
+
+              <button
+                type="button"
+                className="button-secondary button-block"
+                onClick={toggleRealtimeMode}
+                disabled={loading || isArchiveView}
+              >
+                {isRealtimeMode ? "切换稳定 MP4 模式" : "切换实时流式模式"}
               </button>
 
               <button

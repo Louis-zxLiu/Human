@@ -59,6 +59,11 @@ export function sendAudioMessage(formData) {
   });
 }
 
+export function getInteractStreamUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/api/v1/interact/stream`;
+}
+
 export function fetchDashboard() {
   return request("/api/v1/admin/dashboard", { headers: authHeaders() });
 }
