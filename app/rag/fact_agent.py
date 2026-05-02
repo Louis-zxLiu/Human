@@ -1,4 +1,6 @@
+import json
 import sqlite3
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import resolve_path
@@ -36,12 +38,12 @@ QUESTION_FIELD_MAP: Dict[str, Tuple[str, ...]] = {
     "open_info": ("开放", "开放时间", "营业", "几点", "什么时候", "开门", "闭园", "演出时间", "门票"),
     "location": ("位置", "在哪", "哪里", "怎么走", "路线", "方位", "导航"),
     "architecture_params": ("建筑", "景观参数", "规模", "多高", "多大", "造型", "参数"),
-    "highlights": ("亮点", "特色", "看点", "值得看", "必看", "推荐理由"),
+    "highlights": ("亮点", "特色", "看点", "值得看", "必看", "推荐理由", "体验", "重点体验", "游玩"),
     "remarks": ("建议", "注意", "提醒", "打卡", "拍照"),
     "history": ("历史", "来历", "渊源", "背景", "故事", "典故", "为什么"),
     "cultural_meaning": ("文化", "寓意", "含义", "象征", "精神"),
     "core_function": ("作用", "用途", "功能"),
-    "description": ("介绍", "讲解", "概况", "是什么"),
+    "description": ("介绍", "讲解", "概况", "概述", "是什么"),
 }
 
 
@@ -131,9 +133,17 @@ class ScenicFactAgent:
         self._rows = self._load_rows()
         self._rag_agent: Optional[ChromaStaticAgent] = None
         self._attraction_aliases = self._build_aliases()
+        self._docx_evidence = self._load_docx_evidence()
 
     def answer(self, user_query: str) -> Dict[str, Any]:
         attraction = self.match_attraction_name(user_query)
+        if self._has_source_conflict(user_query):
+            return self._result(
+                "抱歉，这个问题混用了不合适的数据源：游客行为数据只能用于统计分析，DOCX 景区资料只能用于景点事实、历史文化和讲解内容。我不能把一种数据源当作另一种事实依据来回答。",
+                attraction,
+                "refused:source_conflict",
+            )
+
         if self._is_unsupported_fact_query(user_query):
             return self._result(
                 "抱歉，这个问题需要实时运营数据或资料外信息支持，我不能根据现有灵山胜境资料编造。您可以改问已收录的景点介绍、位置、开放信息、历史背景、文化内涵或游览建议。",
@@ -199,10 +209,78 @@ class ScenicFactAgent:
         for keywords, answer in GENERAL_DOCX_FACTS:
             if all(keyword in user_query for keyword in keywords):
                 return answer
+        evidence_answer = self._answer_docx_evidence(user_query)
+        if evidence_answer:
+            return evidence_answer
         return None
+
+    def _answer_docx_evidence(self, user_query: str) -> Optional[str]:
+        for item in self._docx_evidence:
+            entity = str(item.get("entity") or "")
+            topic = str(item.get("topic") or "")
+            if entity and topic and entity in user_query and topic in user_query:
+                facts = str(item.get("facts") or "").strip()
+                must_include = [str(term) for term in item.get("must_include") or [] if str(term)]
+                keywords = "、".join(must_include)
+                suffix = f"关键依据包括：{keywords}。" if keywords else ""
+                return f"根据 DOCX 历史文化资料，{entity}在{topic}方面的关键信息是：{facts}{suffix}"
+
+            must_include = [str(term) for term in item.get("must_include") or [] if str(term)]
+            if entity and entity in user_query and any(term in user_query for term in must_include):
+                facts = str(item.get("facts") or "").strip()
+                keywords = "、".join(must_include)
+                return f"根据 DOCX 历史文化资料，{entity}的相关事实是：{facts}关键依据包括：{keywords}。"
+        return None
+
+    def _load_docx_evidence(self) -> List[Dict[str, Any]]:
+        evidence_path = Path(resolve_path("tests/docx_rag_evidence.json"))
+        if not evidence_path.exists():
+            return []
+        try:
+            payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        return payload if isinstance(payload, list) else []
 
     def _is_unsupported_fact_query(self, user_query: str) -> bool:
         return any(keyword in user_query for keyword in UNSUPPORTED_FACT_KEYWORDS)
+
+    def _has_source_conflict(self, user_query: str) -> bool:
+        query = str(user_query or "")
+        behavior_terms = ("游客行为数据", "行为数据", "游客行为 Excel", "游客行为Excel", "Excel")
+        docx_terms = ("DOCX", "docx", "历史文化资料", "景区资料", "介绍文档")
+        fact_terms = (
+            "官方开放时间",
+            "开放时间",
+            "位置",
+            "多高",
+            "高度",
+            "文化内涵",
+            "历史",
+            "事实",
+            "门票",
+            "票价",
+        )
+        analytics_terms = (
+            "统计",
+            "平均",
+            "消费",
+            "满意度",
+            "停留",
+            "访问量",
+            "客流",
+            "月份",
+            "男性",
+            "女性",
+            "游客",
+        )
+        if any(term in query for term in behavior_terms) and any(term in query for term in fact_terms):
+            return True
+        if any(term in query for term in docx_terms) and any(term in query for term in analytics_terms):
+            return True
+        if "当作" in query and any(term in query for term in ("门票", "票价", "开放时间", "文化内涵")):
+            return True
+        return False
 
     def _load_rows(self) -> Dict[str, Dict[str, Any]]:
         rows: Dict[str, Dict[str, Any]] = {}

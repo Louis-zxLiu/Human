@@ -242,6 +242,10 @@ export function AdminApp() {
   const behaviorFiles = status.behavior_files || [];
   const rebuildCommands = status.rebuild_commands || {};
   const evalStatus = data.unified_eval || {};
+  const evalFailureCount = evalStatus.failure_count ?? 0;
+  const evalMetricHint = evalStatus.available
+    ? `${evalStatus.case_count || 0} 题 / 待优化 ${evalFailureCount} 题`
+    : "尚未生成评测报告";
   const operationRecommendations = data.operation_recommendations || [];
 
   return (
@@ -289,7 +293,7 @@ export function AdminApp() {
           <MetricCard
             title="统一评测"
             value={evalStatus.available ? `${evalStatus.overall_score}` : "--"}
-            hint={evalStatus.available ? `${evalStatus.case_count} 题 / 失败 ${evalStatus.failure_count} 个` : "尚未生成评测报告"}
+            hint={evalMetricHint}
             accent="indigo"
           />
         </section>
@@ -365,6 +369,11 @@ export function AdminApp() {
                 <strong>统一评测报告</strong>
                 <span>{evalStatus.summary || "统一评测用于证明事实问答准确率、行为数据分析和边界拒答能力。"}</span>
                 <code>{evalStatus.command || rebuildCommands.unified_eval}</code>
+              </div>
+              <div className="note-card">
+                <strong>评测集生成</strong>
+                <span>固定种子生成 1200 题主评测集，包含 900 题 dev 与 300 题 holdout，便于提交前复现检查。</span>
+                <code>{evalStatus.generate_command || rebuildCommands.generate_unified_eval}</code>
               </div>
               <div className="note-card">
                 <strong>知识文档清单</strong>

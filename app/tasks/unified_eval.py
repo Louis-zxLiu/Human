@@ -134,6 +134,7 @@ def score_unified_eval(
     total_score = sum(item["score"] for item in scored_cases)
     total_max = sum(item["max_score"] for item in scored_cases)
     overall = _percent(total_score, total_max)
+    failed_cases = [case for case in scored_cases if not case["passed"]]
     payload = {
         "ok": _passes_thresholds(overall, source_stats),
         "dataset": str(dataset_path),
@@ -153,7 +154,9 @@ def score_unified_eval(
             }
             for name, values in component_totals.items()
         },
-        "failures": [case for case in scored_cases if not case["passed"]][:50],
+        "failure_count": len(failed_cases),
+        "failure_sample_count": min(len(failed_cases), 50),
+        "failures": failed_cases[:50],
         "confusions": _collect_confusions(scored_cases),
         "cases": scored_cases,
     }
@@ -587,7 +590,8 @@ def _compact_runtime_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "case_count": payload["case_count"],
         "overall_score": payload["overall_score"],
         "by_gold_source": payload["by_gold_source"],
-        "failure_count": len(payload["failures"]),
+        "failure_count": payload.get("failure_count", len(payload["failures"])),
+        "failure_sample_count": payload.get("failure_sample_count", len(payload["failures"])),
     }
 
 
@@ -599,6 +603,8 @@ def render_markdown_report(payload: Dict[str, Any]) -> str:
         f"- 样例数：{payload['case_count']}",
         f"- 总分：{payload['overall_score']} / 100",
         f"- 结果：{'通过' if payload['ok'] else '未通过'}",
+        f"- 待优化样例数：{payload.get('failure_count', len(payload['failures']))}",
+        f"- 报告展示失败样例数：{payload.get('failure_sample_count', len(payload['failures']))}",
         f"- 耗时：{payload['elapsed_seconds']} 秒",
         "",
         "## 按数据源统计",

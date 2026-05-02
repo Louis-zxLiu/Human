@@ -218,12 +218,28 @@ def cmd_eval_unified(args: argparse.Namespace) -> int:
             "by_gold_source": payload["by_gold_source"],
             "report": str(report_path) if report_path else None,
             "markdown_report": str(markdown_report_path) if markdown_report_path else None,
-            "failure_count": len(payload["failures"]),
+            "failure_count": payload.get("failure_count", len(payload["failures"])),
+            "failure_sample_count": payload.get("failure_sample_count", len(payload["failures"])),
         }
     )
     if args.no_fail or not args.strict:
         return 0
     return 0 if payload["overall_score"] >= args.fail_under and payload["ok"] else 1
+
+
+def cmd_generate_unified_eval(args: argparse.Namespace) -> int:
+    ensure_runtime_env()
+    if not ensure_runtime_health(profile="core"):
+        return 1
+    from app.tasks.generate_unified_eval import generate_unified_eval_cases
+
+    payload = generate_unified_eval_cases(
+        target=args.target,
+        output_path=Path(args.output).resolve(),
+        evidence_path=Path(args.evidence).resolve(),
+    )
+    print_json(payload)
+    return 0 if payload["ok"] else 1
 
 
 def cmd_seed_demo_logs(args: argparse.Namespace) -> int:
@@ -347,6 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
     eval_unified.add_argument("--strict", action="store_true", help="Exit non-zero when thresholds are not met.")
     eval_unified.add_argument("--no-fail", action="store_true", help="Always exit 0 after writing reports.")
     eval_unified.set_defaults(func=cmd_eval_unified)
+
+    generate_unified = subparsers.add_parser("generate-unified-eval")
+    generate_unified.add_argument("--target", type=int, default=1200)
+    generate_unified.add_argument("--output", default=str(PROJECT_ROOT / "tests" / "unified_eval_cases.jsonl"))
+    generate_unified.add_argument("--evidence", default=str(PROJECT_ROOT / "tests" / "docx_rag_evidence.json"))
+    generate_unified.set_defaults(func=cmd_generate_unified_eval)
 
     seed_demo_logs = subparsers.add_parser("seed-demo-logs")
     seed_demo_logs.add_argument("--reset", action="store_true", help="Remove previous demo_visitor rows before seeding.")

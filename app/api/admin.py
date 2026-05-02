@@ -20,6 +20,16 @@ from app.services.avatar_engine import get_avatar_engine, reset_avatar_engines
 
 router = APIRouter()
 KNOWN_QUERY_SCOPES = {"FACT", "RECOMMEND", "ANALYTICS"}
+UNIFIED_EVAL_COMMAND = (
+    'conda run -p "D:/Human/env" python -m app.cli eval-unified '
+    "--report reports/unified_eval_report.json "
+    "--markdown-report reports/unified_eval_report.md "
+    "--strict --fail-under 90"
+)
+GENERATE_UNIFIED_EVAL_COMMAND = (
+    'conda run -p "D:/Human/env" python -m app.cli generate-unified-eval '
+    "--target 1200 --output tests/unified_eval_cases.jsonl"
+)
 
 AVATAR_RUNTIME_PROFILES = {
     "memory_saver": {
@@ -82,7 +92,8 @@ def build_data_status() -> Dict[str, Any]:
         "rebuild_commands": {
             "knowledge_base": 'conda run -p "D:/Human/env" python -m app.cli prepare-kb',
             "behavior_data": 'conda run -p "D:/Human/env" python -m app.cli prepare-data',
-            "unified_eval": 'conda run -p "D:/Human/env" python -m app.cli eval-unified',
+            "unified_eval": UNIFIED_EVAL_COMMAND,
+            "generate_unified_eval": GENERATE_UNIFIED_EVAL_COMMAND,
             "demo_seed": 'conda run -p "D:/Human/env" python -m app.cli seed-demo-logs --reset',
         },
     }
@@ -113,9 +124,11 @@ def build_eval_status() -> Dict[str, Any]:
             "overall_score": None,
             "case_count": 0,
             "failure_count": None,
+            "failure_sample_count": 0,
             "updated_at": None,
             "summary": "尚未生成统一评测报告。",
-            "command": 'conda run -p "D:/Human/env" python -m app.cli eval-unified',
+            "command": UNIFIED_EVAL_COMMAND,
+            "generate_command": GENERATE_UNIFIED_EVAL_COMMAND,
         }
 
     try:
@@ -127,9 +140,11 @@ def build_eval_status() -> Dict[str, Any]:
             "overall_score": None,
             "case_count": 0,
             "failure_count": None,
+            "failure_sample_count": 0,
             "updated_at": get_path_mtime(str(report_path)),
             "summary": f"统一评测报告读取失败：{exc}",
-            "command": 'conda run -p "D:/Human/env" python -m app.cli eval-unified',
+            "command": UNIFIED_EVAL_COMMAND,
+            "generate_command": GENERATE_UNIFIED_EVAL_COMMAND,
         }
 
     source_scores = {
@@ -140,18 +155,36 @@ def build_eval_status() -> Dict[str, Any]:
         }
         for key, value in (payload.get("by_gold_source") or {}).items()
     }
-    failure_count = len(payload.get("failures") or [])
+    cases = payload.get("cases") or []
+    if cases:
+        failure_count = sum(1 for case in cases if not case.get("passed"))
+    else:
+        source_total = sum(int(value.get("count") or 0) for value in source_scores.values())
+        source_passed = sum(
+            int(value.get("passed") or 0)
+            for value in (payload.get("by_gold_source") or {}).values()
+        )
+        failure_count = max(source_total - source_passed, 0)
+    failure_sample_count = len(payload.get("failures") or [])
     overall_score = payload.get("overall_score")
+    case_count = payload.get("case_count", 0)
     return {
         "ok": bool(payload.get("ok")),
         "available": True,
         "overall_score": overall_score,
-        "case_count": payload.get("case_count", 0),
+        "case_count": case_count,
         "failure_count": failure_count,
+        "failure_sample_count": failure_sample_count,
         "updated_at": get_path_mtime(str(report_path)),
         "source_scores": source_scores,
-        "summary": f"统一评测 {overall_score}/100，失败样例 {failure_count} 个。",
-        "command": 'conda run -p "D:/Human/env" python -m app.cli eval-unified',
+        "elapsed_seconds": payload.get("elapsed_seconds"),
+        "thresholds": payload.get("thresholds") or {},
+        "summary": (
+            f"统一评测 {overall_score}/100，覆盖 {case_count} 题，"
+            f"未通过样例 {failure_count} 个，报告展示 {failure_sample_count} 个失败样例。"
+        ),
+        "command": UNIFIED_EVAL_COMMAND,
+        "generate_command": GENERATE_UNIFIED_EVAL_COMMAND,
     }
 
 
@@ -183,6 +216,15 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
                     "title": "把统一评测分数放进演示亮点",
                     "detail": f"当前统一评测 {score}/100，可直接支撑“事实问答准确率高于 90%”这一赛题要求。",
                     "action": "PPT 和演示视频中展示评测报告截图。",
+                }
+            )
+        elif score >= 90:
+            recommendations.append(
+                {
+                    "priority": "高",
+                    "title": "突出统一评测已过提交线",
+                    "detail": f"当前统一评测 {score}/100，已通过 90 分严格线；建议展示 1200 题覆盖面，同时说明待优化样例用于持续迭代。",
+                    "action": "PPT、后台和视频统一展示 reports/unified_eval_report.md 的最新结果。",
                 }
             )
         else:
