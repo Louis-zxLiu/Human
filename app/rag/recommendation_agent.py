@@ -1,5 +1,14 @@
+from __future__ import annotations
+
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.scenic_catalog import (
+    SCENIC_ROUTE_PROFILES,
+    get_scenic_entry,
+    infer_scenic_slug_from_text,
+    scenic_name_from_slug,
+    scenic_slug_from_name,
+)
 from app.rag.fact_agent import ScenicFactAgent
 from app.rag.llm_client import generate_chat_completion
 from app.rag.sql_agent import TouristAnalyticsAgent
@@ -14,55 +23,23 @@ PROFILE_LABELS: Dict[str, str] = {
     "general": "经典首游",
 }
 
-PROFILE_RULES: Dict[str, Dict[str, Any]] = {
-    "history": {
-        "title": "历史文化深度路线",
-        "reason": "适合希望系统了解灵山佛教文化、建筑寓意和核心讲解脉络的游客。",
-        "attractions": ["灵山大照壁", "祥符禅寺", "灵山大佛", "灵山梵宫", "五印坛城"],
-        "highlights": "重点覆盖玄奘与小灵山渊源、佛教文化体系、梵宫艺术和藏传文化补充。",
-        "estimated_duration": "约 2.5 到 3.5 小时",
-        "analytics_types": ["历史文化", "博物馆与展馆"],
-    },
-    "nature": {
-        "title": "景观打卡舒展路线",
-        "reason": "适合偏爱空间景观、拍照取景和节奏舒缓的游客。",
-        "attractions": ["灵山大照壁", "五明桥", "菩提大道", "灵山大佛", "五印坛城"],
-        "highlights": "重点看太湖视野、仪式性中轴线、佛像远景和坛城外观取景。",
-        "estimated_duration": "约 2 到 3 小时",
-        "analytics_types": ["风景名胜与休闲度假"],
-    },
-    "family": {
-        "title": "亲子友好路线",
-        "reason": "适合家庭同行，路线以易理解、可互动、停留舒适为主。",
-        "attractions": ["百子戏弥勒", "九龙灌浴", "佛教文化博览馆", "灵山大佛"],
-        "highlights": "重点讲弥勒吉祥寓意、九龙灌浴动态表演和适合孩子理解的佛教常识。",
-        "estimated_duration": "约 2.5 到 3.5 小时",
-        "analytics_types": ["历史文化", "风景名胜与休闲度假"],
-    },
-    "architecture": {
-        "title": "建筑艺术主题路线",
-        "reason": "适合关注建筑尺度、工艺细节和空间设计的游客。",
-        "attractions": ["阿育王柱", "灵山大佛", "灵山梵宫", "五印坛城", "曼飞龙塔"],
-        "highlights": "重点看佛教建筑工艺、轴线布局、材质与多语系佛教建筑风格对比。",
-        "estimated_duration": "约 2 到 3 小时",
-        "analytics_types": ["现代地标", "博物馆与展馆"],
-    },
-    "relaxed": {
-        "title": "轻松慢游路线",
-        "reason": "适合不想太赶路、希望边走边听讲解的游客。",
-        "attractions": ["灵山大照壁", "五明桥", "菩提大道", "九龙灌浴", "祥符禅寺"],
-        "highlights": "重点保留步行体验和核心讲解节点，减少高强度折返。",
-        "estimated_duration": "约 2.5 到 3 小时",
-        "analytics_types": ["风景名胜与休闲度假"],
-    },
-    "general": {
-        "title": "经典首游路线",
-        "reason": "适合第一次来到灵山胜境，优先覆盖最具代表性的核心景点。",
-        "attractions": ["灵山大照壁", "九龙灌浴", "祥符禅寺", "灵山大佛", "灵山梵宫"],
-        "highlights": "重点覆盖入口文化、动态表演、古刹、大佛和梵宫五个核心节点。",
-        "estimated_duration": "约 3 到 4 小时",
-        "analytics_types": ["风景名胜与休闲度假", "历史文化"],
-    },
+PLANNER_DURATION_NOTES = {
+    "short": "控制在较轻量的半日节奏里，优先保留辨识度最高的节点。",
+    "half-day": "维持半日游节奏，适合比赛演示或周末白天体验。",
+    "full-day": "保留更完整的漫游与停留空间，适合整日体验。",
+    "night-tour": "更强调入夜后的氛围、灯光和慢行体验。",
+}
+PLANNER_VISITOR_NOTES = {
+    "solo": "适合一个人边走边听讲解，路线更强调清晰感和可追问性。",
+    "couple": "更适合拍照、夜景和氛围感停留。",
+    "family": "优先保留互动性、开阔度和中途休息点。",
+    "elder": "建议减少折返和节奏过快的节点，强调舒适停留。",
+    "friends": "适合一起拍照、快速浏览和集中体验代表性节点。",
+}
+PLANNER_PACE_NOTES = {
+    "compact": "整体节奏偏紧凑，适合时间有限的快速体验。",
+    "balanced": "整体节奏均衡，兼顾讲解、拍照和停留。",
+    "relaxed": "整体节奏更舒缓，鼓励多停留和慢慢感受氛围。",
 }
 
 
@@ -74,11 +51,11 @@ def get_recommendation_display_label(label: str) -> str:
 def detect_interest_label_clean(user_query: str) -> str:
     query = str(user_query or "").strip().lower()
     rules: List[Tuple[str, Tuple[str, ...]]] = [
-        ("history", ("\u5386\u53f2", "\u6587\u5316", "\u4eba\u6587", "\u4f5b\u6559", "\u7985\u610f")),
-        ("nature", ("\u81ea\u7136", "\u98ce\u5149", "\u6e56\u666f", "\u62cd\u7167", "\u6253\u5361")),
-        ("family", ("\u4eb2\u5b50", "\u5b69\u5b50", "\u8001\u4eba", "\u5bb6\u5ead")),
-        ("architecture", ("\u5efa\u7b51", "\u827a\u672f", "\u68b5\u5bab", "\u575b\u57ce")),
-        ("relaxed", ("\u8f7b\u677e", "\u6162\u6e38", "\u4e0d\u7d2f", "\u4f11\u95f2")),
+        ("history", ("历史", "文化", "人文", "佛教", "禅意")),
+        ("nature", ("自然", "风光", "湖景", "拍照", "打卡", "花海")),
+        ("family", ("亲子", "孩子", "老人", "家庭")),
+        ("architecture", ("建筑", "艺术", "梵宫", "坛城", "街区", "立面")),
+        ("relaxed", ("轻松", "慢游", "不累", "休闲", "夜游")),
     ]
     for label, keywords in rules:
         if any(keyword in query for keyword in keywords):
@@ -99,8 +76,8 @@ def classify_interest_label(user_query: str) -> str:
 - history：偏历史、文化、人文、佛教讲解
 - nature：偏风景、拍照、打卡、自然景观
 - family：偏亲子、家庭、老人、儿童同行
-- architecture：偏建筑、艺术、空间设计、梵宫坛城
-- relaxed：偏轻松、慢游、休闲、不赶路
+- architecture：偏建筑、艺术、空间设计、街区立面
+- relaxed：偏轻松、慢游、休闲、不赶路、夜游
 - general：无法明确归入以上类别时使用
 
 请输出 JSON：
@@ -115,30 +92,20 @@ def classify_interest_label(user_query: str) -> str:
 
         payload = json.loads(cleaned)
         label = str(payload.get("label") or "").strip().lower()
-        if label in PROFILE_RULES:
+        if label in PROFILE_LABELS:
             return label
     except Exception:
         pass
     return detect_interest_label_clean(user_query)
 
 
-def detect_interest_label(user_query: str) -> str:
-    query = str(user_query or "").strip().lower()
-    rules: List[Tuple[str, Tuple[str, ...]]] = [
-        ("history", ("历史", "文化", "人文", "佛教", "禅意")),
-        ("nature", ("自然", "风光", "湖景", "拍照", "打卡")),
-        ("family", ("亲子", "孩子", "老人", "家庭")),
-        ("architecture", ("建筑", "艺术", "梵宫", "坛城")),
-        ("relaxed", ("轻松", "慢游", "不累", "休闲")),
-    ]
-    for label, keywords in rules:
-        if any(keyword in query for keyword in keywords):
-            return label
-    return "general"
+def normalize_interest_label(label: Optional[str]) -> str:
+    value = str(label or "").strip().lower()
+    return value if value in PROFILE_LABELS else "general"
 
 
 class ScenicRecommendationAgent:
-    """Produce explanation-first scenic recommendations from facts plus analytics hints."""
+    """Produce scenic recommendations that are aware of which scenic area is active."""
 
     def __init__(self, fact_agent: ScenicFactAgent, analytics_agent: TouristAnalyticsAgent):
         self.fact_agent = fact_agent
@@ -149,37 +116,89 @@ class ScenicRecommendationAgent:
         user_query: str,
         start_attraction: Optional[str] = None,
         user_profile: Optional[str] = None,
+        scenic_slug: Optional[str] = None,
     ) -> Dict[str, Any]:
+        resolved_scenic_slug = self._resolve_scenic_slug(user_query, scenic_slug, start_attraction)
         profile_key = self._refine_label_with_profile(classify_interest_label(user_query), user_profile)
-        profile = PROFILE_RULES[profile_key]
-        display_label = get_recommendation_display_label(profile_key)
-        route_rows = self._collect_route(profile["attractions"], start_attraction)
-        analytics_hint = self.analytics_agent.get_preference_hint(profile["analytics_types"])
+        return self._build_recommendation(
+            scenic_slug=resolved_scenic_slug,
+            profile_key=profile_key,
+            start_attraction=start_attraction,
+            planning_context=None,
+            user_profile=user_profile,
+        )
 
+    def plan_route(
+        self,
+        scenic_slug: str,
+        interest_label: str,
+        duration_band: str = "half-day",
+        visitor_type: str = "solo",
+        pace: str = "balanced",
+    ) -> Dict[str, Any]:
+        planning_context = {
+            "duration_band": duration_band,
+            "visitor_type": visitor_type,
+            "pace": pace,
+        }
+        return self._build_recommendation(
+            scenic_slug=scenic_slug,
+            profile_key=normalize_interest_label(interest_label),
+            start_attraction=None,
+            planning_context=planning_context,
+            user_profile=None,
+        )
+
+    def _build_recommendation(
+        self,
+        scenic_slug: str,
+        profile_key: str,
+        start_attraction: Optional[str],
+        planning_context: Optional[Dict[str, str]],
+        user_profile: Optional[str],
+    ) -> Dict[str, Any]:
+        scenic_entry = get_scenic_entry(scenic_slug) or get_scenic_entry("lingshan-shengjing")
+        scenic_slug = scenic_entry["slug"]
+        scenic_name = scenic_entry["scenic_name"]
+        profile_map = SCENIC_ROUTE_PROFILES[scenic_slug]
+        profile = profile_map.get(profile_key) or profile_map["general"]
+        display_label = get_recommendation_display_label(profile_key)
+        route_rows = self._collect_route(profile["attractions"], scenic_slug, start_attraction)
+        analytics_hint = self.analytics_agent.get_preference_hint(profile["analytics_types"])
         route_items = [
             {
                 "name": row["attraction_name"],
                 "summary": self._short_reason(row),
+                "attractionId": row["attraction_id"],
             }
             for row in route_rows
         ]
-        start_text = f"建议从 {start_attraction} 附近开始进入这条路线。" if start_attraction else ""
-        profile_text = f" 结合您最近的偏好记录，系统会优先强化 {display_label} 方向的讲解。" if user_profile else ""
-
-        answer = "\n".join(
-            [
-                f"推荐路线：{' -> '.join(item['name'] for item in route_items)}",
-                f"适合原因：{profile['reason']}{profile_text}",
-                f"预计游览时长：{profile['estimated_duration']}",
-                f"建议讲解重点：{profile['highlights']}",
-                f"游客行为分析补充：{analytics_hint or '当前行为分析层暂时无额外补充，建议以景点讲解体验为主。'}",
-                start_text,
-            ]
-        ).strip()
-
+        planning_note = self._compose_planning_note(planning_context)
+        profile_text = (
+            f" 结合您最近的偏好记录，系统会优先强化 {display_label} 方向的讲解。"
+            if user_profile
+            else ""
+        )
+        answer_lines = [
+            f"{scenic_name}推荐路线：{' -> '.join(item['name'] for item in route_items)}",
+            f"适合原因：{profile['reason']}{profile_text}",
+            f"预计游览时长：{profile['estimated_duration']}",
+            f"建议讲解重点：{profile['highlights']}",
+            f"游客行为分析补充：{analytics_hint or '当前行为分析层暂时无额外补充，建议以景点讲解体验为主。'}",
+        ]
+        if planning_note:
+            answer_lines.append(f"规划说明：{planning_note}")
+        if start_attraction:
+            answer_lines.append(f"建议从 {start_attraction} 附近开始进入这条路线。")
+        answer = "\n".join(answer_lines).strip()
+        first_route_item = route_items[0] if route_items else None
+        guide_prompt = (
+            f"请以数字人导游的方式带我走一条{scenic_name}的{display_label}路线，"
+            f"从{first_route_item['name'] if first_route_item else scenic_name}开始，重点讲{profile['highlights']}。"
+        )
         return {
             "answer": answer,
-            "matched_attraction": route_rows[0]["attraction_name"] if route_rows else None,
+            "matched_attraction": first_route_item["name"] if first_route_item else None,
             "response_kind": "recommendation",
             "recommendation_label": display_label,
             "recommendation": {
@@ -192,33 +211,75 @@ class ScenicRecommendationAgent:
                 "highlights": profile["highlights"],
                 "analytics_hint": analytics_hint,
                 "start_attraction": start_attraction,
+                "scenic_slug": scenic_slug,
+                "scenic_name": scenic_name,
+                "guide_prompt": guide_prompt,
+                "planning_note": planning_note,
             },
+            "profileKey": profile_key,
+            "scenicSlug": scenic_slug,
+            "scenicName": scenic_name,
+            "title": profile["title"],
+            "reason": profile["reason"],
+            "estimatedDuration": profile["estimated_duration"],
+            "highlights": profile["highlights"],
+            "analyticsHint": analytics_hint,
+            "routeItems": route_items,
+            "guidePrompt": guide_prompt,
+            "planningNote": planning_note,
         }
+
+    def _resolve_scenic_slug(
+        self,
+        user_query: str,
+        scenic_slug: Optional[str],
+        start_attraction: Optional[str],
+    ) -> str:
+        if scenic_slug and get_scenic_entry(scenic_slug):
+            return scenic_slug
+
+        if start_attraction:
+            row = self.fact_agent.get_attraction_row(start_attraction)
+            if row:
+                matched_slug = scenic_slug_from_name(row.get("scenic_name"))
+                if matched_slug:
+                    return matched_slug
+
+        matched_attraction = self.fact_agent.match_attraction_name(user_query)
+        if matched_attraction:
+            row = self.fact_agent.get_attraction_row(matched_attraction)
+            if row:
+                matched_slug = scenic_slug_from_name(row.get("scenic_name"))
+                if matched_slug:
+                    return matched_slug
+
+        inferred = infer_scenic_slug_from_text(user_query)
+        if inferred:
+            return inferred
+        return "lingshan-shengjing"
 
     @staticmethod
     def _refine_label_with_profile(label: str, user_profile: Optional[str]) -> str:
         if label != "general" or not user_profile:
             return label
-        for candidate, profile in PROFILE_RULES.items():
+        for candidate, display in PROFILE_LABELS.items():
             if candidate == "general":
                 continue
-            if (
-                candidate in user_profile
-                or get_recommendation_display_label(candidate) in user_profile
-                or profile["title"] in user_profile
-            ):
+            if candidate in user_profile or display in user_profile:
                 return candidate
         return label
 
     def _collect_route(
         self,
         attraction_names: List[str],
+        scenic_slug: str,
         start_attraction: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         route_rows: List[Dict[str, Any]] = []
+        scenic_name = scenic_name_from_slug(scenic_slug)
         for attraction_name in attraction_names:
             row = self.fact_agent.get_attraction_row(attraction_name)
-            if row:
+            if row and row.get("scenic_name") == scenic_name:
                 route_rows.append(row)
 
         if not start_attraction:
@@ -230,14 +291,30 @@ class ScenicRecommendationAgent:
             return route_rows[index:] + route_rows[:index]
 
         start_row = self.fact_agent.get_attraction_row(start_attraction)
-        if start_row:
+        if start_row and start_row.get("scenic_name") == scenic_name:
             return [start_row] + route_rows
         return route_rows
+
+    @staticmethod
+    def _compose_planning_note(planning_context: Optional[Dict[str, str]]) -> str:
+        if not planning_context:
+            return ""
+        notes = []
+        duration = planning_context.get("duration_band")
+        visitor_type = planning_context.get("visitor_type")
+        pace = planning_context.get("pace")
+        if duration in PLANNER_DURATION_NOTES:
+            notes.append(PLANNER_DURATION_NOTES[duration])
+        if visitor_type in PLANNER_VISITOR_NOTES:
+            notes.append(PLANNER_VISITOR_NOTES[visitor_type])
+        if pace in PLANNER_PACE_NOTES:
+            notes.append(PLANNER_PACE_NOTES[pace])
+        return " ".join(notes)
 
     @staticmethod
     def _short_reason(row: Dict[str, Any]) -> str:
         for field in ("highlights", "description", "remarks", "core_function"):
             value = str(row.get(field) or "").strip()
             if value:
-                return value[:60] + ("..." if len(value) > 60 else "")
+                return value[:72] + ("..." if len(value) > 72 else "")
         return "适合作为本路线的讲解节点。"

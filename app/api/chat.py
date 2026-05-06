@@ -44,6 +44,11 @@ def get_pipeline() -> ScenicRAGPipeline:
     return _pipeline_cache
 
 
+def clear_runtime_cache() -> None:
+    global _pipeline_cache
+    _pipeline_cache = None
+
+
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
     user_message = next((msg.content for msg in reversed(request.messages) if msg.role == "user"), None)

@@ -50,21 +50,40 @@ def find_structured_docx(kb_dir: str) -> Path:
 
 def load_structured_rows(docx_path: Path) -> tuple[list[str], list[dict[str, object]]]:
     mapped_headers = header_mapping()
+    headers = list(STRUCTURED_HEADER_MAP.values())
+    rows: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
+
     for table in extract_docx_tables(docx_path):
         if len(table) < 2:
             continue
         raw_headers = [normalize_header(cell) for cell in table[0]]
-        headers = [mapped_headers.get(header, header) for header in raw_headers]
         if sum(1 for header in raw_headers if header in mapped_headers) < 4:
             continue
 
-        rows: list[dict[str, object]] = []
+        source_headers = [mapped_headers.get(header, header) for header in raw_headers]
         for row in table[1:]:
-            padded = row + [""] * (len(headers) - len(row))
-            rows.append(dict(zip(headers, padded[: len(headers)])))
-        return headers, rows
+            padded = row + [""] * (len(source_headers) - len(row))
+            source_record = dict(zip(source_headers, padded[: len(source_headers)]))
+            attraction_id = str(source_record.get("attraction_id") or "").strip()
+            if attraction_id and attraction_id in seen_ids:
+                continue
+            record = {column: source_record.get(column, "") for column in headers}
+            if not any(str(value or "").strip() for value in record.values()):
+                continue
+            rows.append(record)
+            if attraction_id:
+                seen_ids.add(attraction_id)
 
-    raise RuntimeError(f"No importable structured table was found in: {docx_path}")
+    if not rows:
+        raise RuntimeError(f"No importable structured table was found in: {docx_path}")
+
+    scenic_count = len({str(row.get("scenic_name") or "").strip() for row in rows if str(row.get("scenic_name") or "").strip()})
+    if scenic_count < 2:
+        raise RuntimeError(f"Expected at least 2 scenic areas in structured DOCX, found {scenic_count}.")
+
+    rows.sort(key=lambda item: str(item.get("attraction_id") or ""))
+    return headers, rows
 
 
 def write_rows_to_sqlite(db_path: str, table_name: str, headers: list[str], rows: list[dict[str, object]]) -> None:

@@ -12,12 +12,16 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.api import chat as chat_api
+from app.api import interact as interact_api
+from app.api import scenic as scenic_api
 from app.api.auth import get_current_admin
 from app.core.config import persist_env_overrides, resolve_path, settings
 from app.core.runtime import CONDA_ENV_PREFIX
 from app.rag.recommendation_agent import get_recommendation_display_label
 from app.services.asr_tts import get_tts_service
 from app.services.avatar_engine import get_avatar_engine, reset_avatar_engines
+from app.services.log_service import log_service
 
 router = APIRouter()
 KNOWN_QUERY_SCOPES = {"FACT", "RECOMMEND", "ANALYTICS"}
@@ -214,7 +218,7 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
             {
                 "priority": "高",
                 "title": "先补齐知识库和行为库预检",
-                "detail": "评委会重点看本地知识库与游客行为数据能否稳定支撑回答，建议先运行数据准备命令。",
+                "detail": "为了保证知识库和游客行为分析都能稳定支撑服务，建议先运行数据准备命令。",
                 "action": "运行 prepare-data 与 prepare-kb 后刷新后台。",
             }
         )
@@ -225,18 +229,18 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
             recommendations.append(
                 {
                     "priority": "高",
-                    "title": "把统一评测分数放进演示亮点",
-                    "detail": f"当前统一评测 {score}/100，可直接支撑“事实问答准确率高于 90%”这一赛题要求。",
-                    "action": "PPT 和演示视频中展示评测报告截图。",
+                    "title": "把统一评测作为质量基线",
+                    "detail": f"当前统一评测 {score}/100，说明事实问答准确率已经达到较高水平，可作为质量证明长期展示。",
+                    "action": "在后台、质量周报和对外材料中展示最新评测结果。",
                 }
             )
         elif score >= 90:
             recommendations.append(
                 {
                     "priority": "高",
-                    "title": "突出统一评测已过提交线",
-                    "detail": f"当前统一评测 {score}/100，已通过 90 分严格线；建议展示 1200 题覆盖面，同时说明待优化样例用于持续迭代。",
-                    "action": "PPT、后台和视频统一展示 reports/unified_eval_report.md 的最新结果。",
+                    "title": "统一评测已超过质量线",
+                    "detail": f"当前统一评测 {score}/100，已通过 90 分严格线；建议持续展示 1200 题覆盖面，并把待优化样例纳入后续迭代。",
+                    "action": "在后台和质量文档中统一展示 reports/unified_eval_report.md 的最新结果。",
                 }
             )
         else:
@@ -244,7 +248,7 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
                 {
                     "priority": "高",
                     "title": "优先修复统一评测低分项",
-                    "detail": "当前评测未达到演示安全线，建议先处理失败样例再录制视频。",
+                    "detail": "当前评测未达到预期质量线，建议先处理失败样例再继续扩展内容与场景。",
                     "action": "运行 eval-unified 并查看 reports/unified_eval_report.md。",
                 }
             )
@@ -256,7 +260,7 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
                 "priority": "中",
                 "title": "把拒答样例转成知识库维护动作",
                 "detail": f"最近出现“{first_query}”这类需要关注的问题，可作为后台知识库管理价值展示。",
-                "action": "补充对应 DOCX 资料或在演示中说明系统会拒绝无证据问题。",
+                "action": "补充对应 DOCX 资料或优化无证据问题的拒答规则。",
             }
         )
 
@@ -267,7 +271,7 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
                 "priority": "中",
                 "title": f"{top_label}路线关注度较高",
                 "detail": "推荐标签分布可以转化为景区运营洞察，说明系统不只会问答，也能帮助规划讲解资源。",
-                "action": "演示后台推荐标签图表，并切到对应前台路线卡。",
+                "action": "结合推荐标签图表优化前台路线入口与讲解资源配置。",
             }
         )
 
@@ -275,9 +279,9 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
         recommendations.append(
             {
                 "priority": "中",
-                "title": "演示前控制长回答和视频生成耗时",
+                "title": "控制长回答和视频生成耗时",
                 "detail": f"当前平均响应耗时约 {avg_cost_time}s，语音视频链路建议使用短问短答展示。",
-                "action": "演示时优先选择 20-40 秒口播问题。",
+                "action": "优先优化长文本和高耗时场景的响应链路。",
             }
         )
 
@@ -285,8 +289,8 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
         recommendations.append(
             {
                 "priority": "高",
-                "title": "开场前预热演示数据",
-                "detail": "后台空图表会削弱管理端观感，建议开场前注入一组演示日志。",
+                "title": "初始化后台样例数据",
+                "detail": "后台空图表会削弱运营可读性，建议先注入一组初始化日志。",
                 "action": '运行 conda run -p "D:/Human/env" python -m app.cli seed-demo-logs --reset。',
             }
         )
@@ -294,9 +298,9 @@ def build_operation_recommendations(snapshot: Dict[str, Any]) -> list[Dict[str, 
     recommendations.append(
         {
             "priority": "低",
-            "title": "演示默认切换数字人高质量模式",
-            "detail": "赛题 20 分体验项会看口型同步、语音合成和表情观感，后台高质量模式更适合录屏。",
-            "action": "后台选择“高质量”，确认音色试听正常后再录制。",
+            "title": "默认启用高质量数字人模式",
+            "detail": "当需要更稳定的口型同步、语音合成和表情观感时，高质量模式更适合作为默认配置。",
+            "action": "后台选择“高质量”，确认音色试听正常后再正式使用。",
         }
     )
 
@@ -514,6 +518,33 @@ class UpdateVoiceRequest(BaseModel):
 
 class UpdateAvatarRuntimeRequest(BaseModel):
     profile_id: str
+
+
+@router.post("/cache/refresh")
+async def refresh_runtime_cache(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    chat_api.clear_runtime_cache()
+    interact_api.clear_runtime_cache()
+    scenic_api.clear_runtime_cache()
+    reset_avatar_engines()
+    log_reset = log_service.clear_logs()
+
+    return JSONResponse(
+        content={
+            "ok": True,
+            "message": "Backend state cleared successfully",
+            "refreshed": [
+                "chat_pipeline",
+                "interact_pipeline",
+                "location_agent",
+                "scenic_fact_agent",
+                "scenic_recommendation_agent",
+                "avatar_engines",
+                "interaction_logs",
+            ],
+            "removed_logs": log_reset["removed"],
+            "refreshed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    )
 
 
 @router.get("/voice/list")

@@ -1,0 +1,84 @@
+[
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "pageSlot": "home-card",
+    "sourceUrl": "https://www.chinalingshan.com/member/scenic",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-card.png"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "pageSlot": "hero-primary",
+    "sourceUrl": "https://www.chinalingshan.com/member/scenic/1",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-hero-1.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "pageSlot": "gallery-1",
+    "sourceUrl": "https://www.chinalingshan.com/member/scenic/1",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-hero-2.png"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "pageSlot": "gallery-2",
+    "sourceUrl": "https://www.chinalingshan.com/member/scenic/1",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-hero-3.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "pageSlot": "gallery-3",
+    "sourceUrl": "https://www.chinalingshan.com/member/scenic/1",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-hero-4.png"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "pageSlot": "home-card",
+    "sourceUrl": "https://www.chinalingshan.com/member/scenic",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-card.png"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "pageSlot": "hero-primary",
+    "sourceUrl": "https://www.nianhuawan.com/scenery-introduction/",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-hero-1.jpg"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "pageSlot": "gallery-1",
+    "sourceUrl": "https://www.nianhuawan.com/scenery-introduction/",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-hero-2.jpg"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "pageSlot": "gallery-2",
+    "sourceUrl": "https://www.nianhuawan.com/scenery-introduction/",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-hero-3.jpg"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "attractionId": "NH-002",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.nianhuawan.com/scenery-introduction/",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-flower-sea.png"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "attractionId": "NH-003",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.nianhuawan.com/scenery-introduction/",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-fragrant-moon.jpg"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "attractionId": "NH-005",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.nianhuawan.com/scenery-introduction/",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-five-lakes.jpg"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "attractionId": "NH-006",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.nianhuawan.com/scenery-introduction/",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-deer-valley.jpg"
+  }
+]

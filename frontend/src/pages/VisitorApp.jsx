@@ -13,20 +13,28 @@ import {
   saveChatSession,
   summarizeMessages,
 } from "../lib/chatArchives";
-import { getInteractStreamUrl, logout, sendAudioMessage, sendTextMessage } from "../lib/api";
+import {
+  buildAudioMessageForm,
+  buildTextMessageForm,
+  getInteractStreamUrl,
+  logout,
+  sendAudioMessage,
+  sendTextMessage,
+} from "../lib/api";
+import { buildLoginHref, buildPlannerHref, buildScenicHref } from "../lib/routes";
 
 const AUTH_KEYS = ["auth_token", "username", "user_role"];
-const GREETING_MESSAGE = {
-  role: "assistant",
-  content: "你好，我是灵山胜境数字人导游。你可以问我景点事实、路线推荐，也可以在弱 GPS 模式下体验多轮问路。",
-  meta: null,
-};
-const QUICK_PROMPTS = [
+const LINGSHAN_QUICK_PROMPTS = [
   "我第一次来，帮我推荐 90 分钟游览路线",
   "我现在在梵宫附近，下一站适合去哪里",
   "灵山大佛的历史背景是什么",
 ];
-const DEMO_ROUTES = [
+const NIANHUAWAN_QUICK_PROMPTS = [
+  "如果第一次来拈花湾，适合怎么逛？",
+  "为什么拈花湾适合夜游和慢游？",
+  "我现在在花街附近，下一站适合去哪里？",
+];
+const LINGSHAN_DEMO_ROUTES = [
   {
     label: "历史文化",
     title: "祥符禅寺 -> 灵山大佛 -> 灵山梵宫",
@@ -52,14 +60,67 @@ const DEMO_ROUTES = [
     behavior: "结合风景名胜与休闲度假类游客偏好。",
   },
 ];
+const NIANHUAWAN_DEMO_ROUTES = [
+  {
+    label: "夜游慢行",
+    title: "香月花街 -> 五灯湖 -> 鹿鸣谷",
+    duration: "约 1.5-2.5 小时",
+    prompt: "我想在拈花湾慢慢逛，请给我一条适合夜游和放松的路线，并说明每一站看什么。",
+    focus: "夜景灯影、街区漫游、山谷静修",
+    behavior: "优先保留停留感与氛围感，不把路线压成赶场式快走。",
+  },
+  {
+    label: "禅意文化",
+    title: "拈花广场 -> 香月花街 -> 拈花堂 -> 五灯湖",
+    duration: "约 2-3 小时",
+    prompt: "我更想感受拈花湾的禅意文化和建筑氛围，请推荐一条路线并说明讲解重点。",
+    focus: "唐风街区、禅意空间、夜间演艺",
+    behavior: "适合文化体验与较完整的街区讲解。",
+  },
+  {
+    label: "花海亲子",
+    title: "拈花广场 -> 梵天花海 -> 五灯湖 -> 香月花街",
+    duration: "约 2-3 小时",
+    prompt: "我们带孩子来拈花湾放松，请推荐一条轻松好走、适合拍照和休息的路线。",
+    focus: "花海、水岸、开阔步行空间",
+    behavior: "优先保留可停留、可拍照、可中途休息的节点。",
+  },
+];
 const PROCESS_STAGE_ORDER = ["idle", "heard", "retrieving", "generating", "avatar", "done"];
 const PROCESS_STAGES = [
   { key: "heard", title: "听懂游客意图", detail: "识别文本或语音输入，锁定本轮问题。" },
   { key: "retrieving", title: "检索可信资料", detail: "按意图访问 DOCX 知识库、行为数据或路线融合链路。" },
   { key: "generating", title: "生成讲解回答", detail: "组织事实证据、路线节点和游客可听懂的讲解。" },
-  { key: "avatar", title: "数字人出镜", detail: "合成语音和口型视频，形成可演示的多模态反馈。" },
+  { key: "avatar", title: "数字人出镜", detail: "合成语音和口型视频，形成稳定的多模态反馈。" },
 ];
 const STREAMING_FRAME_INTERVAL_MS = 40;
+
+function buildGreetingMessage(guideContext = {}) {
+  const scenicName = guideContext.scenicName || "灵山胜境";
+  const attractionName = guideContext.attractionName || "";
+  const routeTitle = guideContext.routeTitle || guideContext.routeLabel || "";
+  const scenicGreeting = scenicName.includes("拈花湾")
+    ? "你好，我是拈花湾数字人导游。你可以围绕夜游、慢游、花海、街区和禅意体验继续提问。"
+    : "你好，我是灵山胜境数字人导游。你可以问我景点事实、路线推荐，也可以在弱 GPS 模式下体验多轮问路。";
+  const contextCopy = attractionName
+    ? `当前已带入景点语境：${attractionName}。`
+    : routeTitle
+      ? `当前已带入路线语境：${routeTitle}。`
+      : "";
+  return {
+    role: "assistant",
+    content: `${scenicGreeting}${contextCopy}`,
+    meta: null,
+  };
+}
+
+function guidePromptsForContext(guideContext = {}) {
+  const scenicSlug = guideContext.scenicSlug || "lingshan-shengjing";
+  if (scenicSlug === "nianhuawan") {
+    return { quickPrompts: NIANHUAWAN_QUICK_PROMPTS, demoRoutes: NIANHUAWAN_DEMO_ROUTES };
+  }
+  return { quickPrompts: LINGSHAN_QUICK_PROMPTS, demoRoutes: LINGSHAN_DEMO_ROUTES };
+}
 
 function buildCurrentSessionDisplay(currentSession, messages) {
   const summary = summarizeMessages(messages);
@@ -99,12 +160,36 @@ function base64ToBlobUrl(base64, mimeType) {
   return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
 }
 
-export function VisitorApp() {
+export function VisitorApp({ guideContext = {}, embedded = false, productTone = false }) {
   const username = localStorage.getItem("username") || "游客";
   const role = localStorage.getItem("user_role") || "user";
+  const activeGuideContext = useMemo(() => ({
+    scenicSlug: guideContext.scenicSlug || "lingshan-shengjing",
+    scenicName: guideContext.scenicName || "灵山胜境",
+    attractionId: guideContext.attractionId || "",
+    attractionName: guideContext.attractionName || "",
+    routeLabel: guideContext.routeLabel || "",
+    routeTitle: guideContext.routeTitle || "",
+    prompt: guideContext.prompt || "",
+  }), [
+    guideContext.attractionId,
+    guideContext.attractionName,
+    guideContext.prompt,
+    guideContext.routeLabel,
+    guideContext.routeTitle,
+    guideContext.scenicName,
+    guideContext.scenicSlug,
+  ]);
+  const initialGreetingMessage = useMemo(() => buildGreetingMessage(activeGuideContext), [activeGuideContext]);
+  const { quickPrompts, demoRoutes } = useMemo(() => guidePromptsForContext(activeGuideContext), [activeGuideContext]);
+  const guideModeLabel = activeGuideContext.attractionName
+    ? "景点讲解"
+    : activeGuideContext.routeTitle || activeGuideContext.routeLabel
+      ? "路线导览"
+      : "自由问答";
 
-  const [messages, setMessages] = useState([GREETING_MESSAGE]);
-  const [inputText, setInputText] = useState("");
+  const [messages, setMessages] = useState([initialGreetingMessage]);
+  const [inputText, setInputText] = useState(activeGuideContext.prompt || "");
   const [isGpsWeak, setIsGpsWeak] = useState(localStorage.getItem("gps_weak_mode") === "true");
   const [isRealtimeMode, setIsRealtimeMode] = useState(localStorage.getItem("realtime_demo_mode") !== "false");
   const [loading, setLoading] = useState(false);
@@ -117,7 +202,7 @@ export function VisitorApp() {
   const [archives, setArchives] = useState([]);
   const [selectedArchiveId, setSelectedArchiveId] = useState(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [currentSession, setCurrentSession] = useState(() => createActiveSession(username, [GREETING_MESSAGE]));
+  const [currentSession, setCurrentSession] = useState(() => createActiveSession(username, [initialGreetingMessage]));
   const [editingSessionId, setEditingSessionId] = useState(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [isSessionMenuOpen, setIsSessionMenuOpen] = useState(false);
@@ -162,14 +247,16 @@ export function VisitorApp() {
   useEffect(() => {
     const token = localStorage.getItem("auth_token");
     if (!token) {
-      window.location.href = "/login";
+      window.location.href = buildLoginHref(`${window.location.pathname}${window.location.search || ""}`);
       return;
     }
 
     const storedSessions = archiveActiveSessions(username);
     setArchives(getArchivedSessions(username, storedSessions));
-    setCurrentSession(createActiveSession(username, [GREETING_MESSAGE]));
-  }, [username]);
+    setCurrentSession(createActiveSession(username, [initialGreetingMessage]));
+    setMessages([initialGreetingMessage]);
+    setInputText(activeGuideContext.prompt || "");
+  }, [initialGreetingMessage, username]);
 
   useEffect(() => {
     if (selectedArchiveId && !archives.some((archive) => archive.id === selectedArchiveId)) {
@@ -205,9 +292,9 @@ export function VisitorApp() {
   }
 
   function resetLiveSession() {
-    const freshSession = createActiveSession(username, [GREETING_MESSAGE]);
+    const freshSession = createActiveSession(username, [initialGreetingMessage]);
     setCurrentSession(freshSession);
-    setMessages([GREETING_MESSAGE]);
+    setMessages([initialGreetingMessage]);
     setSelectedArchiveId(null);
     setEditingSessionId(null);
     setPendingDelete(null);
@@ -330,10 +417,14 @@ export function VisitorApp() {
   }
 
   async function runStableTextMessage(normalizedText) {
-    const formData = new FormData();
-    formData.append("text", normalizedText);
-    formData.append("gps_status", isGpsWeak ? "weak" : "normal");
-    formData.append("client_session_id", currentSessionRef.current.id);
+    const formData = buildTextMessageForm({
+      text: normalizedText,
+      gpsStatus: isGpsWeak ? "weak" : "normal",
+      clientSessionId: currentSessionRef.current.id,
+      scenicSlug: activeGuideContext.scenicSlug,
+      attractionId: activeGuideContext.attractionId,
+      routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+    });
     const result = await sendTextMessage(formData);
 
     setMessages((previous) => {
@@ -398,6 +489,9 @@ export function VisitorApp() {
           ...payload,
           gps_status: isGpsWeak ? "weak" : "normal",
           client_session_id: currentSessionRef.current.id,
+          scenicSlug: activeGuideContext.scenicSlug,
+          attractionId: activeGuideContext.attractionId,
+          routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
         }));
         setStreamNotice("实时链路已连接，正在分段生成文本、语音和数字人画面。");
       };
@@ -550,10 +644,14 @@ export function VisitorApp() {
               { baseMessages: messagesRef.current, appendRecognizedUser: true },
             );
           } catch {
-            const formData = new FormData();
-            formData.append("audio", blob, "voice.webm");
-            formData.append("gps_status", isGpsWeak ? "weak" : "normal");
-            formData.append("client_session_id", currentSessionRef.current.id);
+            const formData = buildAudioMessageForm({
+              audioFile: new File([blob], "voice.webm", { type: "audio/webm" }),
+              gpsStatus: isGpsWeak ? "weak" : "normal",
+              clientSessionId: currentSessionRef.current.id,
+              scenicSlug: activeGuideContext.scenicSlug,
+              attractionId: activeGuideContext.attractionId,
+              routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+            });
             const result = await sendAudioMessage(formData);
             setActiveQuestion(result.user_text || "语音提问");
 
@@ -570,10 +668,14 @@ export function VisitorApp() {
             completeProcessing(result);
           }
         } else {
-          const formData = new FormData();
-          formData.append("audio", blob, "voice.webm");
-          formData.append("gps_status", isGpsWeak ? "weak" : "normal");
-          formData.append("client_session_id", currentSessionRef.current.id);
+          const formData = buildAudioMessageForm({
+            audioFile: new File([blob], "voice.webm", { type: "audio/webm" }),
+            gpsStatus: isGpsWeak ? "weak" : "normal",
+            clientSessionId: currentSessionRef.current.id,
+            scenicSlug: activeGuideContext.scenicSlug,
+            attractionId: activeGuideContext.attractionId,
+            routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+          });
           const result = await sendAudioMessage(formData);
           setActiveQuestion(result.user_text || "语音提问");
 
@@ -646,7 +748,7 @@ export function VisitorApp() {
     const nextValue = !isRealtimeMode;
     setIsRealtimeMode(nextValue);
     localStorage.setItem("realtime_demo_mode", String(nextValue));
-    setStreamNotice(nextValue ? "已切换到实时流式演示模式。" : "已切换到稳定 MP4 回退模式。");
+    setStreamNotice(nextValue ? "已切换到实时生成模式。" : "已切换到稳定 MP4 回退模式。");
   }
 
   function beginRenameSession(session, fallbackTitle) {
@@ -723,9 +825,8 @@ export function VisitorApp() {
     setPendingDelete(null);
   }
 
-  return (
-    <div className="page-shell">
-      <div className={`page-container visitor-layout ${isHistoryOpen ? "visitor-layout--history-open" : ""}`}>
+  const guideShell = (
+    <div className={`visitor-layout ${isHistoryOpen ? "visitor-layout--history-open" : ""} ${productTone ? "visitor-layout--product" : ""}`}>
         <HistoryRail
           isOpen={isHistoryOpen}
           archives={archives}
@@ -749,9 +850,9 @@ export function VisitorApp() {
         />
 
         <section className="panel chat-panel">
-          <div className="panel-header">
-            <div className="panel-header__copy">
-              <div className="eyebrow">{isArchiveView ? "只读历史" : "实时对话"}</div>
+            <div className="panel-header">
+              <div className="panel-header__copy">
+              <div className="eyebrow">{isArchiveView ? "只读历史" : "导览会话"}</div>
               <h1 className="panel-title">{isArchiveView ? selectedArchive.title : currentDisplay.title}</h1>
               <p className="panel-copy">
                 {isArchiveView
@@ -826,6 +927,46 @@ export function VisitorApp() {
             </div>
           </div>
 
+          {!isArchiveView ? (
+            <div className="guide-context-bar">
+              <div className="guide-context-bar__meta">
+                <StatusBadge state="info">{activeGuideContext.scenicName}</StatusBadge>
+                <StatusBadge state="warning">{guideModeLabel}</StatusBadge>
+                {activeGuideContext.attractionName ? <StatusBadge state="success">{activeGuideContext.attractionName}</StatusBadge> : null}
+                {activeGuideContext.routeTitle ? <StatusBadge state="neutral">{activeGuideContext.routeTitle}</StatusBadge> : null}
+              </div>
+              <div className="guide-context-bar__copy">
+                <span>
+                  当前导览语境来自
+                  {activeGuideContext.attractionName
+                    ? `景点「${activeGuideContext.attractionName}」`
+                    : activeGuideContext.routeTitle
+                      ? `路线「${activeGuideContext.routeTitle}」`
+                      : `园区「${activeGuideContext.scenicName}」`}。
+                </span>
+                <div className="guide-context-bar__links">
+                  <a href={buildScenicHref(activeGuideContext.scenicSlug)}>返回园区页</a>
+                  <a href={buildPlannerHref(activeGuideContext.scenicSlug)}>重新规划路线</a>
+                </div>
+              </div>
+              <div className="guide-context-bar__actions">
+                {activeGuideContext.attractionName ? (
+                  <button type="button" className="prompt-chip" onClick={() => submitTextMessage(`${activeGuideContext.attractionName}为什么值得重点讲解？`)}>
+                    讲讲这个景点
+                  </button>
+                ) : null}
+                <button type="button" className="prompt-chip" onClick={() => submitTextMessage("如果我继续按照当前语境游览，下一站建议去哪里？")}>
+                  下一站怎么走
+                </button>
+                {activeGuideContext.routeTitle ? (
+                  <button type="button" className="prompt-chip" onClick={() => submitTextMessage(`请继续讲解这条${activeGuideContext.routeTitle}路线的每个节点。`)}>
+                    继续这条路线
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
           {editingSessionId === managedSession?.id ? (
             <div className="inline-editor">
               <input
@@ -868,8 +1009,8 @@ export function VisitorApp() {
                       aria-expanded={isPresetOpen}
                     >
                       <span>
-                        <strong>预设问题与演示路线</strong>
-                        <small>3 条路线 · 3 个高命中问题</small>
+                        <strong>精选问题与推荐路线</strong>
+                        <small>{demoRoutes.length} 条路线 · {quickPrompts.length} 个快速入口</small>
                       </span>
                       <b>{isPresetOpen ? "收起" : "展开"}</b>
                     </button>
@@ -877,7 +1018,7 @@ export function VisitorApp() {
                     {isPresetOpen ? (
                       <div className="preset-tray__content">
                         <div className="prompt-row prompt-row--routes">
-                          {DEMO_ROUTES.map((route) => (
+                          {demoRoutes.map((route) => (
                             <button
                               type="button"
                               key={route.label}
@@ -898,7 +1039,7 @@ export function VisitorApp() {
                         </div>
 
                         <div className="prompt-row">
-                          {QUICK_PROMPTS.map((prompt) => (
+                          {quickPrompts.map((prompt) => (
                             <button
                               type="button"
                               key={prompt}
@@ -927,7 +1068,9 @@ export function VisitorApp() {
                           handleSendText();
                         }
                       }}
-                      placeholder="输入问题，例如：帮我规划一条包含梵宫和大佛的路线"
+                      placeholder={activeGuideContext.attractionName
+                        ? `围绕${activeGuideContext.attractionName}继续提问`
+                        : `输入问题，例如：帮我规划一条${activeGuideContext.scenicName}路线`}
                       rows={1}
                     />
                     <button
@@ -950,7 +1093,7 @@ export function VisitorApp() {
             <div className="panel-header panel-header--tight media-panel__header">
               <div>
                 <div className="eyebrow">数字人舞台</div>
-                <h2 className="panel-title">视频主位</h2>
+                <h2 className="panel-title">数字人窗口</h2>
               </div>
               <div className="panel-toolbar">
                 {role === "admin" ? <a className="button-secondary compact-link" href="/admin">进入后台</a> : null}
@@ -963,19 +1106,20 @@ export function VisitorApp() {
             <div className="media-status-strip">
               <StatusBadge state="info">{username}</StatusBadge>
               <StatusBadge state={isArchiveView ? "neutral" : "warning"}>
-                {isArchiveView ? "正在回看历史" : "本轮会话实时保存"}
+                {isArchiveView ? "正在回看历史" : "当前会话实时保存"}
               </StatusBadge>
               <StatusBadge state={isGpsWeak ? "warning" : "success"}>
                 {isGpsWeak ? "弱 GPS 模式" : "正常定位"}
               </StatusBadge>
               <StatusBadge state={isRealtimeMode ? "success" : "neutral"}>
-                {isRealtimeMode ? "实时流式" : "稳定 MP4"}
+                {isRealtimeMode ? "实时生成" : "稳定生成"}
               </StatusBadge>
+              <StatusBadge state="info">{activeGuideContext.scenicName}</StatusBadge>
             </div>
 
             <div className="process-panel">
               <div className="process-panel__header">
-                <span>{loading ? "本轮生成进度" : "演示闭环状态"}</span>
+                <span>{loading ? "当前生成进度" : "当前交互状态"}</span>
                 <strong>{activeQuestion || "等待游客提问"}</strong>
               </div>
               <div className="process-steps">
@@ -1041,7 +1185,7 @@ export function VisitorApp() {
                 onClick={toggleRealtimeMode}
                 disabled={loading || isArchiveView}
               >
-                {isRealtimeMode ? "切换稳定 MP4 模式" : "切换实时流式模式"}
+                {isRealtimeMode ? "切换稳定生成模式" : "切换实时生成模式"}
               </button>
 
               <button
@@ -1055,12 +1199,10 @@ export function VisitorApp() {
             </div>
 
             <div className="media-footnote">
-              本地历史按用户名隔离保存，刷新或重新进入前台时会自动开启新一轮会话。
+              本地历史按用户名隔离保存，当前导览保持园区与路线语境，刷新或重新进入导览页时会开启新一轮会话。
             </div>
           </div>
         </section>
-      </div>
-
       {pendingDelete ? (
         <div className="dialog-scrim" role="presentation" onClick={() => setPendingDelete(null)}>
           <div className="dialog-card" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
@@ -1079,6 +1221,18 @@ export function VisitorApp() {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+
+  if (embedded) {
+    return guideShell;
+  }
+
+  return (
+    <div className="page-shell">
+      <div className="page-container">
+        {guideShell}
+      </div>
     </div>
   );
 }

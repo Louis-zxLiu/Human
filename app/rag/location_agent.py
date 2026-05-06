@@ -21,6 +21,12 @@ LANDMARK_HINTS: Dict[str, List[str]] = {
     "五印坛城": ["坛城", "藏式", "转经筒", "白墙金顶"],
     "曼飞龙塔": ["塔", "白塔", "南传"],
     "无尽意斋": ["斋", "休息区", "素斋"],
+    "拈花广场": ["广场", "拈花", "入口", "塔影"],
+    "梵天花海": ["花海", "花田", "大片花", "彩色花海"],
+    "香月花街": ["花街", "主街", "店铺", "街区", "夜市"],
+    "拈花堂": ["拈花堂", "堂", "禅修", "展演"],
+    "五灯湖": ["湖", "五灯湖", "灯影", "水岸", "荷花灯"],
+    "鹿鸣谷": ["鹿鸣谷", "山谷", "静修", "禅院"],
 }
 
 
@@ -40,13 +46,28 @@ class ScenicLocationAgent:
             fact_agent.list_attractions(),
             key=lambda name: (fact_agent.get_attraction_row(name) or {}).get("attraction_id", ""),
         )
+        self.scenic_sequences: Dict[str, List[str]] = {}
+        for attraction_name in self.scenic_order:
+            row = fact_agent.get_attraction_row(attraction_name)
+            if not row:
+                continue
+            scenic_name = str(row.get("scenic_name") or "").strip()
+            self.scenic_sequences.setdefault(scenic_name, []).append(attraction_name)
 
     def is_navigation_query(self, user_query: str) -> bool:
         return any(keyword in user_query for keyword in ("位置", "在哪", "哪里", "怎么走", "路线", "导航", "从这里"))
 
-    def infer_candidates(self, landmark_description: str, top_k: int = 3) -> List[CandidateLocation]:
+    def infer_candidates(
+        self,
+        landmark_description: str,
+        top_k: int = 3,
+        scenic_slug: Optional[str] = None,
+    ) -> List[CandidateLocation]:
+        allowed_attractions = set(self.fact_agent.list_attractions(scenic_slug=scenic_slug))
         candidates: List[CandidateLocation] = []
         for attraction_name, keywords in LANDMARK_HINTS.items():
+            if allowed_attractions and attraction_name not in allowed_attractions:
+                continue
             matched = [keyword for keyword in keywords if keyword in landmark_description]
             if matched:
                 candidates.append(
@@ -60,7 +81,7 @@ class ScenicLocationAgent:
         return candidates[:top_k]
 
     def build_follow_up_prompt(self) -> str:
-        return "当前 GPS 信号较弱，我先不能准确定位您。请描述一下您附近最明显的佛像、桥、广场、宫殿、塔或演出区，我再结合灵山景点资料继续帮您判断。"
+        return "当前 GPS 信号较弱，我先不能准确定位您。请描述一下您附近最明显的佛像、桥、广场、宫殿、塔、花海、湖面或街区，我再结合景点资料继续帮您判断。"
 
     def build_candidate_reply(
         self,
@@ -70,7 +91,7 @@ class ScenicLocationAgent:
         if not candidates:
             return {
                 "gps_state": "need_more_landmarks",
-                "answer": "我还不能根据刚才的描述准确定位。请再补充一个更明显的地标，比如大佛、梵宫、九龙灌浴、寺院、桥或坛城。",
+                "answer": "我还不能根据刚才的描述准确定位。请再补充一个更明显的地标，比如大佛、梵宫、九龙灌浴、花海、五灯湖、寺院、桥或坛城。",
                 "resolved_attraction": None,
                 "candidate_names": [],
             }
@@ -105,18 +126,29 @@ class ScenicLocationAgent:
         return "建议您沿景区主游线继续前行，并留意现场导览牌或工作人员指引。"
 
     def _build_linear_route(self, start: str, end: str) -> str:
-        if start not in self.scenic_order or end not in self.scenic_order:
+        start_row = self.fact_agent.get_attraction_row(start)
+        end_row = self.fact_agent.get_attraction_row(end)
+        if not start_row or not end_row:
             return f"{start} -> {end}"
-        start_index = self.scenic_order.index(start)
-        end_index = self.scenic_order.index(end)
+        if start_row.get("scenic_name") != end_row.get("scenic_name"):
+            return f"{start} -> {end}"
+        scenic_sequence = self.scenic_sequences.get(start_row.get("scenic_name"), [])
+        if start not in scenic_sequence or end not in scenic_sequence:
+            return f"{start} -> {end}"
+        start_index = scenic_sequence.index(start)
+        end_index = scenic_sequence.index(end)
         if start_index <= end_index:
-            segment = self.scenic_order[start_index : end_index + 1]
+            segment = scenic_sequence[start_index : end_index + 1]
         else:
             segment = [start, end]
         return " -> ".join(segment)
 
     def _get_next_stops(self, current_attraction: str, count: int = 2) -> List[str]:
-        if current_attraction not in self.scenic_order:
+        row = self.fact_agent.get_attraction_row(current_attraction)
+        if not row:
             return []
-        index = self.scenic_order.index(current_attraction)
-        return self.scenic_order[index + 1 : index + 1 + count]
+        scenic_sequence = self.scenic_sequences.get(row.get("scenic_name"), [])
+        if current_attraction not in scenic_sequence:
+            return []
+        index = scenic_sequence.index(current_attraction)
+        return scenic_sequence[index + 1 : index + 1 + count]

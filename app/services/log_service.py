@@ -167,6 +167,23 @@ class LogService:
 
         return "；".join(profile_parts) if profile_parts else "暂无明显的偏好特征。"
 
+    def clear_logs(self) -> Dict[str, Any]:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            removed = cursor.execute("SELECT COUNT(*) FROM interaction_logs").fetchone()[0]
+            cursor.execute("DELETE FROM interaction_logs")
+            cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'interaction_logs'")
+            conn.commit()
+        finally:
+            conn.close()
+
+        return {
+            "ok": True,
+            "removed": removed,
+            "db_path": self.db_path,
+        }
+
     def _extract_summary_labels(self, user_query: str) -> Dict[str, str]:
         system_prompt = (
             "Return strict JSON only. Analyze the user query and extract intent_type, sentiment, focus_point. "

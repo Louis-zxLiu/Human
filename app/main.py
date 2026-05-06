@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from app.api import admin, auth, chat, interact, kb
+from app.api import admin, auth, chat, interact, kb, scenic
 from app.core.chroma_telemetry import disable_chroma_telemetry
 from app.core.config import resolve_path, settings
 from app.core.runtime import FRONTEND_DIST_ASSETS, FRONTEND_DIST_INDEX, frontend_build_ready
@@ -81,12 +81,16 @@ def create_app() -> FastAPI:
     soulx_temp_dir = resolve_path("SoulX-FlashHead/data/temp")
     os.makedirs(soulx_temp_dir, exist_ok=True)
     app.mount("/static/temp", StaticFiles(directory=soulx_temp_dir), name="static_temp")
+    scenic_media_dir = resolve_path("app/static/scenic_media")
+    os.makedirs(scenic_media_dir, exist_ok=True)
+    app.mount("/media", StaticFiles(directory=scenic_media_dir), name="scenic_media")
 
     if FRONTEND_DIST_ASSETS.exists():
         app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_ASSETS), name="frontend_assets")
 
     app.include_router(chat.router, tags=["Scenic Chat API"])
     app.include_router(interact.router, prefix="/api", tags=["Multimodal Interaction"])
+    app.include_router(scenic.router, prefix="/api/v1/scenic", tags=["Scenic Product APIs"])
     app.include_router(kb.router, prefix="/api/v1/kb", tags=["Knowledge Base Management"])
     app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin Dashboard"])
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
@@ -119,6 +123,12 @@ def create_app() -> FastAPI:
             "frontend_built": frontend_build_ready(),
             "llm_model": settings.LLM_MODEL_NAME,
         }
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_routes(full_path: str):
+        if full_path.startswith(("api/", "assets/", "media/", "static/", "health", "redoc")):
+            return HTMLResponse(content="Not Found", status_code=404)
+        return serve_frontend_shell()
 
     return app
 

@@ -52,6 +52,12 @@ def get_location_agent() -> ScenicLocationAgent:
     return _location_agent_cache
 
 
+def clear_runtime_cache() -> None:
+    global _pipeline_cache, _location_agent_cache
+    _pipeline_cache = None
+    _location_agent_cache = None
+
+
 def clean_markdown_for_tts(text: str) -> str:
     import markdown
     from bs4 import BeautifulSoup
@@ -134,6 +140,8 @@ def handle_weak_gps_flow(
     gps_status: str,
     session_key: str,
     user_profile: Optional[str],
+    scenic_slug: Optional[str] = None,
+    attraction_id: Optional[str] = None,
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
     if gps_status != "weak":
         pop_weak_gps_context(session_key)
@@ -144,7 +152,7 @@ def handle_weak_gps_flow(
     pending = WEAK_GPS_SESSIONS.get(session_key)
 
     if pending:
-        candidates = location_agent.infer_candidates(user_text)
+        candidates = location_agent.infer_candidates(user_text, scenic_slug=pending.get("scenic_slug"))
         gps_result = location_agent.build_candidate_reply(candidates, pending["original_query"])
         base_metadata = {
             "query": pending["original_query"],
@@ -170,6 +178,8 @@ def handle_weak_gps_flow(
                 pending["original_query"],
                 user_profile=user_profile,
                 start_attraction=current_attraction,
+                scenic_slug=pending.get("scenic_slug"),
+                attraction_id=pending.get("attraction_id"),
             )
             recommendation_result["agent_type"] = "weak_gps_recommendation"
             recommendation_result["matched_attraction"] = current_attraction
@@ -192,6 +202,8 @@ def handle_weak_gps_flow(
             "original_query": user_text,
             "original_intent": original_intent,
             "created_at": time.time(),
+            "scenic_slug": scenic_slug,
+            "attraction_id": attraction_id,
         },
     )
     answer = location_agent.build_follow_up_prompt()
@@ -213,12 +225,26 @@ def run_answer_pipeline(
     gps_status: str,
     session_key: str,
     user_profile: Optional[str] = None,
+    scenic_slug: Optional[str] = None,
+    attraction_id: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
-    gps_result = handle_weak_gps_flow(user_text, gps_status, session_key, user_profile)
+    gps_result = handle_weak_gps_flow(
+        user_text,
+        gps_status,
+        session_key,
+        user_profile,
+        scenic_slug=scenic_slug,
+        attraction_id=attraction_id,
+    )
     if gps_result:
         return gps_result
 
-    result = get_pipeline().process_query(user_text, user_profile=user_profile)
+    result = get_pipeline().process_query(
+        user_text,
+        user_profile=user_profile,
+        scenic_slug=scenic_slug,
+        attraction_id=attraction_id,
+    )
     result["gps_state"] = "normal" if gps_status != "weak" else "weak_without_followup"
     result["gps_candidates"] = []
     return result["answer"], result
@@ -229,6 +255,9 @@ def generate_avatar_response(
     username: str = "anonymous",
     gps_status: str = "normal",
     client_session_id: Optional[str] = None,
+    scenic_slug: Optional[str] = None,
+    attraction_id: Optional[str] = None,
+    route_label: Optional[str] = None,
 ) -> Dict[str, Any]:
     start_time = time.time()
     session_key = get_session_key(username, client_session_id)
@@ -257,6 +286,8 @@ def generate_avatar_response(
         gps_status,
         session_key=session_key,
         user_profile=user_profile,
+        scenic_slug=scenic_slug,
+        attraction_id=attraction_id,
     )
 
     request_id = str(uuid.uuid4())
@@ -313,6 +344,9 @@ def generate_avatar_response(
             "recommendation": pipeline_result.get("recommendation"),
             "gps_state": pipeline_result.get("gps_state"),
             "gps_candidates": pipeline_result.get("gps_candidates", []),
+            "scenic_slug": scenic_slug,
+            "attraction_id": attraction_id,
+            "route_label": route_label,
         },
     }
 
@@ -339,6 +373,9 @@ async def interact_stream_ws(websocket: WebSocket):
             is_audio_input = False
             gps_status = payload.get("gps_status", "normal")
             client_session_id = payload.get("client_session_id")
+            scenic_slug = payload.get("scenicSlug")
+            attraction_id = payload.get("attractionId")
+            route_label = payload.get("routeLabel")
             session_key = get_session_key("anonymous", client_session_id, fallback=ws_session_key)
 
             if "text" in payload:
@@ -371,6 +408,8 @@ async def interact_stream_ws(websocket: WebSocket):
                 gps_status,
                 session_key=session_key,
                 user_profile=None,
+                scenic_slug=scenic_slug,
+                attraction_id=attraction_id,
             )
 
             for char in assistant_text:
@@ -390,6 +429,9 @@ async def interact_stream_ws(websocket: WebSocket):
                 "recommendation": pipeline_result.get("recommendation"),
                 "gps_state": pipeline_result.get("gps_state"),
                 "gps_candidates": pipeline_result.get("gps_candidates", []),
+                "scenic_slug": scenic_slug,
+                "attraction_id": attraction_id,
+                "route_label": route_label,
             }
             await websocket.send_json({"type": "done", "full_text": assistant_text, "rag_metadata": rag_metadata})
 
@@ -404,6 +446,9 @@ async def interact_stream_ws(websocket: WebSocket):
                         "matched_attraction": pipeline_result.get("matched_attraction"),
                         "recommendation_label": pipeline_result.get("recommendation_label"),
                         "response_kind": pipeline_result.get("response_kind"),
+                        "scenic_slug": scenic_slug,
+                        "attraction_id": attraction_id,
+                        "route_label": route_label,
                     },
                 )
             except Exception as exc:
@@ -426,6 +471,9 @@ async def interact_audio(
     avatar_image: Optional[UploadFile] = File(None),
     gps_status: str = Form("normal"),
     client_session_id: Optional[str] = Form(None),
+    scenicSlug: Optional[str] = Form(None),
+    attractionId: Optional[str] = Form(None),
+    routeLabel: Optional[str] = Form(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     api_start_time = time.time()
@@ -452,7 +500,15 @@ async def interact_audio(
     except Exception:
         user_text = "（语音识别失败）"
 
-    result = generate_avatar_response(user_text, username, gps_status, client_session_id=client_session_id)
+    result = generate_avatar_response(
+        user_text,
+        username,
+        gps_status,
+        client_session_id=client_session_id,
+        scenic_slug=scenicSlug,
+        attraction_id=attractionId,
+        route_label=routeLabel,
+    )
 
     total_latency = time.time() - api_start_time
     background_tasks.add_task(
@@ -466,6 +522,9 @@ async def interact_audio(
             "matched_attraction": result.get("rag_metadata", {}).get("matched_attraction"),
             "recommendation_label": result.get("rag_metadata", {}).get("recommendation_label"),
             "response_kind": result.get("rag_metadata", {}).get("response_kind"),
+            "scenic_slug": scenicSlug,
+            "attraction_id": attractionId,
+            "route_label": routeLabel,
         },
     )
 
@@ -479,6 +538,9 @@ async def interact_text(
     avatar_image: Optional[UploadFile] = File(None),
     gps_status: str = Form("normal"),
     client_session_id: Optional[str] = Form(None),
+    scenicSlug: Optional[str] = Form(None),
+    attractionId: Optional[str] = Form(None),
+    routeLabel: Optional[str] = Form(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     api_start_time = time.time()
@@ -492,7 +554,15 @@ async def interact_text(
         avatar_engine = get_avatar_engine()
         avatar_engine.update_base_image(image_path)
 
-    result = generate_avatar_response(text, username, gps_status, client_session_id=client_session_id)
+    result = generate_avatar_response(
+        text,
+        username,
+        gps_status,
+        client_session_id=client_session_id,
+        scenic_slug=scenicSlug,
+        attraction_id=attractionId,
+        route_label=routeLabel,
+    )
 
     total_latency = time.time() - api_start_time
     background_tasks.add_task(
@@ -506,6 +576,9 @@ async def interact_text(
             "matched_attraction": result.get("rag_metadata", {}).get("matched_attraction"),
             "recommendation_label": result.get("rag_metadata", {}).get("recommendation_label"),
             "response_kind": result.get("rag_metadata", {}).get("response_kind"),
+            "scenic_slug": scenicSlug,
+            "attraction_id": attractionId,
+            "route_label": routeLabel,
         },
     )
 

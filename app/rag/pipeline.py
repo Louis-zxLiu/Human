@@ -22,6 +22,8 @@ class ScenicRAGPipeline:
         user_query: str,
         user_profile: Optional[str] = None,
         start_attraction: Optional[str] = None,
+        scenic_slug: Optional[str] = None,
+        attraction_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         intent = get_query_intent(user_query)
 
@@ -43,6 +45,7 @@ class ScenicRAGPipeline:
                 user_query,
                 start_attraction=start_attraction,
                 user_profile=user_profile,
+                scenic_slug=scenic_slug,
             )
             return {
                 "query": user_query,
@@ -55,7 +58,12 @@ class ScenicRAGPipeline:
                 "recommendation": result.get("recommendation"),
             }
 
-        result = self.fact_agent.answer(user_query)
+        result = self.fact_agent.answer(
+            user_query,
+            scenic_slug=scenic_slug,
+            attraction_id=attraction_id,
+            attraction_name=start_attraction,
+        )
         return {
             "query": user_query,
             "intent": intent,

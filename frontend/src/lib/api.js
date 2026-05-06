@@ -11,6 +11,17 @@ async function request(url, options = {}) {
   return payload;
 }
 
+function formDataWithContext({ text = "", gpsStatus = "normal", clientSessionId = "", scenicSlug = "", attractionId = "", routeLabel = "" } = {}) {
+  const formData = new FormData();
+  if (text) formData.append("text", text);
+  formData.append("gps_status", gpsStatus);
+  if (clientSessionId) formData.append("client_session_id", clientSessionId);
+  if (scenicSlug) formData.append("scenicSlug", scenicSlug);
+  if (attractionId) formData.append("attractionId", attractionId);
+  if (routeLabel) formData.append("routeLabel", routeLabel);
+  return formData;
+}
+
 export function getAuthToken() {
   return localStorage.getItem("auth_token") || "";
 }
@@ -64,6 +75,52 @@ export function getInteractStreamUrl() {
   return `${protocol}//${window.location.host}/api/v1/interact/stream`;
 }
 
+export function buildTextMessageForm(payload) {
+  return formDataWithContext(payload);
+}
+
+export function buildAudioMessageForm({
+  audioFile,
+  gpsStatus = "normal",
+  clientSessionId = "",
+  scenicSlug = "",
+  attractionId = "",
+  routeLabel = "",
+} = {}) {
+  const formData = new FormData();
+  formData.append("audio", audioFile);
+  formData.append("gps_status", gpsStatus);
+  if (clientSessionId) formData.append("client_session_id", clientSessionId);
+  if (scenicSlug) formData.append("scenicSlug", scenicSlug);
+  if (attractionId) formData.append("attractionId", attractionId);
+  if (routeLabel) formData.append("routeLabel", routeLabel);
+  return formData;
+}
+
+export function fetchScenicAreas() {
+  return request("/api/v1/scenic/areas");
+}
+
+export function fetchScenicArea(scenicSlug) {
+  return request(`/api/v1/scenic/areas/${encodeURIComponent(scenicSlug)}`);
+}
+
+export function fetchScenicAttractions(scenicSlug) {
+  return request(`/api/v1/scenic/areas/${encodeURIComponent(scenicSlug)}/attractions`);
+}
+
+export function fetchScenicAttraction(attractionId) {
+  return request(`/api/v1/scenic/attractions/${encodeURIComponent(attractionId)}`);
+}
+
+export function planScenicRoute(payload) {
+  return request("/api/v1/scenic/planner", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function fetchDashboard() {
   return request("/api/v1/admin/dashboard", { headers: authHeaders() });
 }
@@ -74,6 +131,13 @@ export function fetchVoices() {
 
 export function fetchAvatarRuntime() {
   return request("/api/v1/admin/avatar/runtime", { headers: authHeaders() });
+}
+
+export function refreshRuntimeCache() {
+  return request("/api/v1/admin/cache/refresh", {
+    method: "POST",
+    headers: authHeaders(),
+  });
 }
 
 export function updateAvatarRuntime(profileId) {

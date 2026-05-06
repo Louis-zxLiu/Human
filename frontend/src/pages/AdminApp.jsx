@@ -3,6 +3,8 @@ import React, { useEffect, useState } from "react";
 import { DonutChart } from "../components/DonutChart";
 import { InsightBarList } from "../components/InsightBarList";
 import { MetricCard } from "../components/MetricCard";
+import { ProductFooter } from "../components/ProductFooter";
+import { ProductHeader } from "../components/ProductHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import { TrendChart } from "../components/TrendChart";
 import {
@@ -11,6 +13,7 @@ import {
   fetchVoices,
   logout,
   previewVoice,
+  refreshRuntimeCache,
   updateAvatarRuntime,
   updateVoice,
   uploadAvatar,
@@ -71,6 +74,7 @@ export function AdminApp() {
   const [feedback, setFeedback] = useState(null);
   const [busy, setBusy] = useState({
     refresh: false,
+    cacheRefresh: false,
     saveVoice: false,
     previewVoice: false,
     uploadAvatar: false,
@@ -191,6 +195,25 @@ export function AdminApp() {
     }
   }
 
+  async function handleCacheRefresh() {
+    setBusy((previous) => ({ ...previous, cacheRefresh: true }));
+    setFeedback(null);
+
+    try {
+      const result = await refreshRuntimeCache();
+      const removedLogs = Number(result.removed_logs || 0);
+      setFeedback({
+        type: "success",
+        message: `${result.message || "后台状态已清空。"} 已移除 ${removedLogs} 条交互记录。`,
+      });
+      await refreshDashboard();
+    } catch (err) {
+      setFeedback({ type: "danger", message: err.message });
+    } finally {
+      setBusy((previous) => ({ ...previous, cacheRefresh: false }));
+    }
+  }
+
   async function handleLogout() {
     try {
       await logout();
@@ -204,13 +227,15 @@ export function AdminApp() {
 
   if (loading && !data) {
     return (
-      <div className="page-shell">
+      <div className="product-page admin-product-page">
         <div className="page-container page-stack">
+          <ProductHeader active="admin" />
           <section className="panel admin-state">
             <div className="eyebrow">管理后台</div>
             <h1 className="panel-title">正在加载运营驾驶舱...</h1>
             <p className="panel-copy">正在同步互动数据、音色配置和数字人后台状态。</p>
           </section>
+          <ProductFooter />
         </div>
       </div>
     );
@@ -218,14 +243,16 @@ export function AdminApp() {
 
   if (!data) {
     return (
-      <div className="page-shell">
+      <div className="product-page admin-product-page">
         <div className="page-container page-stack">
+          <ProductHeader active="admin" />
           <section className="panel admin-state">
             <div className="eyebrow">管理后台</div>
             <h1 className="panel-title">后台暂时不可用</h1>
             <p className="panel-copy">{error || "暂时无法加载后台数据。"}</p>
             <button type="button" className="button-primary" onClick={bootstrap}>重试加载</button>
           </section>
+          <ProductFooter />
         </div>
       </div>
     );
@@ -249,14 +276,16 @@ export function AdminApp() {
   const operationRecommendations = data.operation_recommendations || [];
 
   return (
-    <div className="page-shell">
+    <div className="product-page admin-product-page">
       <div className="page-container admin-layout">
-        <section className="panel panel-dark admin-hero">
+        <ProductHeader active="admin" />
+
+        <section className="panel admin-hero">
           <div className="admin-hero__copy">
-            <div className="eyebrow">灵山胜境管理后台</div>
-            <h1 className="hero-title">把游客互动趋势、知识库健康度和数字人配置放进一张更好判断的深色大屏里。</h1>
+            <div className="eyebrow">运营后台</div>
+            <h1 className="hero-title">把游客互动趋势、知识库健康度和数字人配置放进一个更适合持续运营的工作界面里。</h1>
             <p className="hero-copy">
-              这块大屏聚焦最值得运营关注的几类信号：游客到底在问什么、推荐是否真正发生、哪些问题最容易失败，以及当前知识库和数字人引擎是否健康。
+              后台持续聚焦最值得运营关注的几类信号：游客到底在问什么、推荐是否真正发生、哪些问题最容易失败，以及当前知识库和数字人引擎是否健康。
             </p>
           </div>
 
@@ -272,8 +301,11 @@ export function AdminApp() {
               <button type="button" className="button-primary" onClick={refreshDashboard} disabled={busy.refresh}>
                 {busy.refresh ? "刷新中..." : "刷新数据"}
               </button>
+              <button type="button" className="button-secondary" onClick={handleCacheRefresh} disabled={busy.cacheRefresh}>
+                {busy.cacheRefresh ? "处理中..." : "重置后台状态"}
+              </button>
               <button type="button" className="button-secondary" onClick={() => (window.location.href = "/")}>
-                返回前台
+                返回首页
               </button>
               <button type="button" className="text-button danger-text" onClick={handleLogout}>
                 退出登录
@@ -345,7 +377,7 @@ export function AdminApp() {
             <div className="panel-header panel-header--tight">
               <div>
                 <div className="eyebrow">评测与健康度</div>
-                <h2 className="panel-title">提交前最关键的稳定性信号</h2>
+                <h2 className="panel-title">当前最关键的稳定性信号</h2>
               </div>
             </div>
 
@@ -372,7 +404,7 @@ export function AdminApp() {
               </div>
               <div className="note-card">
                 <strong>评测集生成</strong>
-                <span>固定种子生成 1200 题主评测集，包含 900 题 dev 与 300 题 holdout，便于提交前复现检查。</span>
+                <span>固定种子生成 1200 题主评测集，包含 900 题 dev 与 300 题 holdout，便于持续复现检查。</span>
                 <code>{evalStatus.generate_command || rebuildCommands.generate_unified_eval}</code>
               </div>
               <div className="note-card">
@@ -428,9 +460,13 @@ export function AdminApp() {
                 </span>
               </div>
               <div className="note-card">
-                <strong>演示数据预热</strong>
-                <span>录屏或答辩前可写入一组高质量演示日志，避免后台图表为空。</span>
+                <strong>后台数据初始化</strong>
+                <span>可写入一组高质量初始化日志，避免首次进入后台时图表为空。</span>
                 <code>{rebuildCommands.demo_seed}</code>
+              </div>
+              <div className="note-card">
+                <strong>后台状态重置</strong>
+                <span>当你希望后台回到未使用状态时，可以在这里清空交互记录，并同步重置后端运行时缓存。</span>
               </div>
             </div>
           </article>
@@ -594,6 +630,8 @@ export function AdminApp() {
             </div>
           </article>
         </section>
+
+        <ProductFooter />
       </div>
     </div>
   );

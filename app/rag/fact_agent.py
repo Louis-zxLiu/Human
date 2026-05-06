@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import resolve_path
+from app.core.scenic_catalog import infer_scenic_slug_from_text, list_scenic_catalog, scenic_name_from_slug, scenic_slug_from_name
 from app.rag.chroma_agent import ChromaStaticAgent
 
 
@@ -118,6 +119,18 @@ GENERAL_DOCX_FACTS: List[Tuple[Tuple[str, ...], str]] = [
         ("天下第一掌",),
         "佛手广场的“天下第一掌”是灵山大佛右手复制，高11.7米、宽5.5米，游客摸掌祈福，寓意“沾福气、保平安”。",
     ),
+    (
+        ("拈花湾", "夜游"),
+        "拈花湾适合夜游，是因为它的主体验并不依赖单一高强度项目，而是通过香月花街、五灯湖、水岸灯影和禅意演艺，把慢行、拍照、餐饮和夜间氛围结合成一条完整体验链路。",
+    ),
+    (
+        ("拈花湾", "慢游"),
+        "拈花湾更适合慢游，是因为街区尺度宜人、步行压力较低，游客可以在香月花街、五灯湖、鹿鸣谷之间自然停留，把禅意空间、夜景和休闲消费串起来体验。",
+    ),
+    (
+        ("五灯湖", "看点"),
+        "五灯湖的核心看点在于水岸灯影、夜间氛围和节庆演艺承载能力，它既适合拍照，也适合作为拈花湾夜游路线中的情绪高点。",
+    ),
 ]
 
 
@@ -141,12 +154,36 @@ class ScenicFactAgent:
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or resolve_path("data/processed/tourist_behavior.db")
         self._rows = self._load_rows()
+        self._rows_by_id = {row.get("attraction_id"): row for row in self._rows.values() if row.get("attraction_id")}
+        self._rows_by_scenic: Dict[str, List[Dict[str, Any]]] = {}
+        for row in self._rows.values():
+            scenic_name = str(row.get("scenic_name") or "").strip()
+            self._rows_by_scenic.setdefault(scenic_name, []).append(row)
         self._rag_agent: Optional[ChromaStaticAgent] = None
         self._attraction_aliases = self._build_aliases()
         self._docx_evidence = self._load_docx_evidence()
 
-    def answer(self, user_query: str) -> Dict[str, Any]:
-        attraction = self.match_attraction_name(user_query)
+    def answer(
+        self,
+        user_query: str,
+        scenic_slug: Optional[str] = None,
+        attraction_id: Optional[str] = None,
+        attraction_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        context_row = None
+        if attraction_id:
+            context_row = self.get_attraction_row(attraction_id=attraction_id)
+        if context_row is None and attraction_name:
+            context_row = self.get_attraction_row(attraction_name)
+
+        if context_row and not scenic_slug:
+            scenic_slug = scenic_slug_from_name(context_row.get("scenic_name"))
+        if not scenic_slug:
+            scenic_slug = infer_scenic_slug_from_text(user_query)
+
+        attraction = self.match_attraction_name(user_query, scenic_slug=scenic_slug)
+        if not attraction and context_row:
+            attraction = context_row["attraction_name"]
         if self._has_source_conflict(user_query):
             return self._result(
                 "抱歉，这个问题混用了不合适的数据源：游客行为数据只能用于统计分析，DOCX 景区资料只能用于景点事实、历史文化和讲解内容。我不能把一种数据源当作另一种事实依据来回答。",
@@ -168,8 +205,8 @@ class ScenicFactAgent:
         question_query = user_query.replace(attraction, "") if attraction else user_query
         question_type = self.detect_question_type(question_query or user_query)
 
-        if attraction and attraction != "灵山胜境":
-            row = self._rows.get(attraction)
+        if attraction:
+            row = self.get_attraction_row(attraction)
             if row:
                 if question_type == "history":
                     text = self._format_history_answer(row)
@@ -185,27 +222,41 @@ class ScenicFactAgent:
                 if overview:
                     return self._result(overview, attraction, "overview")
 
-        rag_answer = self._query_rag(user_query)
+        rag_answer = self._query_rag(user_query, scenic_slug=scenic_slug)
         if rag_answer and not self._looks_like_missing_answer(rag_answer):
             return self._result(rag_answer, attraction, "rag_general")
 
-        follow_up = self._build_refusal_follow_up(question_type, attraction)
+        follow_up = self._build_refusal_follow_up(question_type, attraction, scenic_slug=scenic_slug)
         return self._result(follow_up, attraction, "refused")
 
-    def list_attractions(self) -> List[str]:
-        return list(self._rows.keys())
+    def list_attractions(self, scenic_slug: Optional[str] = None) -> List[str]:
+        if not scenic_slug:
+            return list(self._rows.keys())
+        scenic_name = scenic_name_from_slug(scenic_slug)
+        if not scenic_name:
+            return list(self._rows.keys())
+        return [row["attraction_name"] for row in self._rows_by_scenic.get(scenic_name, [])]
 
-    def get_attraction_row(self, attraction_name: str) -> Optional[Dict[str, Any]]:
+    def get_attraction_row(
+        self,
+        attraction_name: Optional[str] = None,
+        attraction_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if attraction_id:
+            return self._rows_by_id.get(attraction_id)
+        if not attraction_name:
+            return None
         return self._rows.get(attraction_name)
 
-    def match_attraction_name(self, user_query: str) -> Optional[str]:
+    def match_attraction_name(self, user_query: str, scenic_slug: Optional[str] = None) -> Optional[str]:
         query = user_query.strip()
-        for attraction_name in self._rows:
+        attraction_names = self.list_attractions(scenic_slug=scenic_slug)
+        for attraction_name in attraction_names:
             if attraction_name in query:
                 return attraction_name
 
         for alias, attraction_name in self._attraction_aliases.items():
-            if alias in query:
+            if alias in query and (not scenic_slug or attraction_name in attraction_names):
                 return attraction_name
         return None
 
@@ -321,7 +372,7 @@ class ScenicFactAgent:
         return row
 
     def _build_aliases(self) -> Dict[str, str]:
-        return {
+        aliases = {
             "梵宫": "灵山梵宫",
             "大佛": "灵山大佛",
             "九龙": "九龙灌浴",
@@ -339,8 +390,17 @@ class ScenicFactAgent:
             "降魔浮雕": "降魔浮雕",
             "曼飞龙塔": "曼飞龙塔",
             "无尽意斋": "无尽意斋",
-            "灵山胜境": "灵山胜境",
+            "花海": "梵天花海",
+            "花街": "香月花街",
+            "拈花堂": "拈花堂",
+            "五灯湖": "五灯湖",
+            "鹿鸣谷": "鹿鸣谷",
+            "拈花广场": "拈花广场",
         }
+        for scenic in list_scenic_catalog():
+            for alias in scenic.get("aliases") or []:
+                aliases.setdefault(alias, scenic["scenic_name"])
+        return aliases
 
     def _format_field_answer(self, row: Dict[str, Any], field: str) -> Optional[str]:
         value = str(row.get(field) or "").strip()
@@ -392,17 +452,27 @@ class ScenicFactAgent:
             return None
         return f"{attraction}的信息如下。{' '.join(parts)}"
 
-    def _query_rag(self, user_query: str) -> str:
+    def _query_rag(self, user_query: str, scenic_slug: Optional[str] = None) -> str:
         if self._rag_agent is None:
             self._rag_agent = ChromaStaticAgent()
-        return self._rag_agent.query(user_query)
+        query = user_query
+        scenic_name = scenic_name_from_slug(scenic_slug)
+        if scenic_name and scenic_name not in query:
+            query = f"{scenic_name} {query}"
+        return self._rag_agent.query(query)
 
-    def _build_refusal_follow_up(self, question_type: str, attraction: Optional[str]) -> str:
+    def _build_refusal_follow_up(
+        self,
+        question_type: str,
+        attraction: Optional[str],
+        scenic_slug: Optional[str] = None,
+    ) -> str:
+        scenic_name = scenic_name_from_slug(scenic_slug) or "景区"
         if attraction:
-            return f"抱歉，我暂时没有在灵山胜境资料中找到关于{attraction}这部分内容的充分证据。您可以换一种问法，或者改问它的位置、开放信息、看点或文化内涵。"
+            return f"抱歉，我暂时没有在{scenic_name}资料中找到关于{attraction}这部分内容的充分证据。您可以换一种问法，或者改问它的位置、开放信息、看点或文化内涵。"
         if question_type == "location":
-            return "抱歉，我暂时无法直接判断您问的是哪一个灵山景点。您可以补充景点名称，或者描述一下附近最明显的建筑、佛像、桥或广场。"
-        return "抱歉，我暂时没有在灵山胜境知识资料中找到足够证据来回答这个问题。您可以补充具体景点名称，或者改问位置、开放信息、历史背景、亮点和游览建议。"
+            return f"抱歉，我暂时无法直接判断您问的是哪一个{scenic_name}景点。您可以补充景点名称，或者描述一下附近最明显的建筑、佛像、桥、湖面或街区。"
+        return f"抱歉，我暂时没有在{scenic_name}知识资料中找到足够证据来回答这个问题。您可以补充具体景点名称，或者改问位置、开放信息、历史背景、亮点和游览建议。"
 
     def _looks_like_missing_answer(self, answer: str) -> bool:
         if not answer:
