@@ -21,6 +21,7 @@ from app.rag.router import get_query_intent
 from app.services.asr_tts import get_asr_service, get_tts_service
 from app.services.avatar_engine import get_avatar_engine
 from app.services.log_service import log_service
+from app.services.preset_route_cache import preset_route_cache
 
 router = APIRouter()
 
@@ -77,6 +78,9 @@ def _build_rag_metadata(
         "scenic_slug": scenic_slug,
         "attraction_id": attraction_id,
         "route_label": route_label,
+        "preset_route_key": pipeline_result.get("preset_route_key"),
+        "preset_route_title": pipeline_result.get("preset_route_title"),
+        "cache_status": pipeline_result.get("cache_status"),
         "plan": pipeline_result.get("plan"),
         "evidence": pipeline_result.get("evidence", []),
         "refusal": pipeline_result.get("refusal"),
@@ -288,7 +292,7 @@ def run_answer_pipeline(
     return result["answer"], result
 
 
-def generate_avatar_response(
+def _generate_fresh_avatar_response(
     user_text: str,
     username: str = "anonymous",
     gps_status: str = "normal",
@@ -382,6 +386,95 @@ def generate_avatar_response(
     }
 
 
+def _apply_preset_route_metadata(
+    result: Dict[str, Any],
+    preset_route: Dict[str, str],
+    cache_status: str,
+) -> Dict[str, Any]:
+    rag_metadata = dict(result.get("rag_metadata") or {})
+    rag_metadata["preset_route_key"] = preset_route["key"]
+    rag_metadata["preset_route_title"] = preset_route["title"]
+    rag_metadata["cache_status"] = cache_status
+    result["rag_metadata"] = rag_metadata
+    return result
+
+
+def generate_avatar_response(
+    user_text: str,
+    username: str = "anonymous",
+    gps_status: str = "normal",
+    client_session_id: Optional[str] = None,
+    scenic_slug: Optional[str] = None,
+    attraction_id: Optional[str] = None,
+    route_label: Optional[str] = None,
+    preset_route_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    preset_route = preset_route_cache.resolve_route(
+        user_text,
+        scenic_slug=scenic_slug,
+        preset_route_key=preset_route_key,
+    )
+    if not preset_route:
+        return _generate_fresh_avatar_response(
+            user_text,
+            username,
+            gps_status,
+            client_session_id=client_session_id,
+            scenic_slug=scenic_slug,
+            attraction_id=attraction_id,
+            route_label=route_label,
+        )
+
+    payload = preset_route_cache.get_or_create_payload(
+        preset_route,
+        lambda route: _generate_fresh_avatar_response(
+            route["prompt"],
+            username,
+            gps_status,
+            client_session_id=client_session_id,
+            scenic_slug=route["scenic_slug"],
+            attraction_id=attraction_id,
+            route_label=route_label or route["title"],
+        ),
+    )
+    result = {
+        "user_text": user_text,
+        "assistant_text": payload.get("assistant_text", ""),
+        "audio_url": payload.get("audio_url"),
+        "video_stream_url": payload.get("video_stream_url"),
+        "rag_metadata": payload.get("rag_metadata") or {},
+    }
+    cache_status = "hit" if payload.get("cache_hit") else "generated"
+    return _apply_preset_route_metadata(result, preset_route, cache_status)
+
+
+def refresh_preset_route_cache() -> Dict[str, int]:
+    refreshed = 0
+    failed = 0
+    for route in preset_route_cache.list_routes():
+        try:
+            preset_route_cache.get_or_create_payload(
+                route,
+                lambda current_route: _generate_fresh_avatar_response(
+                    current_route["prompt"],
+                    username="system",
+                    gps_status="normal",
+                    scenic_slug=current_route["scenic_slug"],
+                    route_label=current_route["title"],
+                ),
+            )
+            refreshed += 1
+        except Exception as exc:
+            failed += 1
+            print(f"[PresetRouteCache] refresh failed for {route['key']}: {exc}")
+    return {"refreshed": refreshed, "failed": failed}
+
+
+def refresh_preset_route_cache_in_background() -> None:
+    thread = threading.Thread(target=refresh_preset_route_cache, daemon=True)
+    thread.start()
+
+
 @router.websocket("/v1/interact/stream")
 async def interact_stream_ws(websocket: WebSocket):
     await websocket.accept()
@@ -407,6 +500,7 @@ async def interact_stream_ws(websocket: WebSocket):
             scenic_slug = payload.get("scenicSlug")
             attraction_id = payload.get("attractionId")
             route_label = payload.get("routeLabel")
+            preset_route_key = payload.get("presetRouteKey")
             session_key = get_session_key("anonymous", client_session_id, fallback=ws_session_key)
 
             if "text" in payload:
@@ -442,6 +536,16 @@ async def interact_stream_ws(websocket: WebSocket):
                 scenic_slug=scenic_slug,
                 attraction_id=attraction_id,
             )
+
+            preset_route = preset_route_cache.resolve_route(
+                user_text,
+                scenic_slug=scenic_slug,
+                preset_route_key=preset_route_key,
+            )
+            if preset_route:
+                pipeline_result["preset_route_key"] = preset_route["key"]
+                pipeline_result["preset_route_title"] = preset_route["title"]
+                pipeline_result["cache_status"] = "stream_bypass"
 
             for char in assistant_text:
                 await websocket.send_json({"type": "text_token", "text": char})
@@ -495,6 +599,7 @@ async def interact_audio(
     scenicSlug: Optional[str] = Form(None),
     attractionId: Optional[str] = Form(None),
     routeLabel: Optional[str] = Form(None),
+    presetRouteKey: Optional[str] = Form(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     api_start_time = time.time()
@@ -529,6 +634,7 @@ async def interact_audio(
         scenic_slug=scenicSlug,
         attraction_id=attractionId,
         route_label=routeLabel,
+        preset_route_key=presetRouteKey,
     )
 
     total_latency = time.time() - api_start_time
@@ -554,6 +660,7 @@ async def interact_text(
     scenicSlug: Optional[str] = Form(None),
     attractionId: Optional[str] = Form(None),
     routeLabel: Optional[str] = Form(None),
+    presetRouteKey: Optional[str] = Form(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     api_start_time = time.time()
@@ -575,6 +682,7 @@ async def interact_text(
         scenic_slug=scenicSlug,
         attraction_id=attractionId,
         route_label=routeLabel,
+        preset_route_key=presetRouteKey,
     )
 
     total_latency = time.time() - api_start_time

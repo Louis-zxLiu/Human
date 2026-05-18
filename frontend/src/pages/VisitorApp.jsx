@@ -122,6 +122,24 @@ function guidePromptsForContext(guideContext = {}) {
   return { quickPrompts: LINGSHAN_QUICK_PROMPTS, demoRoutes: LINGSHAN_DEMO_ROUTES };
 }
 
+const PRESET_ROUTE_KEYS_BY_SCENIC = {
+  "lingshan-shengjing": ["lingshan-history", "lingshan-family", "lingshan-nature"],
+  nianhuawan: ["nianhuawan-night", "nianhuawan-culture", "nianhuawan-family"],
+};
+
+function findPresetRouteMatch(text, scenicSlug) {
+  const normalizedText = String(text || "").trim();
+  if (!normalizedText) return null;
+
+  const scenicKey = scenicSlug === "nianhuawan" ? "nianhuawan" : "lingshan-shengjing";
+  const scenicRoutes = scenicKey === "nianhuawan" ? NIANHUAWAN_DEMO_ROUTES : LINGSHAN_DEMO_ROUTES;
+  const routeKeys = PRESET_ROUTE_KEYS_BY_SCENIC[scenicKey] || [];
+  const matchedIndex = scenicRoutes.findIndex((route) => route.prompt === normalizedText);
+
+  if (matchedIndex === -1 || !routeKeys[matchedIndex]) return null;
+  return { presetRouteKey: routeKeys[matchedIndex] };
+}
+
 function buildCurrentSessionDisplay(currentSession, messages) {
   const summary = summarizeMessages(messages);
   const hasUserMessage = messages.some((message) => message.role === "user" && message.content.trim());
@@ -416,7 +434,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     });
   }
 
-  async function runStableTextMessage(normalizedText) {
+  async function runStableTextMessage(normalizedText, options = {}) {
     const formData = buildTextMessageForm({
       text: normalizedText,
       gpsStatus: isGpsWeak ? "weak" : "normal",
@@ -424,6 +442,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       scenicSlug: activeGuideContext.scenicSlug,
       attractionId: activeGuideContext.attractionId,
       routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+      presetRouteKey: options.presetRouteKey || "",
     });
     const result = await sendTextMessage(formData);
 
@@ -492,6 +511,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           scenicSlug: activeGuideContext.scenicSlug,
           attractionId: activeGuideContext.attractionId,
           routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+          presetRouteKey: options.presetRouteKey || "",
         }));
         setStreamNotice("实时链路已连接，正在分段生成文本、语音和数字人画面。");
       };
@@ -577,10 +597,14 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     });
   }
 
-  async function submitTextMessage(text) {
+  async function submitTextMessage(text, options = {}) {
     if (!text.trim() || loading || isArchiveView) return;
 
     const normalizedText = text.trim();
+    const presetRouteMatch = options.presetRouteKey
+      ? { presetRouteKey: options.presetRouteKey }
+      : findPresetRouteMatch(normalizedText, activeGuideContext.scenicSlug);
+    const presetRouteKey = presetRouteMatch?.presetRouteKey || "";
     setInputText("");
     scheduleProcessingStages(normalizedText);
 
@@ -589,15 +613,20 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     setLoading(true);
 
     try {
-      if (isRealtimeMode) {
+      if (presetRouteKey) {
+        await runStableTextMessage(normalizedText, { presetRouteKey });
+      } else if (isRealtimeMode) {
         try {
-          await runRealtimeInteraction({ text: normalizedText }, { baseMessages: nextMessages });
+          await runRealtimeInteraction(
+            { text: normalizedText },
+            { baseMessages: nextMessages, presetRouteKey },
+          );
         } catch {
           replaceMessagesAndPersist(nextMessages);
-          await runStableTextMessage(normalizedText);
+          await runStableTextMessage(normalizedText, { presetRouteKey });
         }
       } else {
-        await runStableTextMessage(normalizedText);
+        await runStableTextMessage(normalizedText, { presetRouteKey });
       }
     } catch (err) {
       clearStageTimers();
@@ -1025,7 +1054,9 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
                               className="demo-route-card"
                               onClick={() => {
                                 setIsPresetOpen(false);
-                                submitTextMessage(route.prompt);
+                                submitTextMessage(route.prompt, {
+                                  presetRouteKey: findPresetRouteMatch(route.prompt, activeGuideContext.scenicSlug)?.presetRouteKey || "",
+                                });
                               }}
                               disabled={loading}
                             >

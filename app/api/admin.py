@@ -22,6 +22,7 @@ from app.rag.recommendation_agent import get_recommendation_display_label
 from app.services.asr_tts import get_tts_service
 from app.services.avatar_engine import get_avatar_engine, reset_avatar_engines
 from app.services.log_service import log_service
+from app.services.preset_route_cache import preset_route_cache
 
 router = APIRouter()
 KNOWN_QUERY_SCOPES = {"FACT", "RECOMMEND", "ANALYTICS"}
@@ -507,7 +508,17 @@ async def update_default_avatar(
             shutil.copyfileobj(file.file, buffer)
         avatar_engine = get_avatar_engine()
         avatar_engine.update_base_image(target_path)
-        return JSONResponse(content={"message": "Default avatar image updated successfully"})
+        cleared = preset_route_cache.clear_all()
+        interact_api.refresh_preset_route_cache_in_background()
+        return JSONResponse(
+            content={
+                "message": "Default avatar image updated successfully, preset route cache refresh started",
+                "preset_route_cache": {
+                    "cleared": cleared,
+                    "refresh_started": True,
+                },
+            }
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"更新默认头像失败: {exc}")
 
@@ -527,6 +538,7 @@ async def refresh_runtime_cache(current_admin: Dict[str, Any] = Depends(get_curr
     scenic_api.clear_runtime_cache()
     reset_avatar_engines()
     log_reset = log_service.clear_logs()
+    preset_cache_removed = preset_route_cache.clear_all()
 
     return JSONResponse(
         content={
@@ -539,9 +551,11 @@ async def refresh_runtime_cache(current_admin: Dict[str, Any] = Depends(get_curr
                 "scenic_fact_agent",
                 "scenic_recommendation_agent",
                 "avatar_engines",
+                "preset_route_cache",
                 "interaction_logs",
             ],
             "removed_logs": log_reset["removed"],
+            "removed_preset_cache_files": preset_cache_removed,
             "refreshed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
@@ -599,6 +613,11 @@ async def update_avatar_runtime(
         raise HTTPException(status_code=500, detail=f"Failed to switch avatar runtime profile: {exc}")
 
     payload = build_avatar_runtime_payload()
+    payload["preset_route_cache"] = {
+        "cleared": preset_route_cache.clear_all(),
+        "refresh_started": True,
+    }
+    interact_api.refresh_preset_route_cache_in_background()
     payload["message"] = f"Avatar runtime switched to {profile['label']}"
     return JSONResponse(content=payload)
 
@@ -612,7 +631,17 @@ async def update_tts_voice(
     success = tts_service.set_voice(request.voice_id)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid voice ID")
-    return JSONResponse(content={"message": f"TTS voice updated to {request.voice_id}"})
+    cleared = preset_route_cache.clear_all()
+    interact_api.refresh_preset_route_cache_in_background()
+    return JSONResponse(
+        content={
+            "message": f"TTS voice updated to {request.voice_id}",
+            "preset_route_cache": {
+                "cleared": cleared,
+                "refresh_started": True,
+            },
+        }
+    )
 
 
 @router.post("/voice/preview")

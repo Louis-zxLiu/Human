@@ -17,6 +17,7 @@ env/
 # Logs and runtime artifacts
 logs/
 *.log
+tmp_*.jpg
 data/temp/
 SoulX-FlashHead/data/temp/
 reports/

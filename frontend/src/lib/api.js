@@ -11,7 +11,15 @@ async function request(url, options = {}) {
   return payload;
 }
 
-function formDataWithContext({ text = "", gpsStatus = "normal", clientSessionId = "", scenicSlug = "", attractionId = "", routeLabel = "" } = {}) {
+function formDataWithContext({
+  text = "",
+  gpsStatus = "normal",
+  clientSessionId = "",
+  scenicSlug = "",
+  attractionId = "",
+  routeLabel = "",
+  presetRouteKey = "",
+} = {}) {
   const formData = new FormData();
   if (text) formData.append("text", text);
   formData.append("gps_status", gpsStatus);
@@ -19,6 +27,7 @@ function formDataWithContext({ text = "", gpsStatus = "normal", clientSessionId 
   if (scenicSlug) formData.append("scenicSlug", scenicSlug);
   if (attractionId) formData.append("attractionId", attractionId);
   if (routeLabel) formData.append("routeLabel", routeLabel);
+  if (presetRouteKey) formData.append("presetRouteKey", presetRouteKey);
   return formData;
 }
 
@@ -86,6 +95,7 @@ export function buildAudioMessageForm({
   scenicSlug = "",
   attractionId = "",
   routeLabel = "",
+  presetRouteKey = "",
 } = {}) {
   const formData = new FormData();
   formData.append("audio", audioFile);
@@ -94,6 +104,7 @@ export function buildAudioMessageForm({
   if (scenicSlug) formData.append("scenicSlug", scenicSlug);
   if (attractionId) formData.append("attractionId", attractionId);
   if (routeLabel) formData.append("routeLabel", routeLabel);
+  if (presetRouteKey) formData.append("presetRouteKey", presetRouteKey);
   return formData;
 }
 
