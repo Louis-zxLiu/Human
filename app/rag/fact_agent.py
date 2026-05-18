@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.config import resolve_path
 from app.core.scenic_catalog import infer_scenic_slug_from_text, list_scenic_catalog, scenic_name_from_slug, scenic_slug_from_name
 from app.rag.chroma_agent import ChromaStaticAgent
+from app.rag.response_contract import make_evidence, make_refusal
 
 
 ATTRACTION_COLUMNS = [
@@ -169,6 +170,7 @@ class ScenicFactAgent:
         scenic_slug: Optional[str] = None,
         attraction_id: Optional[str] = None,
         attraction_name: Optional[str] = None,
+        retrieval_mode: str = "structured_only",
     ) -> Dict[str, Any]:
         context_row = None
         if attraction_id:
@@ -189,6 +191,15 @@ class ScenicFactAgent:
                 "抱歉，这个问题混用了不合适的数据源：游客行为数据只能用于统计分析，DOCX 景区资料只能用于景点事实、历史文化和讲解内容。我不能把一种数据源当作另一种事实依据来回答。",
                 attraction,
                 "refused:source_conflict",
+                refusal=make_refusal(
+                    "source_conflict",
+                    message="景点事实、历史讲解和游客行为统计必须分开提问。",
+                    suggested_queries=[
+                        "请单独问景点事实或历史文化问题",
+                        "请单独问游客行为统计分析问题",
+                    ],
+                    allowed_sources=["structured_fact_db", "docx_knowledge", "behavior_sql"],
+                ),
             )
 
         if self._is_unsupported_fact_query(user_query):
@@ -196,11 +207,33 @@ class ScenicFactAgent:
                 "抱歉，这个问题需要实时运营数据或资料外信息支持，我不能根据现有灵山胜境资料编造。您可以改问已收录的景点介绍、位置、开放信息、历史背景、文化内涵或游览建议。",
                 attraction,
                 "refused:unsupported_fact",
+                refusal=make_refusal(
+                    "unsupported_fact_request",
+                    message="当前事实层不包含实时运营或未来预测数据。",
+                    suggested_queries=[
+                        "灵山大佛的文化内涵是什么？",
+                        "灵山梵宫适合讲哪些重点？",
+                    ],
+                    allowed_sources=["structured_fact_db", "docx_knowledge"],
+                ),
             )
 
         general_fact = self._answer_general_docx_fact(user_query)
         if general_fact:
-            return self._result(general_fact, attraction, "docx_general")
+            return self._result(
+                general_fact,
+                attraction,
+                "docx_general",
+                evidence=[
+                    make_evidence(
+                        "docx_knowledge",
+                        "curated_docx_fact",
+                        entity=attraction,
+                        field="general_fact",
+                        snippet=general_fact,
+                    )
+                ],
+            )
 
         question_query = user_query.replace(attraction, "") if attraction else user_query
         question_type = self.detect_question_type(question_query or user_query)
@@ -211,23 +244,59 @@ class ScenicFactAgent:
                 if question_type == "history":
                     text = self._format_history_answer(row)
                     if text:
-                        return self._result(text, attraction, "history")
+                        return self._result(
+                            text,
+                            attraction,
+                            "history",
+                            evidence=[self._row_evidence(row, "history", text)],
+                        )
 
                 if question_type in row:
                     text = self._format_field_answer(row, question_type)
                     if text:
-                        return self._result(text, attraction, f"field:{question_type}")
+                        return self._result(
+                            text,
+                            attraction,
+                            f"field:{question_type}",
+                            evidence=[self._row_evidence(row, question_type, row.get(question_type))],
+                        )
 
                 overview = self._format_overview(row)
                 if overview:
-                    return self._result(overview, attraction, "overview")
+                    return self._result(
+                        overview,
+                        attraction,
+                        "overview",
+                        evidence=self._overview_evidence(row),
+                    )
 
-        rag_answer = self._query_rag(user_query, scenic_slug=scenic_slug)
-        if rag_answer and not self._looks_like_missing_answer(rag_answer):
-            return self._result(rag_answer, attraction, "rag_general")
+        if retrieval_mode == "hybrid":
+            rag_result = self._query_rag(user_query, scenic_slug=scenic_slug)
+            rag_answer = str(rag_result.get("answer") or "")
+            if rag_answer and not self._looks_like_missing_answer(rag_answer):
+                return self._result(
+                    rag_answer,
+                    attraction,
+                    "rag_general",
+                    evidence=rag_result.get("evidence") or [],
+                    trace=rag_result.get("trace") or {},
+                )
 
         follow_up = self._build_refusal_follow_up(question_type, attraction, scenic_slug=scenic_slug)
-        return self._result(follow_up, attraction, "refused")
+        return self._result(
+            follow_up,
+            attraction,
+            "refused",
+            refusal=make_refusal(
+                "insufficient_fact_evidence",
+                message="当前事实层没有足够证据支持直接回答。",
+                suggested_queries=[
+                    "请补充具体景点名称",
+                    "可以改问位置、开放信息、历史背景、亮点或游览建议",
+                ],
+                allowed_sources=["structured_fact_db", "docx_knowledge", "vector_doc"],
+            ),
+        )
 
     def list_attractions(self, scenic_slug: Optional[str] = None) -> List[str]:
         if not scenic_slug:
@@ -452,14 +521,14 @@ class ScenicFactAgent:
             return None
         return f"{attraction}的信息如下。{' '.join(parts)}"
 
-    def _query_rag(self, user_query: str, scenic_slug: Optional[str] = None) -> str:
+    def _query_rag(self, user_query: str, scenic_slug: Optional[str] = None) -> Dict[str, Any]:
         if self._rag_agent is None:
             self._rag_agent = ChromaStaticAgent()
         query = user_query
         scenic_name = scenic_name_from_slug(scenic_slug)
         if scenic_name and scenic_name not in query:
             query = f"{scenic_name} {query}"
-        return self._rag_agent.query(query)
+        return self._rag_agent.query_with_trace(query)
 
     def _build_refusal_follow_up(
         self,
@@ -487,11 +556,40 @@ class ScenicFactAgent:
         return any(pattern in answer for pattern in patterns)
 
     @staticmethod
-    def _result(answer: str, attraction: Optional[str], response_kind: str) -> Dict[str, Any]:
+    def _row_evidence(row: Dict[str, Any], field: str, value: Any) -> Dict[str, Any]:
+        return make_evidence(
+            "structured_fact_db",
+            "attractions",
+            entity=row.get("attraction_name"),
+            field=field,
+            snippet=str(value or ""),
+            metadata={"scenic_name": row.get("scenic_name")},
+        )
+
+    def _overview_evidence(self, row: Dict[str, Any]) -> List[Dict[str, Any]]:
+        evidence: List[Dict[str, Any]] = []
+        for field in ("description", "location", "architecture_params", "cultural_meaning", "highlights", "open_info"):
+            value = str(row.get(field) or "").strip()
+            if value:
+                evidence.append(self._row_evidence(row, field, value))
+        return evidence[:4]
+
+    @staticmethod
+    def _result(
+        answer: str,
+        attraction: Optional[str],
+        response_kind: str,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        refusal: Optional[Dict[str, Any]] = None,
+        trace: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         return {
             "answer": answer,
             "matched_attraction": attraction,
             "response_kind": response_kind,
+            "evidence": evidence or [],
+            "refusal": refusal,
+            "trace": trace or {},
         }
 
 

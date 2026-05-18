@@ -1,75 +1,232 @@
-import os
+from __future__ import annotations
+
+import math
+import re
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
 import chromadb
 from chromadb.config import Settings
-from app.core.config import settings, resolve_path
+
+from app.core.config import resolve_path, settings
 from app.rag.llm_client import generate_chat_completion
+from app.rag.response_contract import make_evidence
+
+
+TOKEN_RE = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]+")
+
+
+@dataclass
+class RetrievedChunk:
+    text: str
+    metadata: Dict[str, Any]
+    dense_score: float
+    lexical_score: float
+    contextual_score: float
+
+    @property
+    def score(self) -> float:
+        return self.dense_score + self.lexical_score + self.contextual_score
+
 
 class ChromaStaticAgent:
     """
-    处理纯文本和非结构化数据（历史故事/导览词）的 RAG Agent。
-    利用本地 ChromaDB 和 Embedding 模型实现基于语义的相似度召回，并附带防止幻觉的硬拦截机制。
+    Hybrid scenic retriever for non-structured scenic knowledge.
+
+    Real-world behavior:
+    - keep structured facts and SQL outside of RAG
+    - use dense retrieval from Chroma as the primary recall path
+    - blend in lexical and context bonuses for better precision on scenic docs
+    - degrade gracefully to deterministic evidence snippets when LLM is absent
     """
-    
+
     def __init__(self, collection_name: str = "scenic_knowledge"):
         self.db_dir = resolve_path(settings.CHROMA_DB_DIR)
         self.collection_name = collection_name
-        self.client = chromadb.PersistentClient(path=self.db_dir, settings=Settings(anonymized_telemetry=False))
-        
+        self.client = chromadb.PersistentClient(
+            path=self.db_dir,
+            settings=Settings(anonymized_telemetry=False),
+        )
+
         model_path = resolve_path(settings.MODEL_EMBEDDING_PATH)
-            
-        # 初始化本地 sentence-transformers 模型
         self.embedding_function = chromadb.utils.embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name=model_path,
             device=settings.EMBEDDING_DEVICE,
-            normalize_embeddings=settings.EMBEDDING_NORMALIZE
+            normalize_embeddings=settings.EMBEDDING_NORMALIZE,
         )
-        
-        # 尝试获取集合，如果不存在则捕获异常
         try:
             self.collection = self.client.get_collection(
                 name=self.collection_name,
-                embedding_function=self.embedding_function
+                embedding_function=self.embedding_function,
             )
         except Exception:
             self.collection = None
 
-    def query(self, user_query: str, top_k: int = 3, threshold: float = 0.70) -> str:
-        """主入口：执行向量检索并生成安全、不胡编乱造的回答"""
-        
+    def query(self, user_query: str, top_k: int = 4, threshold: float = 0.78) -> str:
+        return self.query_with_trace(user_query, top_k=top_k, threshold=threshold)["answer"]
+
+    def query_with_trace(self, user_query: str, top_k: int = 4, threshold: float = 0.78) -> Dict[str, Any]:
         if not self.collection:
-            return "对不起，景区知识库（ChromaDB）暂未初始化或无数据，请联系管理员先上传资料。"
-            
-        # 1. 向量化提问并检索 (使用 bge-large-zh-v1.5)
-        results = self.collection.query(
-            query_texts=[user_query],
-            n_results=top_k
+            return {
+                "answer": "对不起，景区知识库暂未初始化或无数据，请联系管理员先上传资料。",
+                "response_kind": "refused:kb_unavailable",
+                "evidence": [],
+                "trace": {"retrieval_mode": "unavailable", "llm_used": False},
+            }
+
+        chunks = self._hybrid_retrieve(user_query, top_k=top_k)
+        if not chunks:
+            return {
+                "answer": "抱歉，您问的这个问题目前景区的知识库中暂未收录相关信息，建议您可以去服务台咨询。",
+                "response_kind": "refused:no_relevant_docs",
+                "evidence": [],
+                "trace": {"retrieval_mode": "hybrid", "llm_used": False, "top_k": top_k},
+            }
+
+        best_score = chunks[0].score
+        evidence = [self._chunk_evidence(chunk) for chunk in chunks[:top_k]]
+        if best_score < threshold:
+            return {
+                "answer": "抱歉，您问的这个问题目前景区的知识库中暂未收录相关信息，建议您可以去服务台咨询。",
+                "response_kind": "refused:low_confidence",
+                "evidence": evidence[:2],
+                "trace": {
+                    "retrieval_mode": "hybrid",
+                    "llm_used": False,
+                    "top_k": top_k,
+                    "best_score": round(best_score, 4),
+                },
+            }
+
+        context = self._build_context(chunks)
+        sys_prompt = (
+            "你是一个专业的景区导览数字人。请仅根据参考资料回答问题。"
+            "如果资料不足，就直接说明资料不足，不要编造。"
+            "回答风格要自然、清晰、适合导游口播，不要输出表情。"
         )
-        
-        documents = [doc for doc in results.get("documents", [[]])[0] if doc]
-        distances = results.get("distances", [[]])[0] # L2 距离，越小越相似
-        
-        # 2. 硬拦截机制：如果距离太大 (相似度低于阈值)，直接拦截，防止幻觉
-        # 假设距离阈值为 1.2 (L2 distance)，如果全部大于 1.2，说明找不到相关内容
-        # 这里仅作逻辑示意，具体阈值需依据你的 Embedding 模型进行调整。
-        if not distances or all(d > 1.2 for d in distances):
-            return "抱歉，您问的这个问题目前景区的知识库中暂未收录相关信息，建议您可以去服务台咨询。"
-            
-        # 3. 构建 Prompt 并生成回答
-        if not documents:
-            return "抱歉，您问的这个问题目前景区的知识库中暂未收录相关信息，建议您可以去服务台咨询。"
+        prompt = f"参考资料：\n{context}\n\n用户提问：{user_query}\n\n请基于资料作答："
+        final_answer = generate_chat_completion(
+            prompt,
+            sys_prompt,
+            temperature=0.1,
+            max_tokens=600,
+            return_error_text=False,
+        )
+        if final_answer:
+            return {
+                "answer": final_answer,
+                "response_kind": "rag_answer",
+                "evidence": evidence,
+                "trace": {
+                    "retrieval_mode": "hybrid",
+                    "llm_used": True,
+                    "top_k": top_k,
+                    "best_score": round(best_score, 4),
+                },
+            }
+        return {
+            "answer": self._render_evidence_fallback(chunks),
+            "response_kind": "rag_fallback",
+            "evidence": evidence,
+            "trace": {
+                "retrieval_mode": "hybrid",
+                "llm_used": False,
+                "top_k": top_k,
+                "best_score": round(best_score, 4),
+            },
+        }
 
-        context = "\n".join(documents)
-        sys_prompt = "你是一个专业的景区导览数字人。请**仅根据**以下参考资料回答问题。如果参考资料中没有相关信息，请直接回答‘我暂时不了解这部分信息’，严禁自己编造。请绝对不要输出任何表情符号，因为回答会被直接用于语音播报。"
-        prompt = f"""
-参考资料：
-{context}
+    def _hybrid_retrieve(self, user_query: str, top_k: int = 4) -> List[RetrievedChunk]:
+        dense_results = self.collection.query(query_texts=[user_query], n_results=10)
+        dense_documents = dense_results.get("documents", [[]])[0]
+        dense_metadatas = dense_results.get("metadatas", [[]])[0]
+        dense_distances = dense_results.get("distances", [[]])[0]
+        if not dense_documents:
+            return []
 
-用户提问: "{user_query}"
+        query_tokens = self._tokens(user_query)
+        scenic_terms = [token for token in query_tokens if token in {"灵山", "灵山胜境", "拈花湾", "禅意小镇"}]
+        ranked: List[RetrievedChunk] = []
+        for doc_text, metadata, distance in zip(dense_documents, dense_metadatas, dense_distances):
+            dense_score = self._distance_to_score(distance)
+            lexical_score = self._lexical_overlap(query_tokens, self._tokens(doc_text))
+            contextual_score = self._context_bonus(doc_text, scenic_terms)
+            ranked.append(
+                RetrievedChunk(
+                    text=doc_text,
+                    metadata=metadata or {},
+                    dense_score=dense_score,
+                    lexical_score=lexical_score,
+                    contextual_score=contextual_score,
+                )
+            )
 
-请用自然、亲切的导游语气回答：
-"""
-        final_answer = generate_chat_completion(prompt, sys_prompt, temperature=0.1)
-        if final_answer.startswith("LLM 调用失败"):
-            fallback = context.replace("\n", " ").strip()
-            return f"根据景区资料，{fallback[:220]}" + ("..." if len(fallback) > 220 else "")
-        return final_answer
+        ranked.sort(key=lambda item: item.score, reverse=True)
+        return ranked[:top_k]
+
+    @staticmethod
+    def _distance_to_score(distance: Any) -> float:
+        try:
+            numeric = float(distance)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, 1.4 - numeric)
+
+    @staticmethod
+    def _tokens(text: str) -> List[str]:
+        return [token.lower() for token in TOKEN_RE.findall(str(text or ""))]
+
+    @staticmethod
+    def _lexical_overlap(query_tokens: List[str], doc_tokens: List[str]) -> float:
+        if not query_tokens or not doc_tokens:
+            return 0.0
+        doc_set = set(doc_tokens)
+        overlap = sum(1 for token in query_tokens if token in doc_set)
+        return min(0.8, overlap / max(len(set(query_tokens)), 1))
+
+    @staticmethod
+    def _context_bonus(doc_text: str, scenic_terms: List[str]) -> float:
+        if not scenic_terms:
+            return 0.0
+        lowered = str(doc_text or "").lower()
+        hits = sum(1 for term in scenic_terms if term.lower() in lowered)
+        return min(0.25, hits * 0.08)
+
+    @staticmethod
+    def _build_context(chunks: List[RetrievedChunk]) -> str:
+        sections = []
+        for index, chunk in enumerate(chunks, start=1):
+            source = str(chunk.metadata.get("source") or "")
+            source_name = source.split("\\")[-1].split("/")[-1] if source else "知识资料"
+            sections.append(f"[证据{index} | {source_name}]\n{chunk.text}")
+        return "\n\n".join(sections)
+
+    @staticmethod
+    def _chunk_evidence(chunk: RetrievedChunk) -> Dict[str, Any]:
+        source = str(chunk.metadata.get("source") or "")
+        source_name = source.split("\\")[-1].split("/")[-1] if source else "knowledge_base"
+        return make_evidence(
+            "vector_doc",
+            source_name,
+            snippet=chunk.text,
+            score=chunk.score,
+            metadata={
+                "dense_score": round(chunk.dense_score, 4),
+                "lexical_score": round(chunk.lexical_score, 4),
+                "contextual_score": round(chunk.contextual_score, 4),
+            },
+        )
+
+    @staticmethod
+    def _render_evidence_fallback(chunks: List[RetrievedChunk]) -> str:
+        evidence_lines = []
+        for chunk in chunks[:2]:
+            cleaned = re.sub(r"\s+", " ", chunk.text).strip()
+            if not cleaned:
+                continue
+            evidence_lines.append(cleaned[:180] + ("..." if len(cleaned) > 180 else ""))
+        if not evidence_lines:
+            return "抱歉，我暂时不了解这部分信息。"
+        if len(evidence_lines) == 1:
+            return f"根据景区资料，{evidence_lines[0]}"
+        return f"根据景区资料，{evidence_lines[0]} 另外，{evidence_lines[1]}"

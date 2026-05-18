@@ -1,11 +1,14 @@
-import json
+from __future__ import annotations
+
 import os
 import re
 import sqlite3
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.config import resolve_path
 from app.rag.llm_client import generate_chat_completion
+from app.rag.response_contract import compact_rows, make_evidence, make_refusal
 
 
 ANALYTICS_SCHEMA = """
@@ -29,31 +32,248 @@ CREATE TABLE tourist_behavior (
 );
 """
 
+SOURCE_PREFIX = "基于游客行为数据分析，"
+
+
+@dataclass
+class AgeFilter:
+    op: str
+    lower: Optional[float] = None
+    upper: Optional[float] = None
+
+
+@dataclass
+class SemanticQueryPlan:
+    metric_key: str
+    metric_label: str
+    answer_unit: str = ""
+    dimension_key: Optional[str] = None
+    dimension_label: str = ""
+    filters: List[Tuple[str, Any]] = field(default_factory=list)
+    query_mode: str = "scalar"
+    order: str = "desc"
+    limit: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        filters: List[Dict[str, Any]] = []
+        for key, value in self.filters:
+            if isinstance(value, AgeFilter):
+                filters.append(
+                    {
+                        "key": key,
+                        "type": "age_filter",
+                        "op": value.op,
+                        "lower": value.lower,
+                        "upper": value.upper,
+                    }
+                )
+            else:
+                filters.append({"key": key, "value": value})
+        return {
+            "metric_key": self.metric_key,
+            "metric_label": self.metric_label,
+            "answer_unit": self.answer_unit,
+            "dimension_key": self.dimension_key,
+            "dimension_label": self.dimension_label,
+            "filters": filters,
+            "query_mode": self.query_mode,
+            "order": self.order,
+            "limit": self.limit,
+        }
+
 
 class TouristAnalyticsAgent:
-    """Use cross-scenic visitor behavior data only for analytics and preference hints."""
+    """Semantic-SQL analytics layer for visitor behavior data."""
 
     DISALLOWED_SQL = ("insert ", "update ", "delete ", "drop ", "alter ", "pragma ", "attach ")
 
+    METRICS: Dict[str, Dict[str, str]] = {
+        "record_count": {"expr": "count(*)", "alias": "record_count", "label": "记录数"},
+        "visits": {"expr": "count(*)", "alias": "visits", "label": "访问量"},
+        "avg_ticket_cost": {"expr": "round(avg(cast(ticket_cost as real)), 2)", "alias": "avg_ticket_cost", "label": "平均门票消费"},
+        "avg_total_cost": {"expr": "round(avg(cast(total_cost as real)), 2)", "alias": "avg_total_cost", "label": "平均总消费"},
+        "avg_food_cost": {"expr": "round(avg(cast(food_cost as real)), 2)", "alias": "avg_food_cost", "label": "平均餐饮消费"},
+        "avg_shopping_cost": {"expr": "round(avg(cast(shopping_cost as real)), 2)", "alias": "avg_shopping_cost", "label": "平均购物消费"},
+        "avg_transport_cost": {"expr": "round(avg(cast(transport_cost as real)), 2)", "alias": "avg_transport_cost", "label": "平均交通消费"},
+        "avg_entertainment_cost": {"expr": "round(avg(cast(entertainment_cost as real)), 2)", "alias": "avg_entertainment_cost", "label": "平均娱乐消费"},
+        "avg_stay": {"expr": "round(avg(cast(stay_duration as real)), 2)", "alias": "avg_stay", "label": "平均停留时长"},
+        "avg_satisfaction": {"expr": "round(avg(cast(satisfaction as real)), 2)", "alias": "avg_satisfaction", "label": "平均满意度"},
+        "avg_group_size": {"expr": "round(avg(cast(group_size as real)), 2)", "alias": "avg_group_size", "label": "平均同行人数"},
+        "low_satisfaction_count": {"expr": "count(*)", "alias": "low_satisfaction_count", "label": "低满意度记录数"},
+        "high_satisfaction_count": {"expr": "count(*)", "alias": "high_satisfaction_count", "label": "高满意度记录数"},
+    }
+
+    DIMENSIONS: Dict[str, Dict[str, str]] = {
+        "attraction_name": {"expr": "attraction_name", "alias": "attraction_name", "label": "景点"},
+        "attraction_type": {"expr": "attraction_type", "alias": "attraction_type", "label": "景点类型"},
+        "gender": {"expr": "gender", "alias": "gender", "label": "性别"},
+        "month": {"expr": "substr(visit_date, 1, 7)", "alias": "month", "label": "月份"},
+    }
+
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or resolve_path("data/processed/tourist_behavior.db")
+        self._ensure_indices()
+        self._domain_cache = self._load_domain_cache()
 
     def query(self, user_query: str) -> str:
-        rule_based = self._rule_based_response(user_query)
-        if rule_based:
-            return rule_based
+        return self.query_with_trace(user_query)["answer"]
+
+    def query_with_trace(self, user_query: str) -> Dict[str, Any]:
+        if self._has_source_conflict(user_query):
+            answer = (
+                "抱歉，这个问题要求混用错误的数据源。游客行为数据只能用于统计分析，"
+                "景区 DOCX 资料只能用于景点事实、历史文化和讲解内容，我不能把一种数据源当作另一种事实依据。"
+            )
+            return {
+                "answer": answer,
+                "response_kind": "refused:source_conflict",
+                "semantic_plan": None,
+                "sql": None,
+                "rows_preview": [],
+                "evidence": [],
+                "warnings": [],
+                "refusal": make_refusal(
+                    "source_conflict",
+                    message="游客行为分析不能直接充当景点事实来源。",
+                    suggested_queries=[
+                        "请改问游客偏好、消费、停留或满意度分析",
+                        "请把景点事实问题单独提出来问",
+                    ],
+                    allowed_sources=["behavior_sql"],
+                ),
+                "trace": {"fallback_used": False},
+            }
+
+        special = self._special_case_response(user_query)
+        if special:
+            return {
+                "answer": special,
+                "response_kind": "analytics:special_case",
+                "semantic_plan": {"mode": "special_case"},
+                "sql": None,
+                "rows_preview": [],
+                "evidence": [make_evidence("behavior_sql", "tourist_behavior", snippet=special)],
+                "warnings": [],
+                "refusal": None,
+                "trace": {"fallback_used": False, "special_case": True},
+            }
+
+        plan = self._plan_semantic_query(user_query)
+        if plan:
+            sql, params = self._build_sql(plan)
+            rows = self.execute_sql(sql, params)
+            if not rows:
+                return {
+                    "answer": f"{SOURCE_PREFIX}暂时没有检索到相关记录。",
+                    "response_kind": "analytics:empty",
+                    "semantic_plan": plan.to_dict(),
+                    "sql": sql,
+                    "rows_preview": [],
+                    "evidence": [],
+                    "warnings": [],
+                    "refusal": None,
+                    "trace": {"fallback_used": False, "params": list(params)},
+                }
+            if "error" in rows[0]:
+                return {
+                    "answer": "抱歉，游客行为数据分析暂时失败，请稍后再试。",
+                    "response_kind": "analytics:error",
+                    "semantic_plan": plan.to_dict(),
+                    "sql": sql,
+                    "rows_preview": compact_rows(rows, limit=1),
+                    "evidence": [],
+                    "warnings": [],
+                    "refusal": None,
+                    "trace": {"fallback_used": False, "params": list(params)},
+                }
+            rendered = self._render_semantic_result(plan, rows)
+            if rendered:
+                sample_count = self._estimate_sample_size(plan)
+                warnings = []
+                if sample_count is not None and sample_count < 30:
+                    warnings.append(f"low_sample_size:{sample_count}")
+                return {
+                    "answer": rendered,
+                    "response_kind": "analytics",
+                    "semantic_plan": plan.to_dict(),
+                    "sql": sql,
+                    "rows_preview": compact_rows(rows),
+                    "evidence": [
+                        make_evidence(
+                            "behavior_sql",
+                            "tourist_behavior",
+                            field=plan.metric_key,
+                            snippet=rendered,
+                            metadata={
+                                "sql": sql,
+                                "sample_count": sample_count,
+                                "query_mode": plan.query_mode,
+                            },
+                        )
+                    ],
+                    "warnings": warnings,
+                    "refusal": None,
+                    "trace": {"fallback_used": False, "params": list(params)},
+                }
 
         sql_query = self._generate_sql(user_query)
         if not sql_query:
-            return "抱歉，我暂时无法从游客行为数据中整理出这个问题的分析结果。"
+            return {
+                "answer": "抱歉，我暂时无法从游客行为数据中整理出这个问题的分析结果。",
+                "response_kind": "analytics:unresolved",
+                "semantic_plan": None,
+                "sql": None,
+                "rows_preview": [],
+                "evidence": [],
+                "warnings": ["semantic_parse_failed"],
+                "refusal": None,
+                "trace": {"fallback_used": False},
+            }
 
         result_data = self.execute_sql(sql_query)
         if not result_data:
-            return "基于当前游客行为数据分析，暂时没有检索到相关记录。"
+            return {
+                "answer": f"{SOURCE_PREFIX}暂时没有检索到相关记录。",
+                "response_kind": "analytics:empty",
+                "semantic_plan": None,
+                "sql": sql_query,
+                "rows_preview": [],
+                "evidence": [],
+                "warnings": ["llm_sql_fallback"],
+                "refusal": None,
+                "trace": {"fallback_used": True},
+            }
         if "error" in result_data[0]:
-            return "抱歉，游客行为数据分析暂时失败，请稍后再试。"
-
-        return self._summarize_result(user_query, result_data)
+            return {
+                "answer": "抱歉，游客行为数据分析暂时失败，请稍后再试。",
+                "response_kind": "analytics:error",
+                "semantic_plan": None,
+                "sql": sql_query,
+                "rows_preview": compact_rows(result_data, limit=1),
+                "evidence": [],
+                "warnings": ["llm_sql_fallback"],
+                "refusal": None,
+                "trace": {"fallback_used": True},
+            }
+        rendered = self._render_rows_fallback(result_data)
+        return {
+            "answer": rendered,
+            "response_kind": "analytics:fallback",
+            "semantic_plan": None,
+            "sql": sql_query,
+            "rows_preview": compact_rows(result_data),
+            "evidence": [
+                make_evidence(
+                    "behavior_sql",
+                    "tourist_behavior",
+                    snippet=rendered,
+                    metadata={"sql": sql_query},
+                )
+            ],
+            "warnings": ["llm_sql_fallback"],
+            "refusal": None,
+            "trace": {"fallback_used": True},
+        }
 
     def get_preference_hint(self, attraction_types: List[str]) -> Optional[str]:
         if not attraction_types:
@@ -69,14 +289,13 @@ class TouristAnalyticsAgent:
         result = self.execute_sql(sql, attraction_types)
         if not result or "error" in result[0]:
             return None
-
         top = result[0]
         return (
             f"基于游客行为数据，{top['attraction_type']}类景点通常停留约"
             f"{top['avg_stay']}小时，平均满意度约{top['avg_satisfaction']}分。"
         )
 
-    def execute_sql(self, sql: str, params: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
+    def execute_sql(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
         if not os.path.exists(self.db_path):
             return [{"error": f"Behavior database not found: {self.db_path}"}]
         if not self._is_safe_select(sql):
@@ -86,12 +305,426 @@ class TouristAnalyticsAgent:
         conn.row_factory = sqlite3.Row
         try:
             cursor = conn.cursor()
-            cursor.execute(sql, params or [])
+            cursor.execute(sql, list(params or []))
             return [dict(row) for row in cursor.fetchall()]
         except Exception as exc:
             return [{"error": f"SQL execution failed: {exc}"}]
         finally:
             conn.close()
+
+    def _ensure_indices(self) -> None:
+        if not os.path.exists(self.db_path):
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            table_exists = cursor.execute(
+                "select count(*) from sqlite_master where type='table' and name='tourist_behavior'"
+            ).fetchone()[0]
+            if not table_exists:
+                return
+            statements = [
+                "create index if not exists idx_tourist_behavior_gender on tourist_behavior(gender)",
+                "create index if not exists idx_tourist_behavior_attraction_type on tourist_behavior(attraction_type)",
+                "create index if not exists idx_tourist_behavior_attraction_name on tourist_behavior(attraction_name)",
+                "create index if not exists idx_tourist_behavior_visit_date on tourist_behavior(visit_date)",
+                "create index if not exists idx_tourist_behavior_satisfaction on tourist_behavior(satisfaction)",
+            ]
+            for statement in statements:
+                cursor.execute(statement)
+            conn.commit()
+        except sqlite3.Error:
+            pass
+        finally:
+            conn.close()
+
+    def _load_domain_cache(self) -> Dict[str, List[str]]:
+        cache = {"attraction_types": [], "attraction_names": []}
+        if not os.path.exists(self.db_path):
+            return cache
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            for key, column in (("attraction_types", "attraction_type"), ("attraction_names", "attraction_name")):
+                rows = cursor.execute(
+                    f"select distinct {column} from tourist_behavior where {column} is not null and trim({column}) != ''"
+                ).fetchall()
+                cache[key] = sorted({str(row[0]).strip() for row in rows if str(row[0]).strip()})
+        except sqlite3.Error:
+            return cache
+        finally:
+            conn.close()
+        return cache
+
+    def _special_case_response(self, user_query: str) -> Optional[str]:
+        query = str(user_query or "")
+
+        if "不同人群偏好" in query or "人群偏好差异" in query:
+            female = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior "
+                "where gender = '女' group by attraction_type order by visits desc limit 1"
+            )
+            male = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior "
+                "where gender = '男' group by attraction_type order by visits desc limit 1"
+            )
+            if female and male and "error" not in female[0] and "error" not in male[0]:
+                return (
+                    f"{SOURCE_PREFIX}女性游客当前最常选择的类型是{female[0]['attraction_type']}，"
+                    f"男性游客当前最常选择的类型是{male[0]['attraction_type']}。"
+                    "这说明不同人群在景点偏好上存在明显差异。"
+                )
+
+        if "消费趋势" in query:
+            total = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior")
+            top_type = self.execute_sql(
+                "select attraction_type, count(*) as visits from tourist_behavior "
+                "group by attraction_type order by visits desc limit 1"
+            )
+            if total and top_type and "error" not in total[0] and "error" not in top_type[0]:
+                return (
+                    f"{SOURCE_PREFIX}样本游客的人均总消费约为{total[0]['avg_total_cost']}元，"
+                    f"当前出现频次最高的景点类型是{top_type[0]['attraction_type']}。"
+                    "这说明游客消费主要集中在高频热门类型景点。"
+                )
+
+        if "消费构成" in query or "花费构成" in query:
+            rows = self.execute_sql(
+                "select "
+                "round(avg(cast(ticket_cost as real)), 2) as ticket_cost, "
+                "round(avg(cast(transport_cost as real)), 2) as transport_cost, "
+                "round(avg(cast(food_cost as real)), 2) as food_cost, "
+                "round(avg(cast(shopping_cost as real)), 2) as shopping_cost, "
+                "round(avg(cast(entertainment_cost as real)), 2) as entertainment_cost "
+                "from tourist_behavior"
+            )
+            if rows and "error" not in rows[0]:
+                ranked = sorted(
+                    (
+                        ("门票", rows[0].get("ticket_cost")),
+                        ("交通", rows[0].get("transport_cost")),
+                        ("餐饮", rows[0].get("food_cost")),
+                        ("购物", rows[0].get("shopping_cost")),
+                        ("娱乐", rows[0].get("entertainment_cost")),
+                    ),
+                    key=lambda item: float(item[1] or 0),
+                    reverse=True,
+                )
+                parts = [f"{name}{value}元" for name, value in ranked if value is not None]
+                if parts:
+                    return f"{SOURCE_PREFIX}平均消费构成从高到低依次为：" + "、".join(parts) + "。"
+
+        return None
+
+    def _plan_semantic_query(self, user_query: str) -> Optional[SemanticQueryPlan]:
+        query = str(user_query or "")
+        lowered = query.lower()
+        matched_type = self._match_known_value(query, self._domain_cache["attraction_types"])
+
+        if any(term in query for term in ("一共有多少条", "多少条记录", "总记录")):
+            metric_key = "record_count"
+        elif any(term in query for term in ("平均同行人数", "同行人数", "平均团体人数")):
+            metric_key = "avg_group_size"
+        else:
+            metric_key = self._detect_metric(query)
+        if not metric_key:
+            return None
+
+        plan = SemanticQueryPlan(
+            metric_key=metric_key,
+            metric_label=self.METRICS[metric_key]["label"],
+            answer_unit=self._metric_unit(metric_key),
+            order=self._detect_order(lowered),
+            limit=self._detect_limit(query),
+        )
+
+        if "每个月" in query or "按月" in query or "月份" in query:
+            plan.dimension_key = "month"
+            plan.dimension_label = "月份"
+            plan.query_mode = "time_series" if ("按月" in query or "每个月" in query) else "ranking"
+            if "月份" in query and plan.limit is None:
+                plan.limit = 1 if any(term in query for term in ("最高", "最低", "最长", "最短")) else 12
+        elif any(term in query for term in ("按性别", "性别分布", "男女", "不同性别")):
+            plan.dimension_key = "gender"
+            plan.dimension_label = "性别"
+            plan.query_mode = "grouped"
+        elif matched_type and any(term in query for term in ("前", "排名", "哪些景点", "哪几个景点", "最常去", "最高")):
+            plan.dimension_key = "attraction_name"
+            plan.dimension_label = "景点"
+            plan.query_mode = "ranking"
+        elif "景点类型" in query or "类型" in query or self._contains_known_type(query):
+            plan.dimension_key = "attraction_type"
+            plan.dimension_label = "景点类型"
+            plan.query_mode = "grouped"
+        elif any(term in query for term in ("景点", "访问量最高", "前3个景点", "哪几个景点")):
+            plan.dimension_key = "attraction_name"
+            plan.dimension_label = "景点"
+            plan.query_mode = "ranking"
+
+        if plan.dimension_key and plan.query_mode == "grouped":
+            if any(term in query for term in ("最高", "最低", "最长", "最短", "排名", "前3", "前5", "哪几个")):
+                plan.query_mode = "ranking"
+            elif plan.limit is None:
+                plan.limit = 8
+
+        if plan.dimension_key is None:
+            plan.query_mode = "scalar"
+            plan.limit = None
+        elif plan.query_mode == "ranking" and plan.limit is None:
+            plan.limit = 3
+
+        filters = self._detect_filters(query)
+        if metric_key == "low_satisfaction_count":
+            filters.append(("satisfaction_lt", 3))
+        if metric_key == "high_satisfaction_count":
+            filters.append(("satisfaction_eq", 5))
+        plan.filters = filters
+
+        return plan
+
+    def _detect_metric(self, query: str) -> Optional[str]:
+        if "低满意度记录" in query:
+            return "low_satisfaction_count"
+        if "高满意度记录" in query:
+            return "high_satisfaction_count"
+        if "满意度" in query:
+            return "avg_satisfaction"
+        if "停留" in query:
+            return "avg_stay"
+        if "同行" in query or "团体人数" in query:
+            return "avg_group_size"
+        if "餐饮" in query or "吃饭" in query or "food_cost" in query:
+            return "avg_food_cost"
+        if "购物" in query:
+            return "avg_shopping_cost"
+        if "交通" in query:
+            return "avg_transport_cost"
+        if "娱乐" in query:
+            return "avg_entertainment_cost"
+        if any(term in query for term in ("门票", "票价", "票费", "票价消费")):
+            return "avg_ticket_cost"
+        if any(term in query for term in ("消费", "花费", "总消费")):
+            return "avg_total_cost"
+        if any(term in query for term in ("访问量", "访问记录", "热门", "偏好", "喜欢")):
+            return "visits"
+        return None
+
+    @staticmethod
+    def _metric_unit(metric_key: str) -> str:
+        if metric_key in {"record_count", "visits", "low_satisfaction_count", "high_satisfaction_count"}:
+            return "条"
+        if metric_key == "avg_group_size":
+            return "人"
+        if metric_key == "avg_stay":
+            return "小时"
+        if metric_key == "avg_satisfaction":
+            return "分"
+        return "元" if "cost" in metric_key else ""
+
+    @staticmethod
+    def _detect_order(query: str) -> str:
+        if any(term in query for term in ("最低", "最短", "最少")):
+            return "asc"
+        return "desc"
+
+    @staticmethod
+    def _detect_limit(query: str) -> Optional[int]:
+        if "前5" in query or "前五" in query:
+            return 5
+        if "前8" in query:
+            return 8
+        if any(term in query for term in ("前3", "前三", "哪几个", "排名")):
+            return 3
+        return None
+
+    def _detect_filters(self, query: str) -> List[Tuple[str, Any]]:
+        filters: List[Tuple[str, Any]] = []
+
+        if "女性" in query:
+            filters.append(("gender", "女"))
+        elif "男性" in query:
+            filters.append(("gender", "男"))
+
+        age_range_match = re.search(r"(\d{1,2})\s*(?:到|-|至)\s*(\d{1,2})岁", query)
+        age_gte_match = re.search(r"(\d{1,2})岁(?:及)?以上", query)
+        age_lte_match = re.search(r"(\d{1,2})岁(?:及)?以下", query)
+
+        if age_range_match:
+            lower, upper = age_range_match.groups()
+            filters.append(("age_between", AgeFilter("between", float(lower), float(upper))))
+        elif age_gte_match:
+            filters.append(("age_gte", AgeFilter(">=", float(age_gte_match.group(1)))))
+        elif age_lte_match:
+            filters.append(("age_lte", AgeFilter("<=", upper=float(age_lte_match.group(1)))))
+        elif "20到30岁" in query:
+            filters.append(("age_between", AgeFilter("between", 20, 30)))
+        elif "31到45岁" in query:
+            filters.append(("age_between", AgeFilter("between", 31, 45)))
+        elif "46岁以上" in query:
+            filters.append(("age_gte", AgeFilter(">=", 46)))
+        elif "30岁以下" in query:
+            filters.append(("age_lt", AgeFilter("<", upper=30)))
+        elif "50岁以上" in query:
+            filters.append(("age_gt", AgeFilter(">", lower=50)))
+
+        if "上半年" in query:
+            filters.append(("date_range", ("2025-01-01", "2025-07-01")))
+        elif "下半年" in query:
+            filters.append(("date_range", ("2025-07-01", "2026-01-01")))
+
+        matched_type = self._match_known_value(query, self._domain_cache["attraction_types"])
+        if matched_type:
+            filters.append(("attraction_type", matched_type))
+
+        matched_name = self._match_known_value(query, self._domain_cache["attraction_names"])
+        if matched_name:
+            filters.append(("attraction_name", matched_name))
+
+        return filters
+
+    def _build_sql(self, plan: SemanticQueryPlan) -> Tuple[str, List[Any]]:
+        metric = self.METRICS[plan.metric_key]
+        params: List[Any] = []
+        where_clauses: List[str] = []
+
+        for filter_key, value in plan.filters:
+            if filter_key == "gender":
+                where_clauses.append("gender = ?")
+                params.append(value)
+            elif filter_key == "attraction_type":
+                where_clauses.append("attraction_type = ?")
+                params.append(value)
+            elif filter_key == "attraction_name":
+                where_clauses.append("attraction_name = ?")
+                params.append(value)
+            elif filter_key == "date_range":
+                where_clauses.append("visit_date >= ? and visit_date < ?")
+                params.extend(list(value))
+            elif filter_key == "age_between":
+                where_clauses.append("cast(age as real) between ? and ?")
+                params.extend([value.lower, value.upper])
+            elif filter_key == "age_gte":
+                where_clauses.append("cast(age as real) >= ?")
+                params.append(value.lower)
+            elif filter_key == "age_gt":
+                where_clauses.append("cast(age as real) > ?")
+                params.append(value.lower)
+            elif filter_key == "age_lt":
+                where_clauses.append("cast(age as real) < ?")
+                params.append(value.upper)
+            elif filter_key == "age_lte":
+                where_clauses.append("cast(age as real) <= ?")
+                params.append(value.upper)
+            elif filter_key == "satisfaction_lt":
+                where_clauses.append("cast(satisfaction as real) < ?")
+                params.append(value)
+            elif filter_key == "satisfaction_eq":
+                where_clauses.append("cast(satisfaction as real) = ?")
+                params.append(value)
+
+        select_parts = [f"{metric['expr']} as {metric['alias']}"]
+        group_by_clause = ""
+        order_by_clause = ""
+        limit_clause = ""
+
+        if plan.dimension_key:
+            dimension = self.DIMENSIONS[plan.dimension_key]
+            select_parts.insert(0, f"{dimension['expr']} as {dimension['alias']}")
+            group_by_clause = f" group by {dimension['alias']}"
+            if plan.query_mode == "time_series":
+                order_by_clause = f" order by {dimension['alias']}"
+            else:
+                order_by_clause = f" order by {metric['alias']} {plan.order}"
+            if plan.limit:
+                limit_clause = f" limit {int(plan.limit)}"
+        sql = "select " + ", ".join(select_parts) + " from tourist_behavior"
+        if where_clauses:
+            sql += " where " + " and ".join(where_clauses)
+        sql += group_by_clause
+        if not plan.dimension_key and plan.metric_key == "avg_satisfaction" and plan.query_mode == "scalar":
+            sql += ""
+        sql += order_by_clause + limit_clause
+        return sql, params
+
+    def _estimate_sample_size(self, plan: SemanticQueryPlan) -> Optional[int]:
+        _, params = self._build_sql(plan)
+        where_clauses: List[str] = []
+        for filter_key, value in plan.filters:
+            if filter_key == "gender":
+                where_clauses.append("gender = ?")
+            elif filter_key == "attraction_type":
+                where_clauses.append("attraction_type = ?")
+            elif filter_key == "attraction_name":
+                where_clauses.append("attraction_name = ?")
+            elif filter_key == "date_range":
+                where_clauses.append("visit_date >= ? and visit_date < ?")
+            elif filter_key == "age_between":
+                where_clauses.append("cast(age as real) between ? and ?")
+            elif filter_key == "age_gte":
+                where_clauses.append("cast(age as real) >= ?")
+            elif filter_key == "age_gt":
+                where_clauses.append("cast(age as real) > ?")
+            elif filter_key == "age_lt":
+                where_clauses.append("cast(age as real) < ?")
+            elif filter_key == "age_lte":
+                where_clauses.append("cast(age as real) <= ?")
+            elif filter_key == "satisfaction_lt":
+                where_clauses.append("cast(satisfaction as real) < ?")
+            elif filter_key == "satisfaction_eq":
+                where_clauses.append("cast(satisfaction as real) = ?")
+        count_sql = "select count(*) as sample_count from tourist_behavior"
+        if where_clauses:
+            count_sql += " where " + " and ".join(where_clauses)
+        rows = self.execute_sql(count_sql, params)
+        if not rows or "error" in rows[0]:
+            return None
+        try:
+            return int(rows[0].get("sample_count") or 0)
+        except (TypeError, ValueError):
+            return None
+
+    def _render_semantic_result(self, plan: SemanticQueryPlan, rows: List[Dict[str, Any]]) -> Optional[str]:
+        if not rows or "error" in rows[0]:
+            return None
+
+        metric_alias = self.METRICS[plan.metric_key]["alias"]
+        unit = self._metric_unit(plan.metric_key)
+
+        if plan.query_mode == "scalar":
+            value = rows[0].get(metric_alias)
+            return f"{SOURCE_PREFIX}{plan.metric_label}约为{value}{unit}。"
+
+        if plan.query_mode == "time_series":
+            parts = [f"{row['month']}：{row[metric_alias]}{unit}" for row in rows]
+            return f"{SOURCE_PREFIX}{plan.metric_label}按月变化为：" + "；".join(parts) + "。"
+
+        name_key = self.DIMENSIONS[plan.dimension_key]["alias"] if plan.dimension_key else "name"
+        if plan.dimension_key == "gender":
+            parts = [f"{row[name_key]}：{row[metric_alias]}{unit}" for row in rows]
+            return f"{SOURCE_PREFIX}{plan.metric_label}按性别分布为：" + "；".join(parts) + "。"
+
+        parts = []
+        for index, row in enumerate(rows[: plan.limit or len(rows)], start=1):
+            parts.append(f"{index}. {row[name_key]}（{plan.metric_label}{row[metric_alias]}{unit}）")
+        if not parts:
+            return None
+        if plan.query_mode == "grouped" and (plan.limit or 0) >= 8:
+            return f"{SOURCE_PREFIX}" + "；".join(parts) + "。"
+        return f"{SOURCE_PREFIX}" + "；".join(parts) + "。"
+
+    def _render_rows_fallback(self, rows: List[Dict[str, Any]]) -> str:
+        row = rows[0]
+        if len(row) == 1:
+            key, value = next(iter(row.items()))
+            return f"{SOURCE_PREFIX}{key}为{value}。"
+
+        parts = []
+        for index, item in enumerate(rows[:3], start=1):
+            rendered = "，".join(f"{key}={value}" for key, value in item.items())
+            parts.append(f"{index}. {rendered}")
+        return f"{SOURCE_PREFIX}" + "；".join(parts) + "。"
 
     def _generate_sql(self, user_query: str) -> Optional[str]:
         system_prompt = (
@@ -114,446 +747,50 @@ Rules:
 - attraction_type and attraction_name are behavior labels, not scenic facts.
 - Output a single SELECT statement.
 """
-        sql_query = generate_chat_completion(prompt, system_prompt, temperature=0.1)
+        sql_query = generate_chat_completion(
+            prompt,
+            system_prompt,
+            temperature=0.1,
+            max_tokens=220,
+            return_error_text=False,
+        )
         if not sql_query:
             return None
         cleaned = sql_query.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
         return cleaned if self._is_safe_select(cleaned) else None
 
-    def _summarize_result(self, user_query: str, result_data: List[Dict[str, Any]]) -> str:
-        system_prompt = (
-            "You summarize analytics results for a scenic digital guide. "
-            "Always state that the answer is based on visitor behavior data analysis."
-        )
-        prompt = (
-            f"User question: {user_query}\n"
-            f"Analytics result: {json.dumps(result_data, ensure_ascii=False)}\n"
-            "Please answer in concise Chinese."
-        )
-        answer = generate_chat_completion(prompt, system_prompt, temperature=0.2)
-        if not answer:
-            return "抱歉，我暂时无法生成游客行为分析解读。"
-        if not answer.startswith("基于游客行为数据分析"):
-            answer = "基于游客行为数据分析，" + answer
-        return answer
-
-    def _format_ranked_rows(
-        self,
-        rows: List[Dict[str, Any]],
-        name_key: str,
-        value_key: str,
-        value_label: str,
-        limit: int = 3,
-    ) -> Optional[str]:
-        if not rows or "error" in rows[0]:
-            return None
-        parts = []
-        for index, row in enumerate(rows[:limit], start=1):
-            parts.append(f"{index}. {row[name_key]}（{value_label}{row[value_key]}）")
-        return "基于游客行为数据分析，" + "；".join(parts) + "。"
-
-    def _format_single_value(self, rows: List[Dict[str, Any]], key: str, label: str, unit: str = "") -> Optional[str]:
-        if not rows or "error" in rows[0]:
-            return None
-        return f"基于游客行为数据分析，{label}{rows[0][key]}{unit}。"
-
-    def _format_month_rows(self, rows: List[Dict[str, Any]], value_key: str, value_label: str) -> Optional[str]:
-        if not rows or "error" in rows[0]:
-            return None
-        parts = [f"{row['month']}：{row[value_key]}" for row in rows]
-        return f"基于游客行为数据分析，{value_label}按月变化为：" + "；".join(parts) + "。"
-
     def _has_source_conflict(self, query: str) -> bool:
         docx_terms = ("docx", "DOCX", "景区介绍文档", "介绍文档", "景区文档", "资料文档")
         behavior_terms = ("行为数据", "游客消费数据", "游客行为 Excel", "游客行为数据")
-        behavior_metric_terms = ("游客", "男性", "女性", "消费", "满意度", "访问量", "平均", "统计", "偏好")
-        fact_metric_terms = ("开放时间", "官方开放", "门票价格", "票价", "铜壁板", "佛体", "玄奘", "历史", "文化内涵")
+        behavior_metric_terms = (
+            "消费",
+            "满意度",
+            "访问量",
+            "平均",
+            "统计",
+            "偏好",
+            "停留",
+            "记录",
+            "排名",
+            "分布",
+            "人群",
+            "性别",
+            "年龄",
+            "同行",
+            "月份",
+            "景点类型",
+        )
+        fact_metric_terms = ("开放时间", "官方开放", "门票价格", "票价", "佛体", "玄奘", "历史", "文化内涵")
+        has_behavior_metric = any(term in query for term in behavior_metric_terms)
         if any(term in query for term in docx_terms) and any(term in query for term in behavior_metric_terms):
             return True
-        if any(term in query for term in behavior_terms) and any(term in query for term in fact_metric_terms):
+        if "官方" in query and any(term in query for term in behavior_terms) and any(term in query for term in fact_metric_terms):
+            return True
+        if any(term in query for term in behavior_terms) and any(term in query for term in fact_metric_terms) and not has_behavior_metric:
             return True
         if "当作" in query and any(term in query for term in ("门票", "票价", "开放时间", "文化内涵")):
             return True
         return False
-
-    def _rule_based_response(self, user_query: str) -> Optional[str]:
-        query = user_query
-
-        if self._has_source_conflict(query):
-            return "抱歉，这个问题要求混用错误的数据源。游客行为数据只能用于统计分析，景区 DOCX 资料只能用于景点事实、历史文化和讲解内容，我不能把一种数据源当作另一种事实依据。"
-
-        if "平均同行人数" in query or "同行人数" in query or "平均团体人数" in query:
-            rows = self.execute_sql("select round(avg(cast(group_size as real)), 2) as avg_group_size from tourist_behavior")
-            return self._format_single_value(rows, "avg_group_size", "样本游客平均同行人数约为", "人")
-
-        if "一共有多少条" in query or "多少条记录" in query or "总记录" in query:
-            rows = self.execute_sql("select count(*) as record_count from tourist_behavior")
-            return self._format_single_value(rows, "record_count", "当前游客行为数据共有", "条记录")
-
-        if "女性" in query and ("喜欢" in query or "偏好" in query) and ("类型" in query or "景点" in query):
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as visits "
-                "from tourist_behavior where gender = '女' "
-                "group by attraction_type order by visits desc limit 3"
-            )
-            if rows and "error" not in rows[0]:
-                summary = "，".join(f"{row['attraction_type']}（{row['visits']}次）" for row in rows)
-                return f"基于游客行为数据分析，女性游客最常选择的景点类型主要是：{summary}。"
-
-        if "男性" in query and ("喜欢" in query or "偏好" in query) and ("类型" in query or "景点" in query):
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as visits "
-                "from tourist_behavior where gender = '男' "
-                "group by attraction_type order by visits desc limit 3"
-            )
-            if rows and "error" not in rows[0]:
-                summary = "，".join(f"{row['attraction_type']}（{row['visits']}次）" for row in rows)
-                return f"基于游客行为数据分析，男性游客最常选择的景点类型主要是：{summary}。"
-
-        if "女性游客平均总消费" in query:
-            rows = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior where gender='女'")
-            return self._format_single_value(rows, "avg_total_cost", "女性游客平均总消费约为", "元")
-
-        if "男性游客平均总消费" in query:
-            rows = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior where gender='男'")
-            return self._format_single_value(rows, "avg_total_cost", "男性游客平均总消费约为", "元")
-
-        if "女性游客平均满意度" in query:
-            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where gender='女'")
-            return self._format_single_value(rows, "avg_satisfaction", "女性游客平均满意度约为", "分")
-
-        if "男性游客平均满意度" in query:
-            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where gender='男'")
-            return self._format_single_value(rows, "avg_satisfaction", "男性游客平均满意度约为", "分")
-
-        if "女性游客平均停留" in query:
-            rows = self.execute_sql("select round(avg(cast(stay_duration as real)), 2) as avg_stay from tourist_behavior where gender='女'")
-            return self._format_single_value(rows, "avg_stay", "女性游客平均停留时长约为", "小时")
-
-        if "男性游客平均停留" in query:
-            rows = self.execute_sql("select round(avg(cast(stay_duration as real)), 2) as avg_stay from tourist_behavior where gender='男'")
-            return self._format_single_value(rows, "avg_stay", "男性游客平均停留时长约为", "小时")
-
-        if "女性游客访问量最高" in query:
-            rows = self.execute_sql(
-                "select attraction_name, count(*) as visits from tourist_behavior where gender='女' "
-                "group by attraction_name order by visits desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_name", "visits", "访问量")
-
-        if "男性游客访问量最高" in query:
-            rows = self.execute_sql(
-                "select attraction_name, count(*) as visits from tourist_behavior where gender='男' "
-                "group by attraction_name order by visits desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_name", "visits", "访问量")
-
-        if (
-            ("平均消费" in query or "人均消费" in query or "总消费" in query or "人均花费" in query or "花费" in query)
-            and "餐" not in query
-            and not any(keyword in query for keyword in ("最高", "排名", "按月", "上半年", "下半年", "岁", "景点类型", "前3", "女性游客", "男性游客"))
-        ):
-            rows = self.execute_sql("select round(avg(total_cost), 2) as avg_total_cost from tourist_behavior")
-            if rows and "error" not in rows[0]:
-                return f"基于游客行为数据分析，样本游客的人均总消费约为{rows[0]['avg_total_cost']}元。"
-
-        if (
-            ("餐" in query or "吃饭" in query or "food_cost" in query)
-            and "最高" not in query
-            and "景点类型" not in query
-        ):
-            rows = self.execute_sql("select round(avg(food_cost), 2) as avg_food_cost from tourist_behavior")
-            if rows and "error" not in rows[0]:
-                return f"基于游客行为数据分析，样本游客的人均餐饮消费约为{rows[0]['avg_food_cost']}元。"
-
-        if "停留" in query and "最长" in query and "景点类型" not in query:
-            limit = 3 if any(keyword in query for keyword in ("哪几个", "前3", "排名")) else 1
-            rows = self.execute_sql(
-                "select attraction_name, round(avg(stay_duration), 2) as avg_stay "
-                f"from tourist_behavior group by attraction_name order by avg_stay desc limit {limit}"
-            )
-            return self._format_ranked_rows(rows, "attraction_name", "avg_stay", "平均停留", limit=limit)
-
-        if "满意度" in query and "最高" in query and "景点类型" not in query and "月份" not in query:
-            limit = 3 if any(keyword in query for keyword in ("哪几个", "前3", "排名")) else 1
-            rows = self.execute_sql(
-                "select attraction_name, round(avg(satisfaction), 2) as avg_satisfaction "
-                "from tourist_behavior group by attraction_name having count(*) >= 30 "
-                f"order by avg_satisfaction desc limit {limit}"
-            )
-            return self._format_ranked_rows(rows, "attraction_name", "avg_satisfaction", "平均满意度", limit=limit)
-
-        if "平均总消费最高" in query and "景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
-                "from tourist_behavior group by attraction_type order by avg_total_cost desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_total_cost", "平均总消费")
-
-        if "平均满意度最高" in query and "景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
-                "from tourist_behavior group by attraction_type order by avg_satisfaction desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_satisfaction", "平均满意度")
-
-        if "平均满意度最低" in query and "景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
-                "from tourist_behavior group by attraction_type order by avg_satisfaction asc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_satisfaction", "平均满意度")
-
-        if "平均停留时间最长" in query and "景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(stay_duration as real)), 2) as avg_stay "
-                "from tourist_behavior group by attraction_type order by avg_stay desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_stay", "平均停留")
-
-        if "停留时间最短" in query and "景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(stay_duration as real)), 2) as avg_stay "
-                "from tourist_behavior group by attraction_type order by avg_stay asc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_stay", "平均停留")
-
-        if "各景点类型的访问量" in query or "景点类型的访问量排名" in query:
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as visits from tourist_behavior "
-                "group by attraction_type order by visits desc limit 8"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "visits", "访问量", limit=8)
-
-        if "各景点类型的人均总消费" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
-                "from tourist_behavior group by attraction_type order by avg_total_cost desc"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_total_cost", "人均总消费", limit=8)
-
-        if "各景点类型的平均满意度" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
-                "from tourist_behavior group by attraction_type order by avg_satisfaction desc"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_satisfaction", "平均满意度", limit=8)
-
-        if "各景点类型的平均停留" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(stay_duration as real)), 2) as avg_stay "
-                "from tourist_behavior group by attraction_type order by avg_stay desc"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_stay", "平均停留", limit=8)
-
-        if "古镇水乡" in query and ("访问记录" in query or "访问量" in query):
-            rows = self.execute_sql("select count(*) as visits from tourist_behavior where attraction_type='古镇水乡'")
-            return self._format_single_value(rows, "visits", "古镇水乡类景点访问记录为", "条")
-
-        if "主题乐园类" in query and "平均满意度" in query:
-            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where attraction_type='主题乐园'")
-            return self._format_single_value(rows, "avg_satisfaction", "主题乐园类景点平均满意度约为", "分")
-
-        if "历史文化类" in query and "平均满意度" in query:
-            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where attraction_type='历史文化'")
-            return self._format_single_value(rows, "avg_satisfaction", "历史文化类景点平均满意度约为", "分")
-
-        if "风景名胜与休闲度假类" in query and "平均停留" in query:
-            rows = self.execute_sql("select round(avg(cast(stay_duration as real)), 2) as avg_stay from tourist_behavior where attraction_type='风景名胜与休闲度假'")
-            return self._format_single_value(rows, "avg_stay", "风景名胜与休闲度假类景点平均停留时长约为", "小时")
-
-        if "现代地标类" in query and "平均购物消费" in query:
-            rows = self.execute_sql("select round(avg(cast(shopping_cost as real)), 2) as avg_shopping_cost from tourist_behavior where attraction_type='现代地标'")
-            return self._format_single_value(rows, "avg_shopping_cost", "现代地标类景点平均购物消费约为", "元")
-
-        if "热门" in query and "类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as visits "
-                "from tourist_behavior group by attraction_type order by visits desc limit 3"
-            )
-            if rows and "error" not in rows[0]:
-                summary = "，".join(f"{row['attraction_type']}（{row['visits']}次）" for row in rows)
-                return f"基于游客行为数据分析，当前样本中最热门的景点类型主要是：{summary}。"
-
-        if "消费趋势" in query:
-            total = self.execute_sql("select round(avg(total_cost), 2) as avg_total_cost from tourist_behavior")
-            top_type = self.execute_sql(
-                "select attraction_type, count(*) as visits from tourist_behavior "
-                "group by attraction_type order by visits desc limit 1"
-            )
-            if total and top_type and "error" not in total[0] and "error" not in top_type[0]:
-                return (
-                    "基于游客行为数据分析，样本游客的人均总消费约为"
-                    f"{total[0]['avg_total_cost']}元，当前出现频次最高的景点类型是"
-                    f"{top_type[0]['attraction_type']}。这说明游客消费主要集中在高频热门类型景点。"
-                )
-
-        if "每个月" in query and ("记录量" in query or "访问量" in query):
-            rows = self.execute_sql(
-                "select substr(visit_date, 1, 7) as month, count(*) as visits "
-                "from tourist_behavior group by month order by month"
-            )
-            return self._format_month_rows(rows, "visits", "访问量")
-
-        if "平均满意度按月" in query:
-            rows = self.execute_sql(
-                "select substr(visit_date, 1, 7) as month, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
-                "from tourist_behavior group by month order by month"
-            )
-            return self._format_month_rows(rows, "avg_satisfaction", "平均满意度")
-
-        if "平均总消费按月" in query:
-            rows = self.execute_sql(
-                "select substr(visit_date, 1, 7) as month, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
-                "from tourist_behavior group by month order by month"
-            )
-            return self._format_month_rows(rows, "avg_total_cost", "平均总消费")
-
-        if "访问量最高" in query and "月份" in query:
-            rows = self.execute_sql(
-                "select substr(visit_date, 1, 7) as month, count(*) as visits "
-                "from tourist_behavior group by month order by visits desc limit 1"
-            )
-            return self._format_ranked_rows(rows, "month", "visits", "访问量", limit=1)
-
-        if "平均消费最高" in query and "月份" in query:
-            rows = self.execute_sql(
-                "select substr(visit_date, 1, 7) as month, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
-                "from tourist_behavior group by month order by avg_total_cost desc limit 1"
-            )
-            return self._format_ranked_rows(rows, "month", "avg_total_cost", "平均总消费", limit=1)
-
-        if "平均满意度最高" in query and "月份" in query:
-            rows = self.execute_sql(
-                "select substr(visit_date, 1, 7) as month, round(avg(cast(satisfaction as real)), 2) as avg_satisfaction "
-                "from tourist_behavior group by month order by avg_satisfaction desc limit 1"
-            )
-            return self._format_ranked_rows(rows, "month", "avg_satisfaction", "平均满意度", limit=1)
-
-        if "平均停留时间最高" in query and "月份" in query:
-            rows = self.execute_sql(
-                "select substr(visit_date, 1, 7) as month, round(avg(cast(stay_duration as real)), 2) as avg_stay "
-                "from tourist_behavior group by month order by avg_stay desc limit 1"
-            )
-            return self._format_ranked_rows(rows, "month", "avg_stay", "平均停留", limit=1)
-
-        if "20到30岁" in query and "偏好" in query:
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as visits from tourist_behavior where cast(age as real) between 20 and 30 "
-                "group by attraction_type order by visits desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "visits", "访问量")
-
-        if "31到45岁" in query and "偏好" in query:
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as visits from tourist_behavior where cast(age as real) between 31 and 45 "
-                "group by attraction_type order by visits desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "visits", "访问量")
-
-        if "46岁以上" in query and "偏好" in query:
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as visits from tourist_behavior where cast(age as real) >= 46 "
-                "group by attraction_type order by visits desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "visits", "访问量")
-
-        if "30岁以下游客平均消费" in query:
-            rows = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior where cast(age as real)<30")
-            return self._format_single_value(rows, "avg_total_cost", "30岁以下游客平均消费约为", "元")
-
-        if "50岁以上游客平均消费" in query:
-            rows = self.execute_sql("select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior where cast(age as real)>50")
-            return self._format_single_value(rows, "avg_total_cost", "50岁以上游客平均消费约为", "元")
-
-        if "30岁以下游客平均满意度" in query:
-            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where cast(age as real)<30")
-            return self._format_single_value(rows, "avg_satisfaction", "30岁以下游客平均满意度约为", "分")
-
-        if "50岁以上游客平均满意度" in query:
-            rows = self.execute_sql("select round(avg(cast(satisfaction as real)), 2) as avg_satisfaction from tourist_behavior where cast(age as real)>50")
-            return self._format_single_value(rows, "avg_satisfaction", "50岁以上游客平均满意度约为", "分")
-
-        if "消费最高的前3个景点" in query:
-            rows = self.execute_sql(
-                "select attraction_name, round(avg(cast(total_cost as real)), 2) as avg_total_cost "
-                "from tourist_behavior group by attraction_name having count(*) >= 30 order by avg_total_cost desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_name", "avg_total_cost", "平均总消费")
-
-        if "餐饮消费最高的景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(food_cost as real)), 2) as avg_food_cost "
-                "from tourist_behavior group by attraction_type order by avg_food_cost desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_food_cost", "平均餐饮消费")
-
-        if "购物消费最高的景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(shopping_cost as real)), 2) as avg_shopping_cost "
-                "from tourist_behavior group by attraction_type order by avg_shopping_cost desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_shopping_cost", "平均购物消费")
-
-        if "交通消费最高的景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(transport_cost as real)), 2) as avg_transport_cost "
-                "from tourist_behavior group by attraction_type order by avg_transport_cost desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_transport_cost", "平均交通消费")
-
-        if "娱乐消费最高的景点类型" in query:
-            rows = self.execute_sql(
-                "select attraction_type, round(avg(cast(entertainment_cost as real)), 2) as avg_entertainment_cost "
-                "from tourist_behavior group by attraction_type order by avg_entertainment_cost desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "avg_entertainment_cost", "平均娱乐消费")
-
-        if "低满意度记录最多" in query:
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as low_satisfaction_count from tourist_behavior where cast(satisfaction as real)<3 "
-                "group by attraction_type order by low_satisfaction_count desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "low_satisfaction_count", "低满意度记录数")
-
-        if "高满意度记录最多" in query:
-            rows = self.execute_sql(
-                "select attraction_type, count(*) as high_satisfaction_count from tourist_behavior where cast(satisfaction as real)=5 "
-                "group by attraction_type order by high_satisfaction_count desc limit 3"
-            )
-            return self._format_ranked_rows(rows, "attraction_type", "high_satisfaction_count", "高满意度记录数")
-
-        if "上半年" in query and "平均总消费" in query:
-            rows = self.execute_sql(
-                "select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior "
-                "where visit_date >= '2025-01-01' and visit_date < '2025-07-01'"
-            )
-            return self._format_single_value(rows, "avg_total_cost", "2025年上半年样本游客平均总消费约为", "元")
-
-        if "下半年" in query and "平均总消费" in query:
-            rows = self.execute_sql(
-                "select round(avg(cast(total_cost as real)), 2) as avg_total_cost from tourist_behavior "
-                "where visit_date >= '2025-07-01' and visit_date < '2026-01-01'"
-            )
-            return self._format_single_value(rows, "avg_total_cost", "2025年下半年样本游客平均总消费约为", "元")
-
-        if "不同人群偏好" in query or "人群偏好差异" in query:
-            female = self.execute_sql(
-                "select attraction_type, count(*) as visits from tourist_behavior "
-                "where gender = '女' group by attraction_type order by visits desc limit 1"
-            )
-            male = self.execute_sql(
-                "select attraction_type, count(*) as visits from tourist_behavior "
-                "where gender = '男' group by attraction_type order by visits desc limit 1"
-            )
-            if female and male and "error" not in female[0] and "error" not in male[0]:
-                return (
-                    "基于游客行为数据分析，女性游客当前最常选择的类型是"
-                    f"{female[0]['attraction_type']}，男性游客当前最常选择的类型是"
-                    f"{male[0]['attraction_type']}。这说明不同人群在景点偏好上存在明显差异。"
-                )
-
-        return None
 
     def _is_safe_select(self, sql: str) -> bool:
         normalized = re.sub(r"\s+", " ", sql.strip().lower())
@@ -566,6 +803,16 @@ Rules:
         if " attractions" in normalized:
             return False
         return True
+
+    def _contains_known_type(self, query: str) -> bool:
+        return bool(self._match_known_value(query, self._domain_cache["attraction_types"]))
+
+    @staticmethod
+    def _match_known_value(query: str, candidates: Sequence[str]) -> Optional[str]:
+        for value in sorted(candidates, key=len, reverse=True):
+            if value and value in query:
+                return value
+        return None
 
 
 TouristSQLAgent = TouristAnalyticsAgent

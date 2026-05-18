@@ -1,5 +1,5 @@
 import time
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -14,6 +14,7 @@ _pipeline_cache: Optional[ScenicRAGPipeline] = None
 class ChatMessage(BaseModel):
     role: str
     content: str
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -35,6 +36,8 @@ class ChatCompletionResponse(BaseModel):
     created: int
     model: str
     choices: List[ChatCompletionResponseChoice]
+    rag_metadata: Optional[Dict[str, Any]] = None
+    usage: Optional[Dict[str, int]] = None
 
 
 def get_pipeline() -> ScenicRAGPipeline:
@@ -57,6 +60,19 @@ async def chat_completions(request: ChatCompletionRequest):
 
     result = get_pipeline().process_query(user_message)
     answer = result["answer"]
+    rag_metadata = {
+        "intent": result["intent"],
+        "agent_type": result["agent_type"],
+        "response_kind": result.get("response_kind"),
+        "plan": result.get("plan"),
+        "evidence": result.get("evidence", []),
+        "refusal": result.get("refusal"),
+        "warnings": result.get("warnings", []),
+        "observability": result.get("observability"),
+        "matched_attraction": result.get("matched_attraction"),
+        "recommendation_label": result.get("recommendation_label"),
+        "recommendation": result.get("recommendation"),
+    }
 
     return ChatCompletionResponse(
         id=f"chatcmpl-{int(time.time())}",
@@ -65,8 +81,14 @@ async def chat_completions(request: ChatCompletionRequest):
         choices=[
             ChatCompletionResponseChoice(
                 index=0,
-                message=ChatMessage(role="assistant", content=answer),
+                message=ChatMessage(role="assistant", content=answer, metadata=rag_metadata),
                 finish_reason="stop",
             )
         ],
+        rag_metadata=rag_metadata,
+        usage={
+            "prompt_tokens": len(user_message),
+            "completion_tokens": len(answer),
+            "total_tokens": len(user_message) + len(answer),
+        },
     )

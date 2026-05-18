@@ -2,40 +2,74 @@
 
 灵山胜境导览服务 AI 数字人工程版。
 
-当前项目已经收敛成一套可运行、可演示、可继续迭代的完整工程链路，覆盖游客前台、管理后台、知识问答、推荐、语音交互和数字人生成。
+当前项目已经收敛为一套可部署、可演示、可评测、可继续迭代的真实工程，覆盖游客前台、管理后台、RAG+SQL 问答、路线推荐、语音交互与数字人联动。
+
+## 当前架构
+
+系统已经从早期的简单业务路由，升级为 planner-first 的 RAG+SQL 架构：
+
+- Planner 先判断问题类型、证据需求、可执行策略和拒答边界。
+- 景区结构化事实优先走事实层，不再直接依赖自由检索生成。
+- 游客行为分析优先走 semantic SQL，由 LLM 负责意图到查询计划的映射。
+- 非结构化景区知识才进入 hybrid RAG，用于历史文化、讲解扩展等深资料场景。
+- 路线推荐由独立 route planner 负责，把景区知识、行为偏好与讲解重点合成可执行路线。
+- 全链路统一输出响应契约，支持前端展示、日志留痕、评测回放和后续观测。
 
 ## 当前能力
 
 - 游客前台
-  - React + Vite 单页前端，统一承载登录、游客对话和后台入口。
-  - 进入页面自动开启一轮新会话，旧会话按用户名保存在本地历史中。
-  - 历史会话支持查看、重命名、删除，查看历史时输入区和语音按钮自动只读。
-  - 数字人展示区与聊天滚动区完全分离，避免消息过长挤压视频舞台。
-
+  - React + Vite 单页前端，统一承载登录、对话、语音输入和数字人视频。
+  - 支持文本问答、语音问答、路线推荐、弱 GPS 多轮问路。
+  - 会话历史按用户隔离保存，历史记录可回看、重命名、删除。
 - 管理后台
-  - 深色数据驾驶舱风格，展示互动量、意图分布、推荐标签分布、满意度趋势、热点问题、失败样例和知识库状态。
-  - 数字人运行模式支持后台切换：
-    - `省显存`：`float16 + warmup 0.0`
-    - `高质量`：`bfloat16 + warmup 0.5`
-  - 音色试听、音色保存、默认头像上传均可直接操作。
-
-- 问答与推荐
-  - 统一使用 `FACT / ANALYTICS / RECOMMEND` 三类业务路由。
-  - 景区事实和游客行为分析数据严格分层，不混用数据来源。
-  - 推荐标签对外统一显示中文，后台聚合不再暴露英文内部 key。
-  - 推荐标签分类采用“固定标签集合 + LLM 归类”，关键词规则仅作为兜底。
-
+  - 展示互动量、意图分布、满意度趋势、热点问题、失败样例、知识库状态。
+  - 支持数字人音色试听、默认头像上传、画质模式切换。
+  - 可以直接查看统一评测结果和知识库构建状态。
+- RAG+SQL
+  - 景区事实问答：结构化事实优先，必要时补充检索证据。
+  - 游客行为分析：semantic SQL 优先，避免把统计问题交给纯生成回答。
+  - 深资料问答：hybrid RAG 负责历史文化、讲解资料等长文本场景。
+  - 路线推荐：结合景区知识、行为数据与兴趣标签生成推荐路线。
 - 语音与数字人
   - Whisper 负责 ASR，Edge-TTS 负责语音合成，SoulX-FlashHead 负责数字人视频。
-  - 语音识别已修复 `.webm` 解码依赖问题：后端不再依赖系统安装的 `ffmpeg`，而是显式使用 `imageio-ffmpeg` 自带可执行文件。
-  - GPU 数字人视频生成链路已稳定：先按 chunk 推理并安全转到 CPU，再统一封装 mp4，避免先前的 CUDA 帧回传错误。
+  - `.webm` 识别链路已固定使用 `imageio-ffmpeg`，不再依赖系统级 `ffmpeg`。
+
+## 响应契约与可观测性
+
+RAG pipeline 现在统一返回以下字段：
+
+- `answer`
+- `response_kind`
+- `plan`
+- `evidence`
+- `refusal`
+- `warnings`
+- `observability`
+
+其中：
+
+- `plan` 记录 planner 的决策、选择的执行策略和关键参数。
+- `evidence` 记录事实证据、SQL 摘要、检索片段或路线依据。
+- `refusal` 用于机器可读拒答，避免把“不知道”做成不可审计的自然语言。
+- `warnings` 记录非致命质量风险，例如证据不足、回退执行、召回偏弱。
+- `observability` 记录耗时、回退、trace 等调试信息。
+
+接口层已经同步暴露更丰富的 `rag_metadata`，日志层也已经持久化：
+
+- `plan_json`
+- `evidence_json`
+- `refusal_json`
+- `warnings_json`
+- `observability_json`
+
+详细字段定义见 [docs/rag_response_contract.md](/D:/Human/docs/rag_response_contract.md)。
 
 ## 项目结构
 
 - `app/api/`
-  - 后端 HTTP 接口，包括认证、游客交互和管理后台。
+  - 后端 HTTP 接口，包括登录、游客交互、管理后台与高级 RAG 接口。
 - `app/rag/`
-  - 景区事实问答、推荐、行为分析和路由逻辑。
+  - planner、response contract、事实问答、semantic SQL、hybrid RAG、路线推荐与 pipeline。
 - `app/services/`
   - ASR、TTS、数字人、日志与运行时服务。
 - `app/tasks/`
@@ -47,24 +81,26 @@
 - `data/raw_sql_data/`
   - 游客行为分析原始 Excel。
 - `data/processed/`
-  - SQLite 中间结果、默认头像等处理产物。
+  - SQLite 中间结果、头像等处理产物。
 - `models/`
   - 本地模型目录。
+- `reports/`
+  - 统一评测报告与相关输出。
 
 ## 环境与依赖
 
-当前依赖入口统一为：
+统一依赖入口：
 
 - `environment.yml`
 
 依赖策略：
 
-- Conda 负责 Python、Node.js 和基础二进制依赖。
+- Conda 负责 Python、Node.js 与基础二进制依赖。
 - `environment.yml` 的 `pip` 部分负责应用层依赖。
-- GPU 版 `torch / torchvision / torchaudio` 由启动脚本按 CUDA 轮子单独安装。
-- `openai-whisper` 单独安装，避免构建隔离导致的兼容问题。
+- GPU 版 `torch / torchvision / torchaudio` 由启动脚本按 CUDA 轮子安装。
+- `openai-whisper` 独立安装，降低构建兼容问题。
 
-关键运行参数来自 `.env`，当前与数字人质量相关的主要项包括：
+关键运行参数来自 `.env`，例如：
 
 ```env
 AVATAR_DEVICE=cuda
@@ -82,16 +118,7 @@ AVATAR_VIDEO_CRF=20
 bootstrap_windows.bat
 ```
 
-脚本会：
-
-- 创建或修复 `D:\Human\env`
-- 根据 `environment.yml` 安装主依赖
-- 单独安装 GPU 版 PyTorch
-- 单独安装 `openai-whisper`
-- 下载项目所需模型
-- 检查运行时依赖健康状态
-
-### 2. 准备数据
+### 2. 构建数据
 
 ```bat
 build_behavior_data.bat
@@ -110,7 +137,7 @@ conda run -p "D:/Human/env" python -m app.cli build-frontend
 start_windows.bat
 ```
 
-启动后可访问：
+启动后访问：
 
 - 游客前台：<http://127.0.0.1:8000/>
 - 管理后台：<http://127.0.0.1:8000/admin>
@@ -122,85 +149,55 @@ start_windows.bat
 admin / admin123
 ```
 
-## 决赛 AutoDL 4090 演示
+## 统一评测
 
-推荐把 AutoDL 实例作为完整云端演示机，统一使用实例内 `6006` 端口承载前端、FastAPI、RAG、ASR/TTS 和数字人视频生成。
-
-在 AutoDL 实例中执行：
-
-```bash
-bash scripts/autodl_prepare.sh
-bash scripts/autodl_start.sh
-```
-
-访问方式：
-
-- 主链路：打开 AutoDL「自定义服务」中 `6006` 对应的公网地址。
-- 备用链路：本地执行 `ssh -CNg -L 6006:127.0.0.1:6006 root@<AutoDL主机> -p <SSH端口>`，再访问 <http://127.0.0.1:6006>。
-- 上台前预检：服务启动后运行 `bash scripts/finals_preflight.sh`，它会检查 GPU、运行时、TTS 网络、`/health` 和一次短问答链路。
-
-游客端默认启用“实时流式”演示模式：文本/语音输入后会通过 WebSocket 分段显示回答、播放语音并刷新数字人帧；如果流式链路失败，会自动回退到稳定的 POST + MP4 生成模式。
-
-## 统一 CLI
-
-统一入口：
+统一评测命令：
 
 ```bat
-conda run -p "D:/Human/env" python -m app.cli <command>
+conda run -p "D:/Human/env" python -m app.cli generate-unified-eval --target 1200 --output tests/unified_eval_cases.jsonl
+conda run -p "D:/Human/env" python -m app.cli eval-unified --report reports/unified_eval_report.json --markdown-report reports/unified_eval_report.md --strict --fail-under 90
 ```
 
-常用命令：
+最新完整评测结果：
 
-```bat
-conda run -p "D:/Human/env" python -m app.cli bootstrap
-conda run -p "D:/Human/env" python -m app.cli doctor
-conda run -p "D:/Human/env" python -m app.cli runtime-health
-conda run -p "D:/Human/env" python -m app.cli prepare-data
-conda run -p "D:/Human/env" python -m app.cli prepare-kb
-conda run -p "D:/Human/env" python -m app.cli build-frontend
-conda run -p "D:/Human/env" python -m app.cli start
-conda run -p "D:/Human/env" python -m app.cli dev
-conda run -p "D:/Human/env" python -m app.cli eval
-```
+- 总题数：`1200`
+- 总分：`99.38 / 100`
+- 总失败数：`11`
+- 运行时长：`885.966s`
 
-## 最近更新
+分项结果：
 
-- 前台完成整体重构，改为视频主位布局。
-- 本地历史记录改为按用户名隔离保存。
-- 后台完成深色驾驶舱重构。
-- 数字人画质模式支持后台切换，并写回 `.env`。
-- Whisper 语音识别修复 `.webm` 解码依赖问题。
-- GPU 数字人视频生成链路修复，恢复 `video_stream_url` 正常产出。
-- 登录页和后台文案收口，去掉“新版”“未分类”和英文推荐标签等不成熟展示。
+- `docx_structured`: `100.00`
+- `docx_rag`: `98.83`
+- `behavior_sql`: `99.67`
+- `fusion`: `99.36`
+- `boundary`: `97.50`
 
-## 常见排查
+当前剩余长尾问题仅集中在：
 
-### 语音识别直接失败
+- `docx_rag` 的个别术语覆盖
+- `behavior_sql` 的个别 top5 尾序表达
 
-先检查：
+报告见：
 
-- 浏览器麦克风权限是否已放开
-- `http://127.0.0.1:8000/api/v1/interact/audio` 是否可达
-- `D:\Human\env\Lib\site-packages\imageio_ffmpeg\binaries\` 下的 ffmpeg 是否存在
+- [reports/unified_eval_report.json](/D:/Human/reports/unified_eval_report.json)
+- [reports/unified_eval_report.md](/D:/Human/reports/unified_eval_report.md)
 
-### 数字人只返回语音不返回视频
+## 最近这次升级
 
-先检查：
-
-- `/api/v1/interact/text` 或 `/api/v1/interact/audio` 返回体里的 `video_stream_url`
-- `SoulX-FlashHead/data/temp/` 是否生成对应 `*_video.mp4`
-- 当前数字人模式是否为 `高质量`，显存是否足够
-
-### 环境损坏
-
-标准恢复路径：
-
-```powershell
-Remove-Item -Recurse -Force D:\Human\env
-.\bootstrap_windows.bat
-```
+- 新增 planner-first RAG+SQL 架构。
+- 新增统一 response contract。
+- 新增 semantic SQL 优先链路。
+- 新增机器可读 refusal / warnings / observability。
+- API 返回更丰富的 `rag_metadata`。
+- 日志持久化新增结构化 JSON 元数据字段。
+- 新增响应契约测试与文档。
+- 完整统一评测刷新到 `99.38/100`。
 
 ## 相关文档
 
-- [README.md](/D:/Human/README.md)
 - [总体设计文档.md](/D:/Human/总体设计文档.md)
+- [docs/rag_response_contract.md](/D:/Human/docs/rag_response_contract.md)
+- [docs/submission/01_部署和使用手册.md](/D:/Human/docs/submission/01_部署和使用手册.md)
+- [docs/submission/02_产品总体设计文档.md](/D:/Human/docs/submission/02_产品总体设计文档.md)
+- [docs/submission/05_测试评测报告.md](/D:/Human/docs/submission/05_测试评测报告.md)

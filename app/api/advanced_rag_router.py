@@ -49,6 +49,19 @@ async def chat_completions(request: ChatCompletionRequest):
     rag_pipeline = get_rag_pipeline()
     result = rag_pipeline.process_query(user_query)
     final_answer = result["answer"]
+    rag_metadata = {
+        "intent": result["intent"],
+        "agent_type": result["agent_type"],
+        "response_kind": result.get("response_kind"),
+        "plan": result.get("plan"),
+        "evidence": result.get("evidence", []),
+        "refusal": result.get("refusal"),
+        "warnings": result.get("warnings", []),
+        "observability": result.get("observability"),
+        "matched_attraction": result.get("matched_attraction"),
+        "recommendation_label": result.get("recommendation_label"),
+        "recommendation": result.get("recommendation"),
+    }
     
     # 构造 OpenAI 标准的响应体
     return {
@@ -60,15 +73,13 @@ async def chat_completions(request: ChatCompletionRequest):
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": final_answer
+                "content": final_answer,
+                "metadata": rag_metadata,
             },
             "finish_reason": "stop"
         }],
         # 将 RAG 的调试信息塞进扩展字段，方便管理大屏或测试脚本查看
-        "rag_metadata": {
-            "intent": result["intent"],
-            "agent_type": result["agent_type"]
-        },
+        "rag_metadata": rag_metadata,
         "usage": {
             "prompt_tokens": len(user_query),
             "completion_tokens": len(final_answer),

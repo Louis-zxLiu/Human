@@ -37,6 +37,11 @@ class LogService:
                     matched_attraction TEXT,
                     recommendation_label TEXT,
                     response_kind TEXT,
+                    plan_json TEXT,
+                    evidence_json TEXT,
+                    refusal_json TEXT,
+                    warnings_json TEXT,
+                    observability_json TEXT,
                     cost_time REAL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -50,6 +55,11 @@ class LogService:
                 "matched_attraction": "ALTER TABLE interaction_logs ADD COLUMN matched_attraction TEXT",
                 "recommendation_label": "ALTER TABLE interaction_logs ADD COLUMN recommendation_label TEXT",
                 "response_kind": "ALTER TABLE interaction_logs ADD COLUMN response_kind TEXT",
+                "plan_json": "ALTER TABLE interaction_logs ADD COLUMN plan_json TEXT",
+                "evidence_json": "ALTER TABLE interaction_logs ADD COLUMN evidence_json TEXT",
+                "refusal_json": "ALTER TABLE interaction_logs ADD COLUMN refusal_json TEXT",
+                "warnings_json": "ALTER TABLE interaction_logs ADD COLUMN warnings_json TEXT",
+                "observability_json": "ALTER TABLE interaction_logs ADD COLUMN observability_json TEXT",
             }
             for column, statement in migrations.items():
                 if column not in columns:
@@ -82,6 +92,14 @@ class LogService:
         except Exception as exc:
             print(f"[LogService] failed to analyze log labels: {exc}")
 
+        plan_json = json.dumps(metadata.get("plan"), ensure_ascii=False) if metadata.get("plan") is not None else None
+        evidence_json = json.dumps(metadata.get("evidence", []), ensure_ascii=False)
+        refusal_json = json.dumps(metadata.get("refusal"), ensure_ascii=False) if metadata.get("refusal") is not None else None
+        warnings_json = json.dumps(metadata.get("warnings", []), ensure_ascii=False)
+        observability_json = (
+            json.dumps(metadata.get("observability"), ensure_ascii=False) if metadata.get("observability") is not None else None
+        )
+
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.cursor()
@@ -89,8 +107,9 @@ class LogService:
                 """
                 INSERT INTO interaction_logs
                 (username, user_query, ai_response, intent_type, sentiment, focus_point,
-                 query_scope, matched_attraction, recommendation_label, response_kind, cost_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 query_scope, matched_attraction, recommendation_label, response_kind,
+                 plan_json, evidence_json, refusal_json, warnings_json, observability_json, cost_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     username,
@@ -103,6 +122,11 @@ class LogService:
                     metadata.get("matched_attraction"),
                     metadata.get("recommendation_label"),
                     metadata.get("response_kind"),
+                    plan_json,
+                    evidence_json,
+                    refusal_json,
+                    warnings_json,
+                    observability_json,
                     cost_time,
                 ),
             )
@@ -117,14 +141,22 @@ class LogService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT user_query, ai_response, created_at
+                SELECT user_query, ai_response, response_kind, warnings_json, created_at
                 FROM interaction_logs
                 WHERE username = ?
                 ORDER BY created_at DESC LIMIT ?
                 """,
                 (username, limit),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            history = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                try:
+                    item["warnings"] = json.loads(item.pop("warnings_json") or "[]")
+                except json.JSONDecodeError:
+                    item["warnings"] = []
+                history.append(item)
+            return history
         finally:
             conn.close()
 

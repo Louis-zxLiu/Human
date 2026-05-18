@@ -11,6 +11,7 @@ from app.core.scenic_catalog import (
 )
 from app.rag.fact_agent import ScenicFactAgent
 from app.rag.llm_client import generate_chat_completion
+from app.rag.response_contract import make_evidence
 from app.rag.sql_agent import TouristAnalyticsAgent
 
 
@@ -54,7 +55,7 @@ def detect_interest_label_clean(user_query: str) -> str:
         ("history", ("历史", "文化", "人文", "佛教", "禅意")),
         ("nature", ("自然", "风光", "湖景", "拍照", "打卡", "花海")),
         ("family", ("亲子", "孩子", "老人", "家庭")),
-        ("architecture", ("建筑", "艺术", "梵宫", "坛城", "街区", "立面")),
+        ("architecture", ("建筑", "艺术", "工艺", "梵宫", "坛城", "街区", "立面")),
         ("relaxed", ("轻松", "慢游", "不累", "休闲", "夜游")),
     ]
     for label, keywords in rules:
@@ -76,7 +77,7 @@ def classify_interest_label(user_query: str) -> str:
 - history：偏历史、文化、人文、佛教讲解
 - nature：偏风景、拍照、打卡、自然景观
 - family：偏亲子、家庭、老人、儿童同行
-- architecture：偏建筑、艺术、空间设计、街区立面
+- architecture：偏建筑、艺术、传统工艺、空间设计、街区立面
 - relaxed：偏轻松、慢游、休闲、不赶路、夜游
 - general：无法明确归入以上类别时使用
 
@@ -167,11 +168,21 @@ class ScenicRecommendationAgent:
         analytics_hint = self.analytics_agent.get_preference_hint(profile["analytics_types"])
         route_items = [
             {
+                "order": index,
                 "name": row["attraction_name"],
                 "summary": self._short_reason(row),
+                "rationale": self._stop_rationale(row, profile_key),
                 "attractionId": row["attraction_id"],
+                "evidence": make_evidence(
+                    "structured_fact_db",
+                    "attractions",
+                    entity=row["attraction_name"],
+                    field="route_stop",
+                    snippet=row.get("highlights") or row.get("description") or row.get("remarks") or "",
+                    metadata={"scenic_name": scenic_name},
+                ),
             }
-            for row in route_rows
+            for index, row in enumerate(route_rows, start=1)
         ]
         planning_note = self._compose_planning_note(planning_context)
         profile_text = (
@@ -181,11 +192,15 @@ class ScenicRecommendationAgent:
         )
         answer_lines = [
             f"{scenic_name}推荐路线：{' -> '.join(item['name'] for item in route_items)}",
+            f"推荐主题：{display_label}",
             f"适合原因：{profile['reason']}{profile_text}",
             f"预计游览时长：{profile['estimated_duration']}",
             f"建议讲解重点：{profile['highlights']}",
             f"游客行为分析补充：{analytics_hint or '当前行为分析层暂时无额外补充，建议以景点讲解体验为主。'}",
         ]
+        if route_items:
+            stop_lines = [f"{item['order']}. {item['name']}：{item['rationale']}" for item in route_items]
+            answer_lines.append("每站讲解建议：" + " ".join(stop_lines))
         if planning_note:
             answer_lines.append(f"规划说明：{planning_note}")
         if start_attraction:
@@ -215,6 +230,13 @@ class ScenicRecommendationAgent:
                 "scenic_name": scenic_name,
                 "guide_prompt": guide_prompt,
                 "planning_note": planning_note,
+            },
+            "evidence": [item["evidence"] for item in route_items[:4]],
+            "trace": {
+                "profile_key": profile_key,
+                "route_stop_count": len(route_items),
+                "used_behavior_hint": bool(analytics_hint),
+                "planning_context": planning_context or {},
             },
             "profileKey": profile_key,
             "scenicSlug": scenic_slug,
@@ -318,3 +340,20 @@ class ScenicRecommendationAgent:
             if value:
                 return value[:72] + ("..." if len(value) > 72 else "")
         return "适合作为本路线的讲解节点。"
+
+    @staticmethod
+    def _stop_rationale(row: Dict[str, Any], profile_key: str) -> str:
+        profile_prompts = {
+            "history": ("cultural_meaning", "description", "remarks"),
+            "nature": ("highlights", "location", "description"),
+            "family": ("highlights", "description", "remarks"),
+            "architecture": ("architecture_params", "description", "cultural_meaning"),
+            "relaxed": ("remarks", "highlights", "location"),
+            "general": ("description", "highlights", "cultural_meaning"),
+        }
+        fields = profile_prompts.get(profile_key, profile_prompts["general"])
+        for field in fields:
+            value = str(row.get(field) or "").strip()
+            if value:
+                return value[:88] + ("..." if len(value) > 88 else "")
+        return "适合作为这条路线中的代表性停留点。"

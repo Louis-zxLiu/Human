@@ -58,6 +58,44 @@ def clear_runtime_cache() -> None:
     _location_agent_cache = None
 
 
+def _build_rag_metadata(
+    pipeline_result: Dict[str, Any],
+    scenic_slug: Optional[str] = None,
+    attraction_id: Optional[str] = None,
+    route_label: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "intent": pipeline_result["intent"],
+        "query_scope": pipeline_result["intent"],
+        "agent_type": pipeline_result["agent_type"],
+        "matched_attraction": pipeline_result.get("matched_attraction"),
+        "recommendation_label": pipeline_result.get("recommendation_label"),
+        "response_kind": pipeline_result.get("response_kind"),
+        "recommendation": pipeline_result.get("recommendation"),
+        "gps_state": pipeline_result.get("gps_state"),
+        "gps_candidates": pipeline_result.get("gps_candidates", []),
+        "scenic_slug": scenic_slug,
+        "attraction_id": attraction_id,
+        "route_label": route_label,
+        "plan": pipeline_result.get("plan"),
+        "evidence": pipeline_result.get("evidence", []),
+        "refusal": pipeline_result.get("refusal"),
+        "warnings": pipeline_result.get("warnings", []),
+        "observability": pipeline_result.get("observability"),
+    }
+
+
+def _build_log_metadata(
+    pipeline_result: Dict[str, Any],
+    scenic_slug: Optional[str] = None,
+    attraction_id: Optional[str] = None,
+    route_label: Optional[str] = None,
+) -> Dict[str, Any]:
+    metadata = _build_rag_metadata(pipeline_result, scenic_slug=scenic_slug, attraction_id=attraction_id, route_label=route_label)
+    metadata["query_scope"] = pipeline_result["intent"]
+    return metadata
+
+
 def clean_markdown_for_tts(text: str) -> str:
     import markdown
     from bs4 import BeautifulSoup
@@ -335,19 +373,12 @@ def generate_avatar_response(
         "assistant_text": assistant_text,
         "audio_url": f"/static/temp/{request_id}.mp3" if audio_ready else None,
         "video_stream_url": f"/static/temp/{request_id}_video.mp4" if video_ready else None,
-        "rag_metadata": {
-            "intent": pipeline_result["intent"],
-            "agent_type": pipeline_result["agent_type"],
-            "matched_attraction": pipeline_result.get("matched_attraction"),
-            "recommendation_label": pipeline_result.get("recommendation_label"),
-            "response_kind": pipeline_result.get("response_kind"),
-            "recommendation": pipeline_result.get("recommendation"),
-            "gps_state": pipeline_result.get("gps_state"),
-            "gps_candidates": pipeline_result.get("gps_candidates", []),
-            "scenic_slug": scenic_slug,
-            "attraction_id": attraction_id,
-            "route_label": route_label,
-        },
+        "rag_metadata": _build_rag_metadata(
+            pipeline_result,
+            scenic_slug=scenic_slug,
+            attraction_id=attraction_id,
+            route_label=route_label,
+        ),
     }
 
 
@@ -420,19 +451,12 @@ async def interact_stream_ws(websocket: WebSocket):
                 if payload_chunk:
                     await websocket.send_json({"type": "chunk", **payload_chunk})
 
-            rag_metadata = {
-                "intent": pipeline_result["intent"],
-                "agent_type": pipeline_result["agent_type"],
-                "matched_attraction": pipeline_result.get("matched_attraction"),
-                "recommendation_label": pipeline_result.get("recommendation_label"),
-                "response_kind": pipeline_result.get("response_kind"),
-                "recommendation": pipeline_result.get("recommendation"),
-                "gps_state": pipeline_result.get("gps_state"),
-                "gps_candidates": pipeline_result.get("gps_candidates", []),
-                "scenic_slug": scenic_slug,
-                "attraction_id": attraction_id,
-                "route_label": route_label,
-            }
+            rag_metadata = _build_rag_metadata(
+                pipeline_result,
+                scenic_slug=scenic_slug,
+                attraction_id=attraction_id,
+                route_label=route_label,
+            )
             await websocket.send_json({"type": "done", "full_text": assistant_text, "rag_metadata": rag_metadata})
 
             try:
@@ -441,15 +465,12 @@ async def interact_stream_ws(websocket: WebSocket):
                     ai_response=assistant_text,
                     cost_time=0.0,
                     username="ws_user",
-                    metadata={
-                        "query_scope": pipeline_result["intent"],
-                        "matched_attraction": pipeline_result.get("matched_attraction"),
-                        "recommendation_label": pipeline_result.get("recommendation_label"),
-                        "response_kind": pipeline_result.get("response_kind"),
-                        "scenic_slug": scenic_slug,
-                        "attraction_id": attraction_id,
-                        "route_label": route_label,
-                    },
+                    metadata=_build_log_metadata(
+                        pipeline_result,
+                        scenic_slug=scenic_slug,
+                        attraction_id=attraction_id,
+                        route_label=route_label,
+                    ),
                 )
             except Exception as exc:
                 print(f"[API] failed to log websocket interaction: {exc}")
@@ -517,15 +538,7 @@ async def interact_audio(
         ai_response=result.get("assistant_text", ""),
         cost_time=total_latency,
         username=username,
-        metadata={
-            "query_scope": result.get("rag_metadata", {}).get("intent"),
-            "matched_attraction": result.get("rag_metadata", {}).get("matched_attraction"),
-            "recommendation_label": result.get("rag_metadata", {}).get("recommendation_label"),
-            "response_kind": result.get("rag_metadata", {}).get("response_kind"),
-            "scenic_slug": scenicSlug,
-            "attraction_id": attractionId,
-            "route_label": routeLabel,
-        },
+        metadata=result.get("rag_metadata", {}),
     )
 
     return JSONResponse(content=result)
@@ -571,15 +584,7 @@ async def interact_text(
         ai_response=result.get("assistant_text", ""),
         cost_time=total_latency,
         username=username,
-        metadata={
-            "query_scope": result.get("rag_metadata", {}).get("intent"),
-            "matched_attraction": result.get("rag_metadata", {}).get("matched_attraction"),
-            "recommendation_label": result.get("rag_metadata", {}).get("recommendation_label"),
-            "response_kind": result.get("rag_metadata", {}).get("response_kind"),
-            "scenic_slug": scenicSlug,
-            "attraction_id": attractionId,
-            "route_label": routeLabel,
-        },
+        metadata=result.get("rag_metadata", {}),
     )
 
     return JSONResponse(content=result)
