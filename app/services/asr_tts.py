@@ -6,6 +6,28 @@ import imageio_ffmpeg
 
 from app.core.config import resolve_path, settings
 
+_simplified_converter = None
+
+
+def normalize_asr_text(text: str) -> str:
+    """
+    Normalize ASR text before it enters chat/RAG.
+    """
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+
+    try:
+        from opencc import OpenCC
+    except Exception:
+        return normalized
+
+    global _simplified_converter
+    if _simplified_converter is None:
+        _simplified_converter = OpenCC("t2s")
+    return _simplified_converter.convert(normalized).strip()
+
+
 class ASRService:
     """
     Wrapper for Whisper (ASR)
@@ -67,17 +89,11 @@ class ASRService:
         print(f"[ASR] Transcribing {audio_path}...")
         audio_array = self._decode_audio(audio_path)
         self._validate_audio(audio_array)
-        result = self.model.transcribe(
-            audio_array,
-            language=settings.ASR_LANGUAGE,
-            task="transcribe",
-            temperature=0.0,
-            condition_on_previous_text=False,
-            fp16=self.device == "cuda",
-            no_speech_threshold=settings.ASR_NO_SPEECH_THRESHOLD,
-            logprob_threshold=settings.ASR_LOGPROB_THRESHOLD,
-        )
-        text = str(result.get("text") or "").strip()
+        result = self.model.transcribe(audio_array, language=settings.ASR_LANGUAGE)
+        raw_text = str(result.get("text") or "").strip()
+        text = normalize_asr_text(raw_text)
+        if raw_text != text:
+            print(f"[ASR] normalized='{raw_text}' -> '{text}'")
         print(f"[ASR] result='{text}'")
         return text
 

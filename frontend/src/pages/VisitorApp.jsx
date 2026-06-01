@@ -96,6 +96,19 @@ const PROCESS_STAGES = [
 const STREAMING_FRAME_INTERVAL_MS = 40;
 const MIN_RECORDING_MS = 600;
 const MIN_AUDIO_BYTES = 2048;
+const AUDIO_MIME_CANDIDATES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+];
+const AUDIO_CAPTURE_CONSTRAINTS = {
+  audio: {
+    channelCount: 1,
+    sampleRate: 48000,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+};
 
 function buildGreetingMessage(guideContext = {}) {
   const scenicName = guideContext.scenicName || "灵山胜境";
@@ -169,6 +182,13 @@ function blobToBase64(blob) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+function getSupportedAudioMimeType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+  return AUDIO_MIME_CANDIDATES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || "";
 }
 
 function base64ToBlobUrl(base64, mimeType) {
@@ -661,15 +681,17 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   async function ensureRecorder() {
     if (mediaRecorderRef.current) return;
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorderRef.current = new MediaRecorder(stream);
+    const stream = await navigator.mediaDevices.getUserMedia(AUDIO_CAPTURE_CONSTRAINTS);
+    const mimeType = getSupportedAudioMimeType();
+    mediaRecorderRef.current = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     mediaRecorderRef.current.ondataavailable = (event) => {
       if (event.data.size > 0) {
         audioChunksRef.current.push(event.data);
       }
     };
     mediaRecorderRef.current.onstop = async () => {
-      const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+      const recordingMimeType = mediaRecorderRef.current?.mimeType || mimeType || "audio/webm";
+      const blob = new Blob(audioChunksRef.current, { type: recordingMimeType });
       audioChunksRef.current = [];
       const recordingDurationMs = Date.now() - recordingStartedAtRef.current;
       recordingStartedAtRef.current = 0;
@@ -693,7 +715,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             );
           } catch {
             const formData = buildAudioMessageForm({
-              audioFile: new File([blob], "voice.webm", { type: "audio/webm" }),
+              audioFile: new File([blob], "voice.webm", { type: recordingMimeType }),
               gpsStatus: isGpsWeak ? "weak" : "normal",
               clientSessionId: currentSessionRef.current.id,
               scenicSlug: activeGuideContext.scenicSlug,
@@ -717,7 +739,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           }
         } else {
           const formData = buildAudioMessageForm({
-            audioFile: new File([blob], "voice.webm", { type: "audio/webm" }),
+            audioFile: new File([blob], "voice.webm", { type: recordingMimeType }),
             gpsStatus: isGpsWeak ? "weak" : "normal",
             clientSessionId: currentSessionRef.current.id,
             scenicSlug: activeGuideContext.scenicSlug,
@@ -764,8 +786,9 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       setActiveQuestion("正在聆听语音提问...");
       setProcessStage("heard");
       setIsRecording(true);
+      audioChunksRef.current = [];
       recordingStartedAtRef.current = Date.now();
-      mediaRecorderRef.current.start();
+      mediaRecorderRef.current.start(250);
     } catch (err) {
       setMessages((previous) => {
         const updatedMessages = [

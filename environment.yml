@@ -50,6 +50,7 @@ dependencies:
       - opencv-contrib-python==4.11.0.86
       - imageio
       - imageio-ffmpeg
+      - opencc-python-reimplemented
       - scikit-image
       - decord
       - loguru

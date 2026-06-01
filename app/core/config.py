@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     AVATAR_DEFAULT_IMAGE_PATH: str = "data/processed/default_avatar.jpg"
 
     MODEL_ASR_NAME: str = "Whisper"
-    MODEL_ASR_PATH: str = "base"
+    MODEL_ASR_PATH: str = "large-v3"
     WHISPER_DOWNLOAD_DIR: str = "./models/whisper-cache"
     ASR_LANGUAGE: str = "zh"
     ASR_MIN_AUDIO_SECONDS: float = 0.6
