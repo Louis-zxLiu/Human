@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.config import resolve_path
 from app.core.scenic_catalog import infer_scenic_slug_from_text, list_scenic_catalog, scenic_name_from_slug, scenic_slug_from_name
 from app.rag.chroma_agent import ChromaStaticAgent
+from app.rag.planner import contains_realtime_unsupported_signal
 from app.rag.response_contract import make_evidence, make_refusal
 
 
@@ -57,6 +58,57 @@ QUESTION_FIELD_MAP: Dict[str, Tuple[str, ...]] = {
     "core_function": ("作用", "用途", "功能"),
     "description": ("介绍", "讲解", "概况", "概述", "是什么"),
 }
+
+COMPARISON_HINTS: Tuple[str, ...] = (
+    "哪个",
+    "哪一个",
+    "更适合",
+    "更值得",
+    "相比",
+    "比较",
+    "区别",
+    "差别",
+    "还是",
+)
+
+REFERENCE_POSITION_HINTS: Tuple[str, ...] = (
+    "旁边",
+    "附近",
+    "边上",
+    "周边",
+    "对面",
+    "后面",
+    "前面",
+    "南侧",
+    "北侧",
+    "东侧",
+    "西侧",
+)
+
+REFERENCE_DESCRIPTOR_TERMS: Tuple[str, ...] = (
+    "藏式",
+    "藏传",
+    "建筑",
+    "坛城",
+    "佛塔",
+    "圣塔",
+    "桥",
+    "大佛",
+    "禅寺",
+    "博览馆",
+    "博物馆",
+    "街区",
+    "花海",
+    "湖",
+    "湖心岛",
+    "演出",
+    "木雕",
+    "壁画",
+    "唐卡",
+    "金顶",
+    "白墙",
+    "红边",
+)
 
 
 GENERAL_DOCX_FACTS: List[Tuple[Tuple[str, ...], str]] = [
@@ -183,9 +235,24 @@ class ScenicFactAgent:
         if not scenic_slug:
             scenic_slug = infer_scenic_slug_from_text(user_query)
 
-        attraction = self.match_attraction_name(user_query, scenic_slug=scenic_slug)
+        mentioned_attractions = self.find_attraction_mentions(user_query, scenic_slug=scenic_slug)
+        attraction = mentioned_attractions[0] if mentioned_attractions else None
         if not attraction and context_row:
             attraction = context_row["attraction_name"]
+
+        if self._is_multi_attraction_comparison_query(user_query, mentioned_attractions):
+            comparison_result = self._build_comparison_result(user_query, mentioned_attractions, scenic_slug=scenic_slug)
+            if comparison_result:
+                return comparison_result
+
+        referenced_attraction = self._resolve_referenced_attraction(
+            user_query,
+            mentioned_attractions,
+            scenic_slug=scenic_slug,
+        )
+        if referenced_attraction:
+            attraction = referenced_attraction
+
         if self._has_source_conflict(user_query):
             return self._result(
                 "抱歉，这个问题混用了不合适的数据源：游客行为数据只能用于统计分析，DOCX 景区资料只能用于景点事实、历史文化和讲解内容。我不能把一种数据源当作另一种事实依据来回答。",
@@ -235,7 +302,7 @@ class ScenicFactAgent:
                 ],
             )
 
-        question_query = user_query.replace(attraction, "") if attraction else user_query
+        question_query = self._strip_attraction_mentions(user_query, mentioned_attractions)
         question_type = self.detect_question_type(question_query or user_query)
 
         if attraction:
@@ -261,14 +328,15 @@ class ScenicFactAgent:
                             evidence=[self._row_evidence(row, question_type, row.get(question_type))],
                         )
 
-                overview = self._format_overview(row)
-                if overview:
-                    return self._result(
-                        overview,
-                        attraction,
-                        "overview",
-                        evidence=self._overview_evidence(row),
-                    )
+                if self._is_direct_overview_request(user_query, attraction):
+                    overview = self._format_overview(row)
+                    if overview:
+                        return self._result(
+                            overview,
+                            attraction,
+                            "overview",
+                            evidence=self._overview_evidence(row),
+                        )
 
         if retrieval_mode == "hybrid":
             rag_result = self._query_rag(user_query, scenic_slug=scenic_slug)
@@ -281,6 +349,18 @@ class ScenicFactAgent:
                     evidence=rag_result.get("evidence") or [],
                     trace=rag_result.get("trace") or {},
                 )
+
+        if attraction and self._is_direct_overview_request(user_query, attraction):
+            row = self.get_attraction_row(attraction)
+            if row:
+                overview = self._format_overview(row)
+                if overview:
+                    return self._result(
+                        overview,
+                        attraction,
+                        "overview",
+                        evidence=self._overview_evidence(row),
+                    )
 
         follow_up = self._build_refusal_follow_up(question_type, attraction, scenic_slug=scenic_slug)
         return self._result(
@@ -317,23 +397,43 @@ class ScenicFactAgent:
             return None
         return self._rows.get(attraction_name)
 
-    def match_attraction_name(self, user_query: str, scenic_slug: Optional[str] = None) -> Optional[str]:
-        query = user_query.strip()
-        attraction_names = self.list_attractions(scenic_slug=scenic_slug)
-        for attraction_name in attraction_names:
-            if attraction_name in query:
-                return attraction_name
+    def find_attraction_mentions(self, user_query: str, scenic_slug: Optional[str] = None) -> List[str]:
+        query = str(user_query or "").strip()
+        if not query:
+            return []
+
+        allowed_names = set(self.list_attractions(scenic_slug=scenic_slug))
+        matches: List[Tuple[int, int, str]] = []
+
+        for attraction_name in allowed_names:
+            start = query.find(attraction_name)
+            if start != -1:
+                matches.append((start, -len(attraction_name), attraction_name))
 
         for alias, attraction_name in self._attraction_aliases.items():
-            if alias in query and (not scenic_slug or attraction_name in attraction_names):
-                return attraction_name
-        return None
+            if scenic_slug and attraction_name not in allowed_names:
+                continue
+            start = query.find(alias)
+            if start != -1:
+                matches.append((start, -len(alias), attraction_name))
 
-    def detect_question_type(self, user_query: str) -> str:
+        ordered: List[str] = []
+        seen = set()
+        for _, _, attraction_name in sorted(matches):
+            if attraction_name not in seen:
+                seen.add(attraction_name)
+                ordered.append(attraction_name)
+        return ordered
+
+    def match_attraction_name(self, user_query: str, scenic_slug: Optional[str] = None) -> Optional[str]:
+        mentions = self.find_attraction_mentions(user_query, scenic_slug=scenic_slug)
+        return mentions[0] if mentions else None
+
+    def detect_question_type(self, user_query: str) -> Optional[str]:
         for field, keywords in QUESTION_FIELD_MAP.items():
             if any(keyword in user_query for keyword in keywords):
                 return field
-        return "description"
+        return None
 
     def _answer_general_docx_fact(self, user_query: str) -> Optional[str]:
         for keywords, answer in GENERAL_DOCX_FACTS:
@@ -374,7 +474,7 @@ class ScenicFactAgent:
         return payload if isinstance(payload, list) else []
 
     def _is_unsupported_fact_query(self, user_query: str) -> bool:
-        return any(keyword in user_query for keyword in UNSUPPORTED_FACT_KEYWORDS)
+        return any(keyword in user_query for keyword in UNSUPPORTED_FACT_KEYWORDS) or contains_realtime_unsupported_signal(user_query)
 
     def _has_source_conflict(self, user_query: str) -> bool:
         query = str(user_query or "")
@@ -532,7 +632,7 @@ class ScenicFactAgent:
 
     def _build_refusal_follow_up(
         self,
-        question_type: str,
+        question_type: Optional[str],
         attraction: Optional[str],
         scenic_slug: Optional[str] = None,
     ) -> str:
@@ -542,6 +642,168 @@ class ScenicFactAgent:
         if question_type == "location":
             return f"抱歉，我暂时无法直接判断您问的是哪一个{scenic_name}景点。您可以补充景点名称，或者描述一下附近最明显的建筑、佛像、桥、湖面或街区。"
         return f"抱歉，我暂时没有在{scenic_name}知识资料中找到足够证据来回答这个问题。您可以补充具体景点名称，或者改问位置、开放信息、历史背景、亮点和游览建议。"
+
+    def _strip_attraction_mentions(self, user_query: str, mentions: List[str]) -> str:
+        stripped = str(user_query or "")
+        for attraction_name in mentions:
+            stripped = stripped.replace(attraction_name, " ")
+        return " ".join(stripped.split())
+
+    def _is_direct_overview_request(self, user_query: str, attraction: str) -> bool:
+        stripped = str(user_query or "").strip().strip("，。！？,.!? ")
+        if stripped == attraction:
+            return True
+        remainder = stripped.replace(attraction, " ", 1).strip().strip("，。！？,.!? ")
+        if not remainder:
+            return True
+        return self.detect_question_type(remainder) == "description"
+
+    @staticmethod
+    def _is_multi_attraction_comparison_query(user_query: str, mentions: List[str]) -> bool:
+        if len(mentions) < 2:
+            return False
+        return any(keyword in user_query for keyword in COMPARISON_HINTS)
+
+    def _build_comparison_result(
+        self,
+        user_query: str,
+        mentions: List[str],
+        scenic_slug: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        rows = [self.get_attraction_row(name) for name in mentions[:2]]
+        if not all(rows):
+            return None
+
+        question_query = self._strip_attraction_mentions(user_query, mentions[:2])
+        question_type = self.detect_question_type(question_query or user_query) or "description"
+        row_a, row_b = rows[0], rows[1]
+        assert row_a is not None and row_b is not None
+
+        snippet_a = self._comparison_snippet(row_a, question_type)
+        snippet_b = self._comparison_snippet(row_b, question_type)
+        if not snippet_a or not snippet_b:
+            return None
+
+        answer_lines = []
+        preference = self._build_comparison_preference(user_query, row_a, row_b, question_type)
+        if preference:
+            answer_lines.append(preference)
+        answer_lines.append(f"{row_a['attraction_name']}：{snippet_a}")
+        answer_lines.append(f"{row_b['attraction_name']}：{snippet_b}")
+        answer = "\n".join(answer_lines)
+
+        return self._result(
+            answer,
+            None,
+            f"comparison:{question_type}",
+            evidence=[
+                self._row_evidence(row_a, question_type if question_type in row_a else "description", snippet_a),
+                self._row_evidence(row_b, question_type if question_type in row_b else "description", snippet_b),
+            ],
+        )
+
+    def _comparison_snippet(self, row: Dict[str, Any], question_type: str) -> Optional[str]:
+        if question_type == "history":
+            return self._format_history_answer(row)
+        if question_type in row and str(row.get(question_type) or "").strip():
+            return str(row.get(question_type) or "").strip()
+        for fallback_field in ("description", "highlights", "cultural_meaning", "architecture_params"):
+            value = str(row.get(fallback_field) or "").strip()
+            if value:
+                return value
+        return None
+
+    def _build_comparison_preference(
+        self,
+        user_query: str,
+        row_a: Dict[str, Any],
+        row_b: Dict[str, Any],
+        question_type: str,
+    ) -> Optional[str]:
+        if not any(keyword in user_query for keyword in ("更适合", "更值得", "哪个", "哪一个")):
+            return None
+
+        score_a = self._comparison_score(row_a, user_query, question_type)
+        score_b = self._comparison_score(row_b, user_query, question_type)
+
+        if score_a == score_b:
+            return f"{row_a['attraction_name']}和{row_b['attraction_name']}都能讲这个主题，但侧重点不一样。"
+
+        preferred = row_a if score_a > score_b else row_b
+        secondary = row_b if preferred is row_a else row_a
+        return f"如果这题想突出{self._comparison_focus_label(question_type, user_query)}，更适合先讲{preferred['attraction_name']}；{secondary['attraction_name']}更适合作为补充对照。"
+
+    def _comparison_score(self, row: Dict[str, Any], user_query: str, question_type: str) -> int:
+        combined = " ".join(
+            str(row.get(field) or "")
+            for field in ("architecture_params", "description", "highlights", "cultural_meaning", "remarks", "location")
+        )
+        score = 0
+        keywords = [
+            keyword
+            for keyword in REFERENCE_DESCRIPTOR_TERMS + tuple(term for term in QUESTION_FIELD_MAP.get(question_type, ()))
+            if len(keyword) >= 2 and keyword in user_query
+        ]
+        for keyword in keywords:
+            if keyword in combined:
+                score += 2
+        if question_type in {"architecture_params", "description"} and "艺术" in combined:
+            score += 1
+        return score
+
+    @staticmethod
+    def _comparison_focus_label(question_type: str, user_query: str) -> str:
+        if question_type == "architecture_params" or any(keyword in user_query for keyword in ("建筑", "艺术", "工艺")):
+            return "建筑艺术"
+        if question_type == "cultural_meaning":
+            return "文化内涵"
+        if question_type == "open_info":
+            return "开放信息"
+        if question_type == "highlights":
+            return "看点体验"
+        return "这个问题"
+
+    def _resolve_referenced_attraction(
+        self,
+        user_query: str,
+        mentions: List[str],
+        scenic_slug: Optional[str] = None,
+    ) -> Optional[str]:
+        if len(mentions) != 1:
+            return None
+        if not any(keyword in user_query for keyword in REFERENCE_POSITION_HINTS):
+            return None
+
+        anchor = mentions[0]
+        candidates = [name for name in self.list_attractions(scenic_slug=scenic_slug) if name != anchor]
+        if not candidates:
+            return None
+
+        best_name = None
+        best_score = 0
+        descriptor_terms = [term for term in REFERENCE_DESCRIPTOR_TERMS if term in user_query]
+
+        for candidate_name in candidates:
+            row = self.get_attraction_row(candidate_name)
+            if not row:
+                continue
+            combined = " ".join(
+                str(row.get(field) or "")
+                for field in ("location", "architecture_params", "description", "highlights", "remarks", "cultural_meaning")
+            )
+            score = 0
+            if anchor in combined:
+                score += 3
+            for term in descriptor_terms:
+                if term in combined:
+                    score += 2
+            if candidate_name in user_query:
+                score += 5
+            if score > best_score:
+                best_score = score
+                best_name = candidate_name
+
+        return best_name if best_score > 0 else None
 
     def _looks_like_missing_answer(self, answer: str) -> bool:
         if not answer:

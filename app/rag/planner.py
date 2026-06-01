@@ -146,6 +146,47 @@ REALTIME_UNSUPPORTED_HINTS = (
     "最新开放时间",
 )
 
+REALTIME_TIME_HINTS = (
+    "今天",
+    "今天下午",
+    "今天晚上",
+    "现在",
+    "当前",
+    "实时",
+    "这会儿",
+    "刚刚",
+    "稍后",
+    "等会",
+    "今晚",
+    "明天",
+)
+
+REALTIME_WEATHER_HINTS = (
+    "天气",
+    "下雨",
+    "雨",
+    "晴",
+    "阴",
+    "多云",
+    "气温",
+    "温度",
+    "风力",
+    "风大",
+    "空气质量",
+)
+
+REALTIME_TRAFFIC_HINTS = (
+    "堵不堵",
+    "堵车",
+    "路况",
+    "拥堵",
+    "交通",
+    "停车",
+    "车位",
+    "排队",
+    "客流",
+)
+
 DOCX_TERMS = ("docx", "DOCX", "历史文化资料", "景区资料", "介绍文档")
 BEHAVIOR_TERMS = ("游客行为数据", "行为数据", "游客行为 excel", "游客行为excel", "excel", "sql")
 FACT_TERMS = (
@@ -264,7 +305,7 @@ class QueryPlanner:
 
     @staticmethod
     def _requires_realtime_data(query: str) -> bool:
-        return any(keyword in query for keyword in REALTIME_UNSUPPORTED_HINTS)
+        return contains_realtime_unsupported_signal(query)
 
     @staticmethod
     def _prefers_hybrid_rag(query: str, question_type: str) -> bool:
@@ -324,3 +365,20 @@ class QueryPlanner:
         if any(keyword in query for keyword in RECOMMEND_KEYWORDS):
             return "RECOMMEND"
         return "FACT"
+
+
+def contains_realtime_unsupported_signal(query: str) -> bool:
+    if any(keyword in query for keyword in REALTIME_UNSUPPORTED_HINTS):
+        return True
+
+    has_time_anchor = any(keyword in query for keyword in REALTIME_TIME_HINTS)
+    weather_related = any(keyword in query for keyword in REALTIME_WEATHER_HINTS)
+    traffic_related = any(keyword in query for keyword in REALTIME_TRAFFIC_HINTS)
+
+    if has_time_anchor and (weather_related or traffic_related):
+        return True
+
+    if weather_related and any(keyword in query for keyword in ("会不会", "是否", "能不能", "怎么样")):
+        return True
+
+    return False

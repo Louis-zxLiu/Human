@@ -109,7 +109,7 @@ class ChromaStaticAgent:
             prompt,
             sys_prompt,
             temperature=0.1,
-            max_tokens=600,
+            max_tokens=220,
             return_error_text=False,
         )
         if final_answer:

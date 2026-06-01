@@ -206,6 +206,14 @@ class ScenicRecommendationAgent:
         if start_attraction:
             answer_lines.append(f"建议从 {start_attraction} 附近开始进入这条路线。")
         answer = "\n".join(answer_lines).strip()
+        compact_answer = self._build_compact_answer(
+            scenic_name=scenic_name,
+            title=profile["title"],
+            reason=profile["reason"],
+            estimated_duration=profile["estimated_duration"],
+            route_items=route_items,
+            start_attraction=start_attraction,
+        )
         first_route_item = route_items[0] if route_items else None
         guide_prompt = (
             f"请以数字人导游的方式带我走一条{scenic_name}的{display_label}路线，"
@@ -213,6 +221,7 @@ class ScenicRecommendationAgent:
         )
         return {
             "answer": answer,
+            "compact_answer": compact_answer,
             "matched_attraction": first_route_item["name"] if first_route_item else None,
             "response_kind": "recommendation",
             "recommendation_label": display_label,
@@ -230,6 +239,7 @@ class ScenicRecommendationAgent:
                 "scenic_name": scenic_name,
                 "guide_prompt": guide_prompt,
                 "planning_note": planning_note,
+                "compact_answer": compact_answer,
             },
             "evidence": [item["evidence"] for item in route_items[:4]],
             "trace": {
@@ -250,6 +260,26 @@ class ScenicRecommendationAgent:
             "guidePrompt": guide_prompt,
             "planningNote": planning_note,
         }
+
+    def _build_compact_answer(
+        self,
+        scenic_name: str,
+        title: str,
+        reason: str,
+        estimated_duration: str,
+        route_items: List[Dict[str, Any]],
+        start_attraction: Optional[str],
+    ) -> str:
+        stop_names = [item["name"] for item in route_items[:3] if item.get("name")]
+        stops_text = "\u3001".join(stop_names) if stop_names else scenic_name
+        answer = (
+            f"\u63a8\u8350\u8def\u7ebf\uff1a{title}\uff08\u7ea6 {estimated_duration}\uff09\u3002"
+            f"\u9002\u5408{reason}\uff0c\u91cd\u70b9\u5305\u542b{stops_text}\u3002"
+            "\u8be6\u7ec6\u5b89\u6392\u89c1\u4e0b\u65b9\u8def\u7ebf\u5361\u7247\u3002"
+        )
+        if start_attraction:
+            answer += f"\u5efa\u8bae\u4ece{start_attraction}\u9644\u8fd1\u5f00\u59cb\u3002"
+        return answer
 
     def _resolve_scenic_slug(
         self,

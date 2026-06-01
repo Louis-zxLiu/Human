@@ -119,6 +119,88 @@ def clean_markdown_for_tts(text: str) -> str:
     return emoji_pattern.sub("", plain_text).strip()
 
 
+def _select_avatar_response_text(
+    assistant_text: str,
+    pipeline_result: Dict[str, Any],
+    prefer_compact_recommendation: bool,
+) -> str:
+    compact_mode = True
+    recommendation = pipeline_result.get("recommendation") or {}
+    compact_answer = str(recommendation.get("compact_answer") or "").strip()
+    response_kind = str(pipeline_result.get("response_kind") or "")
+    if compact_answer and (prefer_compact_recommendation or response_kind == "recommendation"):
+        return compact_answer
+    if not compact_mode:
+        return assistant_text
+    return _compact_response_text(assistant_text, response_kind=response_kind)
+
+
+def _compact_response_text(text: str, response_kind: str = "") -> str:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return normalized
+
+    if response_kind.startswith("comparison:"):
+        lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+        compact_lines = [_truncate_line(line, 56) for line in lines[:3]]
+        return "\n".join(compact_lines)
+
+    if response_kind in {"overview", "history", "docx_general", "rag_answer", "rag_general", "rag_fallback"}:
+        return _compact_sentences(normalized, max_sentences=2, max_chars=110)
+
+    if response_kind.startswith("field:"):
+        return _compact_labeled_answer(normalized, max_chars=95)
+
+    if response_kind.startswith("refused") or response_kind in {"invalid_input", "gps:awaiting_landmarks"}:
+        return _compact_sentences(normalized, max_sentences=2, max_chars=88)
+
+    if response_kind.startswith("gps:"):
+        return _compact_sentences(normalized, max_sentences=2, max_chars=96)
+
+    return _compact_sentences(normalized, max_sentences=2, max_chars=100)
+
+
+def _compact_labeled_answer(text: str, max_chars: int) -> str:
+    if "：" not in text:
+        return _compact_sentences(text, max_sentences=2, max_chars=max_chars)
+    prefix, value = text.split("：", 1)
+    head = f"{prefix.strip()}："
+    remain = max(max_chars - len(head), 24)
+    return head + _truncate_line(value.strip(), remain)
+
+
+def _compact_sentences(text: str, max_sentences: int, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+
+    parts = split_sentences(text)
+    chosen: list[str] = []
+    total = 0
+    for part in parts:
+        candidate_len = total + len(part)
+        if chosen and (len(chosen) >= max_sentences or candidate_len > max_chars):
+            break
+        chosen.append(part)
+        total = candidate_len
+        if total >= max_chars:
+            break
+
+    if chosen:
+        compact = "".join(chosen).strip()
+        if len(compact) >= len(text):
+            return compact
+        return _truncate_line(compact, max_chars)
+    return _truncate_line(text, max_chars)
+
+
+def _truncate_line(text: str, max_chars: int) -> str:
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) <= max_chars:
+        return normalized
+    clipped = normalized[: max(0, max_chars - 3)].rstrip("，,；;、 ")
+    return f"{clipped}..."
+
+
 def is_valid_user_text(text: str) -> bool:
     return bool(text.strip()) and text not in INVALID_INPUTS
 
@@ -300,6 +382,7 @@ def _generate_fresh_avatar_response(
     scenic_slug: Optional[str] = None,
     attraction_id: Optional[str] = None,
     route_label: Optional[str] = None,
+    prefer_compact_recommendation: bool = False,
 ) -> Dict[str, Any]:
     start_time = time.time()
     session_key = get_session_key(username, client_session_id)
@@ -330,6 +413,11 @@ def _generate_fresh_avatar_response(
         user_profile=user_profile,
         scenic_slug=scenic_slug,
         attraction_id=attraction_id,
+    )
+    assistant_text = _select_avatar_response_text(
+        assistant_text,
+        pipeline_result,
+        prefer_compact_recommendation=prefer_compact_recommendation,
     )
 
     request_id = str(uuid.uuid4())
@@ -435,6 +523,7 @@ def generate_avatar_response(
             scenic_slug=route["scenic_slug"],
             attraction_id=attraction_id,
             route_label=route_label or route["title"],
+            prefer_compact_recommendation=True,
         ),
     )
     result = {
@@ -461,6 +550,7 @@ def refresh_preset_route_cache() -> Dict[str, int]:
                     gps_status="normal",
                     scenic_slug=current_route["scenic_slug"],
                     route_label=current_route["title"],
+                    prefer_compact_recommendation=True,
                 ),
             )
             refreshed += 1
@@ -536,6 +626,12 @@ async def interact_stream_ws(websocket: WebSocket):
                 scenic_slug=scenic_slug,
                 attraction_id=attraction_id,
             )
+            assistant_text = _select_avatar_response_text(
+                assistant_text,
+                pipeline_result,
+                prefer_compact_recommendation=bool(preset_route_key),
+            )
+            pipeline_result["answer"] = assistant_text
 
             preset_route = preset_route_cache.resolve_route(
                 user_text,

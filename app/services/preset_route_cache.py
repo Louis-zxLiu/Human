@@ -66,10 +66,6 @@ class PresetRouteCacheManager:
         self._lock_guard = threading.Lock()
         self._locks: dict[str, threading.Lock] = {}
         self._route_by_key = {route["key"]: route for route in PRESET_ROUTE_DEFINITIONS}
-        self._route_by_prompt = {
-            (route["scenic_slug"], _normalize_text(route["prompt"])): route
-            for route in PRESET_ROUTE_DEFINITIONS
-        }
 
     def list_routes(self) -> list[Dict[str, str]]:
         return [copy.deepcopy(route) for route in PRESET_ROUTE_DEFINITIONS]
@@ -83,19 +79,6 @@ class PresetRouteCacheManager:
         if preset_route_key:
             route = self._route_by_key.get(str(preset_route_key).strip())
             if route and (not scenic_slug or scenic_slug == route["scenic_slug"]):
-                return copy.deepcopy(route)
-
-        normalized_text = _normalize_text(user_text)
-        if not normalized_text:
-            return None
-
-        if scenic_slug:
-            route = self._route_by_prompt.get((scenic_slug, normalized_text))
-            if route:
-                return copy.deepcopy(route)
-
-        for route in PRESET_ROUTE_DEFINITIONS:
-            if normalized_text == _normalize_text(route["prompt"]):
                 return copy.deepcopy(route)
         return None
 
@@ -149,6 +132,7 @@ class PresetRouteCacheManager:
             "voice_id": voice_id,
             "torch_dtype": str(settings.AVATAR_TORCH_DTYPE).lower(),
             "warmup_seconds": str(settings.AVATAR_WARMUP_SECONDS),
+            "response_format_version": "compact-v1",
         }
 
     def _lock_for(self, route_key: str) -> threading.Lock:
@@ -184,6 +168,7 @@ class PresetRouteCacheManager:
                 context["voice_id"],
                 context["torch_dtype"],
                 context["warmup_seconds"],
+                context["response_format_version"],
             ]
         )
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
