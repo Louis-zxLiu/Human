@@ -18,36 +18,42 @@ PRESET_CACHE_DIR = os.path.join(STATIC_TEMP_ROOT, "preset_cache")
 PRESET_ROUTE_DEFINITIONS: list[Dict[str, str]] = [
     {
         "key": "lingshan-history",
+        "profile_key": "history",
         "scenic_slug": "lingshan-shengjing",
         "title": "历史文化深度路线",
         "prompt": "我是历史文化爱好者，请给我一条灵山胜境深度讲解路线，并说明每个节点讲什么。",
     },
     {
         "key": "lingshan-family",
+        "profile_key": "family",
         "scenic_slug": "lingshan-shengjing",
         "title": "亲子友好路线",
         "prompt": "我们带孩子来玩，请推荐一条亲子友好的路线，要有互动点和讲解重点。",
     },
     {
         "key": "lingshan-nature",
+        "profile_key": "nature",
         "scenic_slug": "lingshan-shengjing",
         "title": "自然风光路线",
         "prompt": "我喜欢自然风光和拍照打卡，请推荐一条适合拍照的路线，并说明为什么适合多数游客。",
     },
     {
         "key": "nianhuawan-night",
+        "profile_key": "relaxed",
         "scenic_slug": "nianhuawan",
         "title": "夜游慢行路线",
         "prompt": "我想在拈花湾慢慢逛，请给我一条适合夜游和放松的路线，并说明每一站看什么。",
     },
     {
         "key": "nianhuawan-culture",
+        "profile_key": "history",
         "scenic_slug": "nianhuawan",
         "title": "禅意文化路线",
         "prompt": "我更想感受拈花湾的禅意文化和建筑氛围，请推荐一条路线并说明讲解重点。",
     },
     {
         "key": "nianhuawan-family",
+        "profile_key": "family",
         "scenic_slug": "nianhuawan",
         "title": "花海亲子路线",
         "prompt": "我们带孩子来拈花湾放松，请推荐一条轻松好走、适合拍照和休息的路线。",

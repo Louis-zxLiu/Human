@@ -118,15 +118,22 @@ class ScenicRecommendationAgent:
         start_attraction: Optional[str] = None,
         user_profile: Optional[str] = None,
         scenic_slug: Optional[str] = None,
+        forced_profile_key: Optional[str] = None,
+        forced_title: Optional[str] = None,
     ) -> Dict[str, Any]:
         resolved_scenic_slug = self._resolve_scenic_slug(user_query, scenic_slug, start_attraction)
-        profile_key = self._refine_label_with_profile(classify_interest_label(user_query), user_profile)
+        profile_key = self._resolve_profile_key(
+            user_query,
+            user_profile=user_profile,
+            forced_profile_key=forced_profile_key,
+        )
         return self._build_recommendation(
             scenic_slug=resolved_scenic_slug,
             profile_key=profile_key,
             start_attraction=start_attraction,
             planning_context=None,
             user_profile=user_profile,
+            forced_title=forced_title,
         )
 
     def plan_route(
@@ -157,12 +164,14 @@ class ScenicRecommendationAgent:
         start_attraction: Optional[str],
         planning_context: Optional[Dict[str, str]],
         user_profile: Optional[str],
+        forced_title: Optional[str] = None,
     ) -> Dict[str, Any]:
         scenic_entry = get_scenic_entry(scenic_slug) or get_scenic_entry("lingshan-shengjing")
         scenic_slug = scenic_entry["slug"]
         scenic_name = scenic_entry["scenic_name"]
         profile_map = SCENIC_ROUTE_PROFILES[scenic_slug]
         profile = profile_map.get(profile_key) or profile_map["general"]
+        route_title = str(forced_title or profile["title"]).strip() or profile["title"]
         display_label = get_recommendation_display_label(profile_key)
         route_rows = self._collect_route(profile["attractions"], scenic_slug, start_attraction)
         analytics_hint = self.analytics_agent.get_preference_hint(profile["analytics_types"])
@@ -208,7 +217,7 @@ class ScenicRecommendationAgent:
         answer = "\n".join(answer_lines).strip()
         compact_answer = self._build_compact_answer(
             scenic_name=scenic_name,
-            title=profile["title"],
+            title=route_title,
             reason=profile["reason"],
             estimated_duration=profile["estimated_duration"],
             route_items=route_items,
@@ -272,9 +281,15 @@ class ScenicRecommendationAgent:
     ) -> str:
         stop_names = [item["name"] for item in route_items[:3] if item.get("name")]
         stops_text = "\u3001".join(stop_names) if stop_names else scenic_name
+        duration_text = str(estimated_duration or "").strip()
+        reason_text = str(reason or "").strip()
+        if duration_text.startswith("\u7ea6"):
+            duration_phrase = duration_text
+        else:
+            duration_phrase = f"\u7ea6 {duration_text}" if duration_text else ""
         answer = (
-            f"\u63a8\u8350\u8def\u7ebf\uff1a{title}\uff08\u7ea6 {estimated_duration}\uff09\u3002"
-            f"\u9002\u5408{reason}\uff0c\u91cd\u70b9\u5305\u542b{stops_text}\u3002"
+            f"\u63a8\u8350\u8def\u7ebf\uff1a{title}\uff08{duration_phrase}\uff09\u3002"
+            f"{reason_text}\u91cd\u70b9\u5305\u542b{stops_text}\u3002"
             "\u8be6\u7ec6\u5b89\u6392\u89c1\u4e0b\u65b9\u8def\u7ebf\u5361\u7247\u3002"
         )
         if start_attraction:
@@ -309,6 +324,17 @@ class ScenicRecommendationAgent:
         if inferred:
             return inferred
         return "lingshan-shengjing"
+
+    @staticmethod
+    def _resolve_profile_key(
+        user_query: str,
+        user_profile: Optional[str] = None,
+        forced_profile_key: Optional[str] = None,
+    ) -> str:
+        if forced_profile_key:
+            return normalize_interest_label(forced_profile_key)
+        detected_label = classify_interest_label(user_query)
+        return ScenicRecommendationAgent._refine_label_with_profile(detected_label, user_profile)
 
     @staticmethod
     def _refine_label_with_profile(label: str, user_profile: Optional[str]) -> str:

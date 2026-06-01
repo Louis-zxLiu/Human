@@ -14,8 +14,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user, get_current_user_optional
+from app.api.stream_utils import build_stream_tts_segments, split_sentences
 from app.core.config import resolve_path
-from app.rag.location_agent import ScenicLocationAgent
+from app.rag.location_agent import ScenicLocationAgent, detect_landmark_follow_up_need
 from app.rag.pipeline import ScenicRAGPipeline
 from app.rag.router import get_query_intent
 from app.services.asr_tts import get_asr_service, get_tts_service
@@ -31,7 +32,6 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 _pipeline_cache: Optional[ScenicRAGPipeline] = None
 _location_agent_cache: Optional[ScenicLocationAgent] = None
 INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
-SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?；;])")
 WEAK_GPS_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -205,14 +205,6 @@ def is_valid_user_text(text: str) -> bool:
     return bool(text.strip()) and text not in INVALID_INPUTS
 
 
-def split_sentences(text: str) -> list[str]:
-    stripped = text.strip()
-    if not stripped:
-        return []
-    parts = [part.strip() for part in SENTENCE_SPLIT_RE.split(stripped) if part.strip()]
-    return parts or [stripped]
-
-
 def synthesize_chunk_payload(text: str) -> Optional[Dict[str, Any]]:
     clean_text = clean_markdown_for_tts(text)
     if not clean_text or not re.search(r"[\w\u4e00-\u9fa5]", clean_text):
@@ -245,10 +237,7 @@ def get_session_key(username: str, client_session_id: Optional[str], fallback: O
 def should_enter_weak_gps_flow(user_text: str, gps_status: str, intent: str) -> bool:
     if gps_status != "weak":
         return False
-    location_agent = get_location_agent()
-    if location_agent.is_navigation_query(user_text):
-        return True
-    return intent == "RECOMMEND" and any(keyword in user_text for keyword in ("从这里", "当前位置", "附近"))
+    return detect_landmark_follow_up_need(user_text, intent)
 
 
 def pop_weak_gps_context(session_key: str) -> Optional[Dict[str, Any]]:
@@ -351,6 +340,8 @@ def run_answer_pipeline(
     user_profile: Optional[str] = None,
     scenic_slug: Optional[str] = None,
     attraction_id: Optional[str] = None,
+    forced_recommendation_profile: Optional[str] = None,
+    forced_recommendation_title: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     gps_result = handle_weak_gps_flow(
         user_text,
@@ -368,6 +359,8 @@ def run_answer_pipeline(
         user_profile=user_profile,
         scenic_slug=scenic_slug,
         attraction_id=attraction_id,
+        forced_recommendation_profile=forced_recommendation_profile,
+        forced_recommendation_title=forced_recommendation_title,
     )
     result["gps_state"] = "normal" if gps_status != "weak" else "weak_without_followup"
     result["gps_candidates"] = []
@@ -383,6 +376,8 @@ def _generate_fresh_avatar_response(
     attraction_id: Optional[str] = None,
     route_label: Optional[str] = None,
     prefer_compact_recommendation: bool = False,
+    forced_recommendation_profile: Optional[str] = None,
+    forced_recommendation_title: Optional[str] = None,
 ) -> Dict[str, Any]:
     start_time = time.time()
     session_key = get_session_key(username, client_session_id)
@@ -413,6 +408,8 @@ def _generate_fresh_avatar_response(
         user_profile=user_profile,
         scenic_slug=scenic_slug,
         attraction_id=attraction_id,
+        forced_recommendation_profile=forced_recommendation_profile,
+        forced_recommendation_title=forced_recommendation_title,
     )
     assistant_text = _select_avatar_response_text(
         assistant_text,
@@ -524,6 +521,8 @@ def generate_avatar_response(
             attraction_id=attraction_id,
             route_label=route_label or route["title"],
             prefer_compact_recommendation=True,
+            forced_recommendation_profile=route.get("profile_key"),
+            forced_recommendation_title=route.get("title"),
         ),
     )
     result = {
@@ -551,6 +550,8 @@ def refresh_preset_route_cache() -> Dict[str, int]:
                     scenic_slug=current_route["scenic_slug"],
                     route_label=current_route["title"],
                     prefer_compact_recommendation=True,
+                    forced_recommendation_profile=current_route.get("profile_key"),
+                    forced_recommendation_title=current_route.get("title"),
                 ),
             )
             refreshed += 1
@@ -646,7 +647,8 @@ async def interact_stream_ws(websocket: WebSocket):
             for char in assistant_text:
                 await websocket.send_json({"type": "text_token", "text": char})
 
-            for sentence in split_sentences(assistant_text):
+            response_kind = str(pipeline_result.get("response_kind") or "")
+            for sentence in build_stream_tts_segments(assistant_text, response_kind=response_kind):
                 payload_chunk = await asyncio.to_thread(synthesize_chunk_payload, sentence)
                 if payload_chunk:
                     await websocket.send_json({"type": "chunk", **payload_chunk})

@@ -1,7 +1,118 @@
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.rag.fact_agent import ScenicFactAgent
+from app.rag.llm_client import generate_chat_completion
+
+
+CURRENT_POSITION_HINTS = (
+    "我现在",
+    "当前位置",
+    "当前所在",
+    "我在哪",
+    "我在哪里",
+    "我附近",
+    "附近",
+    "周边",
+    "离我最近",
+    "从这里",
+    "从这儿",
+    "接下来",
+    "下一步",
+)
+
+NEXT_STEP_HINTS = (
+    "下一步",
+    "接下来",
+    "后面去哪",
+    "先去哪里",
+    "适合去哪些点",
+    "附近有什么",
+    "离我最近",
+)
+
+ROUTE_GUIDANCE_HINTS = (
+    "怎么走",
+    "怎么去",
+    "往哪走",
+    "导航",
+    "带我去",
+    "去怎么走",
+)
+
+STATIC_LOCATION_FACT_HINTS = (
+    "在哪里",
+    "在哪",
+    "哪里",
+    "位于",
+    "什么位置",
+    "具体方位",
+    "方位",
+)
+
+
+def should_request_landmark_follow_up(user_query: str, intent: str) -> bool:
+    query = str(user_query or "").strip()
+    if not query:
+        return False
+
+    has_current_position_hint = any(keyword in query for keyword in CURRENT_POSITION_HINTS)
+    has_route_guidance_hint = any(keyword in query for keyword in ROUTE_GUIDANCE_HINTS)
+    has_static_location_hint = any(keyword in query for keyword in STATIC_LOCATION_FACT_HINTS)
+    has_next_step_hint = any(keyword in query for keyword in NEXT_STEP_HINTS)
+
+    if has_current_position_hint:
+        return True
+    if intent == "RECOMMEND" and has_next_step_hint:
+        return True
+    if has_route_guidance_hint and not has_static_location_hint:
+        return True
+    return False
+
+
+def detect_landmark_follow_up_need(user_query: str, intent: str) -> bool:
+    query = str(user_query or "").strip()
+    normalized_intent = str(intent or "").strip().upper() or "FACT"
+    if not query:
+        return False
+
+    system_prompt = (
+        "You classify whether a weak-GPS follow-up is needed in a scenic-guide assistant. "
+        "Return strict JSON only with fields: needs_landmark_follow_up, reason. "
+        "Set needs_landmark_follow_up to true only when the user's question depends on their current position, "
+        "nearby landmarks, next step from where they currently are, or route guidance from here. "
+        "Set it to false for static scenic fact questions such as asking where an attraction is located, "
+        "asking for attraction introductions, history, highlights, or general route planning that does not depend on current position."
+    )
+    prompt = (
+        f"User intent: {normalized_intent}\n"
+        f"User query: {query}\n\n"
+        "Examples:\n"
+        '- "灵山梵宫在哪里？" -> false\n'
+        '- "从这里怎么去灵山梵宫？" -> true\n'
+        '- "我现在 GPS 不太准，下一步适合去哪些点？" -> true\n'
+        '- "请推荐一条适合亲子的路线。" -> false\n\n'
+        'Output JSON: {"needs_landmark_follow_up": true/false, "reason": "..."}'
+    )
+
+    try:
+        raw = generate_chat_completion(
+            prompt,
+            system_prompt,
+            temperature=0.0,
+            max_tokens=120,
+            return_error_text=False,
+        )
+        cleaned = str(raw or "").replace("```json", "").replace("```", "").strip()
+        if cleaned:
+            payload = json.loads(cleaned)
+            value = payload.get("needs_landmark_follow_up")
+            if isinstance(value, bool):
+                return value
+    except Exception:
+        pass
+    return should_request_landmark_follow_up(query, normalized_intent)
 
 
 LANDMARK_HINTS: Dict[str, List[str]] = {
