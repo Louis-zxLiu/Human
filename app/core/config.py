@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     MODEL_ASR_NAME: str = "Whisper"
     MODEL_ASR_PATH: str = "base"
     WHISPER_DOWNLOAD_DIR: str = "./models/whisper-cache"
+    ASR_LANGUAGE: str = "zh"
+    ASR_MIN_AUDIO_SECONDS: float = 0.6
+    ASR_MIN_RMS: float = 0.003
+    ASR_NO_SPEECH_THRESHOLD: float = 0.6
+    ASR_LOGPROB_THRESHOLD: float = -1.0
     MODEL_TTS_NAME: str = "Edge-TTS"
 
     HOST: str = "0.0.0.0"

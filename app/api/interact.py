@@ -471,6 +471,54 @@ def _generate_fresh_avatar_response(
     }
 
 
+def _generate_static_avatar_response(
+    assistant_text: str,
+    response_kind: str,
+    agent_type: str = "static_reply",
+) -> Dict[str, Any]:
+    request_id = str(uuid.uuid4())
+    audio_output_path = os.path.join(TEMP_DIR, f"{request_id}.mp3")
+    video_output_path = os.path.join(TEMP_DIR, f"{request_id}_video.mp4")
+
+    audio_ready = False
+    try:
+        clean_text_for_tts = clean_markdown_for_tts(assistant_text)
+        if clean_text_for_tts and re.search(r"[\w\u4e00-\u9fa5]", clean_text_for_tts):
+            tts_service = get_tts_service()
+            tts_service.synthesize(clean_text_for_tts, audio_output_path)
+            audio_ready = os.path.exists(audio_output_path) and os.path.getsize(audio_output_path) > 0
+    except Exception as exc:
+        print(f"[TTS] static synthesis failed: {exc}")
+        audio_ready = False
+
+    video_ready = False
+    if audio_ready:
+        try:
+            avatar_engine = get_avatar_engine()
+            success_path = avatar_engine.generate_avatar_video(audio_output_path, video_output_path)
+            video_ready = bool(success_path and os.path.exists(video_output_path))
+        except Exception as exc:
+            print(f"[AvatarEngine] static video generation failed: {exc}")
+            video_ready = False
+
+    return {
+        "user_text": "",
+        "assistant_text": assistant_text,
+        "audio_url": f"/static/temp/{request_id}.mp3" if audio_ready else None,
+        "video_stream_url": f"/static/temp/{request_id}_video.mp4" if video_ready else None,
+        "rag_metadata": {
+            "intent": "FACT",
+            "agent_type": agent_type,
+            "matched_attraction": None,
+            "recommendation_label": None,
+            "response_kind": response_kind,
+            "recommendation": None,
+            "gps_state": "awaiting_landmarks" if response_kind == "gps:awaiting_landmarks" else None,
+            "gps_candidates": [],
+        },
+    }
+
+
 def _apply_preset_route_metadata(
     result: Dict[str, Any],
     preset_route: Dict[str, str],
@@ -482,6 +530,43 @@ def _apply_preset_route_metadata(
     rag_metadata["cache_status"] = cache_status
     result["rag_metadata"] = rag_metadata
     return result
+
+
+def _apply_preset_reply_metadata(
+    result: Dict[str, Any],
+    preset_reply: Dict[str, str],
+    cache_status: str,
+) -> Dict[str, Any]:
+    rag_metadata = dict(result.get("rag_metadata") or {})
+    rag_metadata["preset_reply_key"] = preset_reply["key"]
+    rag_metadata["preset_reply_title"] = preset_reply["title"]
+    rag_metadata["cache_status"] = cache_status
+    result["rag_metadata"] = rag_metadata
+    return result
+
+
+def _apply_fixed_reply_cache(result: Dict[str, Any]) -> Dict[str, Any]:
+    rag_metadata = result.get("rag_metadata") or {}
+    preset_reply = preset_route_cache.resolve_reply(
+        result.get("assistant_text"),
+        response_kind=rag_metadata.get("response_kind"),
+    )
+    if not preset_reply:
+        return result
+
+    payload = preset_route_cache.get_or_create_payload(
+        preset_reply,
+        lambda _reply: result,
+    )
+    cached_result = {
+        "user_text": result.get("user_text", ""),
+        "assistant_text": payload.get("assistant_text", result.get("assistant_text", "")),
+        "audio_url": payload.get("audio_url"),
+        "video_stream_url": payload.get("video_stream_url"),
+        "rag_metadata": payload.get("rag_metadata") or rag_metadata,
+    }
+    cache_status = "hit" if payload.get("cache_hit") else "generated"
+    return _apply_preset_reply_metadata(cached_result, preset_reply, cache_status)
 
 
 def generate_avatar_response(
@@ -500,7 +585,7 @@ def generate_avatar_response(
         preset_route_key=preset_route_key,
     )
     if not preset_route:
-        return _generate_fresh_avatar_response(
+        result = _generate_fresh_avatar_response(
             user_text,
             username,
             gps_status,
@@ -509,6 +594,7 @@ def generate_avatar_response(
             attraction_id=attraction_id,
             route_label=route_label,
         )
+        return _apply_fixed_reply_cache(result)
 
     payload = preset_route_cache.get_or_create_payload(
         preset_route,
@@ -558,6 +644,20 @@ def refresh_preset_route_cache() -> Dict[str, int]:
         except Exception as exc:
             failed += 1
             print(f"[PresetRouteCache] refresh failed for {route['key']}: {exc}")
+    for reply in preset_route_cache.list_replies():
+        try:
+            preset_route_cache.get_or_create_payload(
+                reply,
+                lambda current_reply: _generate_static_avatar_response(
+                    current_reply["assistant_text"],
+                    response_kind=current_reply["response_kind"],
+                    agent_type="preset_reply",
+                ),
+            )
+            refreshed += 1
+        except Exception as exc:
+            failed += 1
+            print(f"[PresetRouteCache] refresh failed for {reply['key']}: {exc}")
     return {"refreshed": refreshed, "failed": failed}
 
 

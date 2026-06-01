@@ -94,6 +94,8 @@ const PROCESS_STAGES = [
   { key: "avatar", title: "数字人出镜", detail: "合成语音和口型视频，形成稳定的多模态反馈。" },
 ];
 const STREAMING_FRAME_INTERVAL_MS = 40;
+const MIN_RECORDING_MS = 600;
+const MIN_AUDIO_BYTES = 2048;
 
 function buildGreetingMessage(guideContext = {}) {
   const scenicName = guideContext.scenicName || "灵山胜境";
@@ -236,6 +238,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   const streamFrameTimerRef = useRef(null);
   const streamAudioUrlsRef = useRef([]);
   const messagesRef = useRef(messages);
+  const recordingStartedAtRef = useRef(0);
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
@@ -552,8 +555,9 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
 
         if (message.type === "chunk") {
           setProcessStage("avatar");
-          streamedMedia = true;
-          enqueueStreamingFrames(message.frames || []);
+          const frames = message.frames || [];
+          streamedMedia = streamedMedia || frames.length > 0;
+          enqueueStreamingFrames(frames);
           await playStreamingAudio(message.audio);
           return;
         }
@@ -567,7 +571,13 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             true,
           );
           setStreamNotice("实时流式回答完成。");
-          completeProcessing({ video_stream_url: streamedMedia ? "__stream__" : "" });
+          if (!streamedMedia) {
+            settled = true;
+            closeSocket();
+            reject(new Error("瀹炴椂閾捐矾鏈敓鎴愭暟瀛椾汉鐢婚潰"));
+            return;
+          }
+          completeProcessing({ video_stream_url: "__stream__" });
           settled = true;
           closeSocket();
           resolve(message);
@@ -661,6 +671,15 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     mediaRecorderRef.current.onstop = async () => {
       const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
       audioChunksRef.current = [];
+      const recordingDurationMs = Date.now() - recordingStartedAtRef.current;
+      recordingStartedAtRef.current = 0;
+      if (recordingDurationMs < MIN_RECORDING_MS || blob.size < MIN_AUDIO_BYTES) {
+        setIsRecording(false);
+        clearStageTimers();
+        setProcessStage("done");
+        setActiveQuestion("语音太短，请按住后说完整问题。");
+        return;
+      }
       setLoading(true);
       scheduleProcessingStages("正在识别语音输入...", "retrieving");
 
@@ -745,6 +764,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       setActiveQuestion("正在聆听语音提问...");
       setProcessStage("heard");
       setIsRecording(true);
+      recordingStartedAtRef.current = Date.now();
       mediaRecorderRef.current.start();
     } catch (err) {
       setMessages((previous) => {

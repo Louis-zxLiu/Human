@@ -60,6 +60,28 @@ PRESET_ROUTE_DEFINITIONS: list[Dict[str, str]] = [
     },
 ]
 
+PRESET_REPLY_DEFINITIONS: list[Dict[str, str]] = [
+    {
+        "key": "gps-awaiting-landmarks",
+        "title": "GPS 弱信号补充地标提示",
+        "response_kind": "gps:awaiting_landmarks",
+        "assistant_text": (
+            "当前 GPS 信号较弱，我先不能准确定位您。"
+            "请描述一下您附近最明显的佛像、桥、广场、宫殿、塔、花海、湖面或街区，"
+            "我再结合景点资料继续帮您判断。"
+        ),
+    },
+    {
+        "key": "refused-insufficient-fact-evidence",
+        "title": "事实证据不足提示",
+        "response_kind": "refused",
+        "assistant_text": (
+            "抱歉，我暂时没有在灵山胜境知识资料中找到足够证据来回答这个问题。"
+            "您可以补充具体景点名称，或者改问位置、开放信息、历史背景、亮点和游览建议。"
+        ),
+    },
+]
+
 
 def _normalize_text(value: Optional[str]) -> str:
     return " ".join(str(value or "").strip().split())
@@ -72,9 +94,13 @@ class PresetRouteCacheManager:
         self._lock_guard = threading.Lock()
         self._locks: dict[str, threading.Lock] = {}
         self._route_by_key = {route["key"]: route for route in PRESET_ROUTE_DEFINITIONS}
+        self._reply_by_key = {reply["key"]: reply for reply in PRESET_REPLY_DEFINITIONS}
 
     def list_routes(self) -> list[Dict[str, str]]:
         return [copy.deepcopy(route) for route in PRESET_ROUTE_DEFINITIONS]
+
+    def list_replies(self) -> list[Dict[str, str]]:
+        return [copy.deepcopy(reply) for reply in PRESET_REPLY_DEFINITIONS]
 
     def resolve_route(
         self,
@@ -86,6 +112,23 @@ class PresetRouteCacheManager:
             route = self._route_by_key.get(str(preset_route_key).strip())
             if route and (not scenic_slug or scenic_slug == route["scenic_slug"]):
                 return copy.deepcopy(route)
+        return None
+
+    def resolve_reply(
+        self,
+        assistant_text: Optional[str],
+        response_kind: Optional[str] = None,
+    ) -> Optional[Dict[str, str]]:
+        normalized_text = _normalize_text(assistant_text)
+        normalized_kind = str(response_kind or "").strip()
+        if not normalized_text:
+            return None
+
+        for reply in PRESET_REPLY_DEFINITIONS:
+            if normalized_kind and normalized_kind != reply["response_kind"]:
+                continue
+            if normalized_text == _normalize_text(reply["assistant_text"]):
+                return copy.deepcopy(reply)
         return None
 
     def get_or_create_payload(
@@ -167,9 +210,11 @@ class PresetRouteCacheManager:
 
     def _build_cache_stem(self, route: Dict[str, str]) -> str:
         context = self.build_cache_context()
+        content_identity = route.get("assistant_text") or route.get("prompt") or ""
         identity = "|".join(
             [
                 route["key"],
+                _normalize_text(content_identity),
                 context["avatar_signature"],
                 context["voice_id"],
                 context["torch_dtype"],
@@ -209,6 +254,9 @@ class PresetRouteCacheManager:
         rag_metadata = payload.get("rag_metadata") or {}
         rag_metadata["preset_route_key"] = route["key"]
         rag_metadata["preset_route_title"] = route["title"]
+        if route.get("response_kind"):
+            rag_metadata["preset_reply_key"] = route["key"]
+            rag_metadata["preset_reply_title"] = route["title"]
         rag_metadata["cache_status"] = "hit"
         return {
             "assistant_text": payload.get("assistant_text", ""),
@@ -234,12 +282,16 @@ class PresetRouteCacheManager:
         rag_metadata = copy.deepcopy(payload.get("rag_metadata") or {})
         rag_metadata["preset_route_key"] = route["key"]
         rag_metadata["preset_route_title"] = route["title"]
+        if route.get("response_kind"):
+            rag_metadata["preset_reply_key"] = route["key"]
+            rag_metadata["preset_reply_title"] = route["title"]
         rag_metadata["cache_status"] = "generated"
 
         metadata_payload = {
             "preset_route_key": route["key"],
             "preset_route_title": route["title"],
-            "scenic_slug": route["scenic_slug"],
+            "scenic_slug": route.get("scenic_slug"),
+            "preset_reply_key": route.get("key") if route.get("response_kind") else None,
             "assistant_text": payload.get("assistant_text", ""),
             "rag_metadata": rag_metadata,
             "cache_context": self.build_cache_context(),

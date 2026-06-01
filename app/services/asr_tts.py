@@ -2,9 +2,6 @@ import os
 import subprocess
 import numpy as np
 import torch
-import whisper
-import asyncio
-import edge_tts
 import imageio_ffmpeg
 
 from app.core.config import resolve_path, settings
@@ -20,6 +17,8 @@ class ASRService:
 
     def _load_model(self):
         print(f"[ASR] Loading Whisper model: {self.model_name}")
+        import whisper
+
         download_root = resolve_path(settings.WHISPER_DOWNLOAD_DIR)
         os.makedirs(download_root, exist_ok=True)
         self.model = whisper.load_model(self.model_name, device=self.device, download_root=download_root)
@@ -48,6 +47,16 @@ class ASRService:
         audio = np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
         return audio
 
+    def _validate_audio(self, audio_array: np.ndarray) -> None:
+        duration = len(audio_array) / 16000.0
+        rms = float(np.sqrt(np.mean(np.square(audio_array)))) if audio_array.size else 0.0
+        peak = float(np.max(np.abs(audio_array))) if audio_array.size else 0.0
+        print(f"[ASR] decoded audio duration={duration:.2f}s rms={rms:.4f} peak={peak:.4f}")
+        if duration < float(settings.ASR_MIN_AUDIO_SECONDS):
+            raise ValueError("Audio is too short for reliable ASR")
+        if rms < float(settings.ASR_MIN_RMS) and peak < float(settings.ASR_MIN_RMS) * 3:
+            raise ValueError("Audio is too quiet for reliable ASR")
+
     def transcribe(self, audio_path: str) -> str:
         """
         Transcribe audio file to text.
@@ -57,8 +66,20 @@ class ASRService:
 
         print(f"[ASR] Transcribing {audio_path}...")
         audio_array = self._decode_audio(audio_path)
-        result = self.model.transcribe(audio_array)
-        return result["text"]
+        self._validate_audio(audio_array)
+        result = self.model.transcribe(
+            audio_array,
+            language=settings.ASR_LANGUAGE,
+            task="transcribe",
+            temperature=0.0,
+            condition_on_previous_text=False,
+            fp16=self.device == "cuda",
+            no_speech_threshold=settings.ASR_NO_SPEECH_THRESHOLD,
+            logprob_threshold=settings.ASR_LOGPROB_THRESHOLD,
+        )
+        text = str(result.get("text") or "").strip()
+        print(f"[ASR] result='{text}'")
+        return text
 
 class TTSService:
     """
@@ -66,6 +87,8 @@ class TTSService:
     """
     def __init__(self):
         print(f"[TTS] Initializing Edge-TTS (requires internet)...")
+        import edge_tts  # noqa: F401
+
         self.voice = "zh-CN-XiaoxiaoNeural"  # Default high-quality Chinese female voice
         self.is_loaded = True
         self.available_voices = [
