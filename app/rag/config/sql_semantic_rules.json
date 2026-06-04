@@ -1,0 +1,40 @@
+{
+  "metric_rules": [
+    {"metric": "low_satisfaction_count", "include_any": ["低满意度记录"]},
+    {"metric": "high_satisfaction_count", "include_any": ["高满意度记录"]},
+    {"metric": "avg_satisfaction", "include_any": ["满意度"]},
+    {"metric": "min_age", "include_any_groups": [["最小", "最年轻", "最小孩子"], ["几岁", "年龄", "孩子"]]},
+    {"metric": "avg_stay", "include_any": ["停留", "待多长", "待多久", "逛多久", "一般逛多久"]},
+    {"metric": "avg_group_size", "include_any": ["同行", "团体人数", "几个人一起来", "几个人一起玩", "几人一起"]},
+    {"metric": "avg_food_cost", "include_any": ["餐饮", "吃饭", "food_cost"]},
+    {"metric": "avg_shopping_cost", "include_any": ["购物"]},
+    {"metric": "avg_transport_cost", "include_any": ["交通"]},
+    {"metric": "avg_entertainment_cost", "include_any": ["娱乐", "玩平均花", "玩花", "玩的花费"]},
+    {"metric": "avg_ticket_cost", "include_any": ["门票", "票价", "票费", "票价消费"]},
+    {"metric": "avg_total_cost", "include_any": ["消费", "花费", "总消费"]},
+    {"metric": "visits", "include_any": ["访问量", "访问记录", "热门", "偏好", "喜欢", "最受欢迎", "最火", "最多"]}
+  ],
+  "dimension_rules": {
+    "attraction_type_include_any": [
+      "哪类景点",
+      "哪种景点",
+      "哪5种景点",
+      "哪五种景点",
+      "哪些类型",
+      "哪几类",
+      "景点类型",
+      "类型排名",
+      "前5类",
+      "前五类",
+      "5种景点类型",
+      "前5种",
+      "前五种",
+      "最喜欢的前",
+      "最火的",
+      "最受欢迎",
+      "去的人最多"
+    ],
+    "attraction_name_include_any": ["哪5个景点", "哪五个景点", "哪几个景点", "哪些景点", "哪个景点", "前5名", "前五名", "去的人最多"],
+    "attraction_name_exclude_any": ["景点类型", "哪类景点", "哪种景点", "哪5种景点", "哪五种景点", "哪些类型", "哪几类"]
+  }
+}

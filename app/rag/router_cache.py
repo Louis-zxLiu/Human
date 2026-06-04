@@ -21,11 +21,27 @@ class RouterPlanCache:
         self.enabled = settings.LLM_ROUTER_CACHE_ENABLED if enabled is None else enabled
         self.version = str(settings.LLM_ROUTER_CACHE_VERSION or "router-v1")
         self._items: Optional[Dict[str, Dict[str, Any]]] = None
+        self._stats: Dict[str, Any] = {
+            "loads": 0,
+            "hits": 0,
+            "misses": 0,
+            "writes": 0,
+            "clears": 0,
+            "last_hit_key": "",
+            "last_write_key": "",
+        }
 
     def get(self, query: str, scenic_slug: Optional[str], model_name: str) -> Optional[Dict[str, Any]]:
         if not self.enabled:
             return None
-        return self._load().get(self._key(query, scenic_slug, model_name))
+        key = self._key(query, scenic_slug, model_name)
+        item = self._load().get(key)
+        if item:
+            self._stats["hits"] += 1
+            self._stats["last_hit_key"] = key
+            return item
+        self._stats["misses"] += 1
+        return None
 
     def set(self, query: str, scenic_slug: Optional[str], model_name: str, payload: Dict[str, Any]) -> None:
         if not self.enabled or not isinstance(payload, dict):
@@ -44,10 +60,42 @@ class RouterPlanCache:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "a", encoding="utf-8") as file_obj:
             file_obj.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+        self._stats["writes"] += 1
+        self._stats["last_write_key"] = key
+
+    def clear(self, drop_file: bool = True) -> None:
+        self._items = {}
+        if drop_file and self.path.exists():
+            self.path.unlink()
+        self._stats["clears"] += 1
+
+    def reset_stats(self) -> None:
+        self._stats.update(
+            {
+                "loads": 0,
+                "hits": 0,
+                "misses": 0,
+                "writes": 0,
+                "clears": 0,
+                "last_hit_key": "",
+                "last_write_key": "",
+            }
+        )
+
+    def stats(self) -> Dict[str, Any]:
+        items = self._load() if self.enabled else {}
+        return {
+            "enabled": self.enabled,
+            "path": str(self.path),
+            "version": self.version,
+            "entries": len(items),
+            **self._stats,
+        }
 
     def _load(self) -> Dict[str, Dict[str, Any]]:
         if self._items is not None:
             return self._items
+        self._stats["loads"] += 1
         items: Dict[str, Dict[str, Any]] = {}
         if self.enabled and self.path.exists():
             with open(self.path, "r", encoding="utf-8") as file_obj:

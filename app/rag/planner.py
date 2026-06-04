@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 from app.core.config import settings
 from app.core.scenic_catalog import infer_scenic_slug_from_text
 from app.rag.llm_client import generate_chat_completion, llm_is_configured
+from app.rag.rule_config import load_json_config, term_map, term_tuple
 from app.rag.router_cache import RouterPlanCache
 
 
@@ -211,6 +212,8 @@ FACT_TERMS = (
     "介绍",
 )
 
+PLANNER_RULE_CONFIG = load_json_config("app/rag/config/planner_rules.json")
+
 
 @dataclass
 class QueryPlan:
@@ -346,7 +349,7 @@ class QueryPlanner:
 
     def _plan_with_llm(self, user_query: str, scenic_slug: Optional[str] = None) -> Optional[QueryPlan]:
         query = str(user_query or "").strip()
-        if not query or not llm_is_configured():
+        if not query:
             return None
 
         resolved_scenic_slug = scenic_slug or infer_scenic_slug_from_text(query)
@@ -361,6 +364,9 @@ class QueryPlanner:
             )
             if plan:
                 return plan
+
+        if not llm_is_configured():
+            return None
 
         system_prompt = (
             "你是景区问答系统的路由器。你只做意图和执行路径判断，不回答问题。"
@@ -425,6 +431,12 @@ class QueryPlanner:
             return None
         self.cache.set(query, resolved_scenic_slug, settings.LLM_MODEL_NAME, payload)
         return self._plan_from_payload(payload, resolved_scenic_slug=resolved_scenic_slug, user_query=query)
+
+    def cache_stats(self) -> Dict[str, Any]:
+        return self.cache.stats()
+
+    def clear_cache(self, drop_file: bool = True) -> None:
+        self.cache.clear(drop_file=drop_file)
 
     @staticmethod
     def _parse_json(raw: str) -> Optional[Dict[str, Any]]:
@@ -656,40 +668,70 @@ class QueryPlanner:
     def _is_route_planning_request(query: str) -> bool:
         if not QueryPlanner._is_recommend_query(query):
             return False
-        fact_function_terms = ("作用", "功能", "用途", "干什么", "干啥", "起啥")
+        fact_function_terms = term_tuple(
+            PLANNER_RULE_CONFIG,
+            "route_planning",
+            "fact_function_terms",
+            fallback=("作用", "功能", "用途", "干什么", "干啥", "起啥"),
+        )
         if any(term in query for term in fact_function_terms) and not any(
-            term in query for term in ("推荐", "规划", "安排", "怎么走", "咋走", "怎么逛", "咋逛", "每站", "下一步")
+            term in query
+            for term in term_tuple(
+                PLANNER_RULE_CONFIG,
+                "route_planning",
+                "override_allow_terms",
+                fallback=("推荐", "规划", "安排", "怎么走", "咋走", "怎么逛", "咋逛", "每站", "下一步"),
+            )
         ):
             return False
-        route_request_terms = (
-            "推荐",
-            "路线怎么",
-            "路线咋",
-            "路线如何",
-            "路线",
-            "行程",
-            "怎么安排",
-            "怎么规划",
-            "怎么走",
-            "咋走",
-            "怎么逛",
-            "咋逛",
-            "怎么游览",
-            "如何游览",
-            "每站",
-            "下一步",
-            "不走回头路",
-            "带时长",
-            "安排",
-            "规划",
-            "核心景点",
+        route_request_terms = term_tuple(
+            PLANNER_RULE_CONFIG,
+            "route_planning",
+            "request_terms",
+            fallback=(
+                "推荐",
+                "路线怎么",
+                "路线咋",
+                "路线如何",
+                "路线",
+                "行程",
+                "怎么安排",
+                "怎么规划",
+                "怎么走",
+                "咋走",
+                "怎么逛",
+                "咋逛",
+                "怎么游览",
+                "如何游览",
+                "每站",
+                "下一步",
+                "不走回头路",
+                "带时长",
+                "安排",
+                "规划",
+                "核心景点",
+            ),
         )
         return any(term in query for term in route_request_terms)
 
     @staticmethod
     def _is_fact_experience_question(query: str) -> bool:
-        return any(term in query for term in ("特别推荐的体验", "推荐的体验", "有什么特别", "哪里最值得去", "亮点有哪些")) and not any(
-            term in query for term in ("路线", "怎么走", "怎么逛", "下一站", "下一步", "安排", "规划")
+        return any(
+            term in query
+            for term in term_tuple(
+                PLANNER_RULE_CONFIG,
+                "route_planning",
+                "experience_terms",
+                fallback=("特别推荐的体验", "推荐的体验", "有什么特别", "哪里最值得去", "亮点有哪些"),
+            )
+        ) and not any(
+            term in query
+            for term in term_tuple(
+                PLANNER_RULE_CONFIG,
+                "route_planning",
+                "experience_exclude_terms",
+                fallback=("路线", "怎么走", "怎么逛", "下一站", "下一步", "安排", "规划"),
+            )
         )
 
     @staticmethod
@@ -702,19 +744,24 @@ class QueryPlanner:
             return True
         if any(
             term in query
-            for term in (
-                "最小孩子几岁",
-                "最小几岁",
-                "几岁",
-                "哪类景点",
-                "哪种景点",
-                "景点类型",
-                "有多少人",
-                "多少游客",
-                "逛多久",
-                "一般逛多久",
-                "待多久",
-                "停留多久",
+            for term in term_tuple(
+                PLANNER_RULE_CONFIG,
+                "analytics",
+                "direct_terms",
+                fallback=(
+                    "最小孩子几岁",
+                    "最小几岁",
+                    "几岁",
+                    "哪类景点",
+                    "哪种景点",
+                    "景点类型",
+                    "有多少人",
+                    "多少游客",
+                    "逛多久",
+                    "一般逛多久",
+                    "待多久",
+                    "停留多久",
+                ),
             )
         ):
             return True
@@ -735,53 +782,79 @@ class QueryPlanner:
 
     @staticmethod
     def _is_fact_data_question(query: str) -> bool:
-        fact_entities = (
-            "灵山",
-            "灵山胜境",
-            "五印坛城",
-            "灵山梵宫",
-            "九龙灌浴",
-            "祥符禅寺",
-            "灵山大佛",
-            "菩提大道",
-            "降魔浮雕",
-            "百子戏弥勒",
-            "五智门",
+        fact_entities = term_tuple(
+            PLANNER_RULE_CONFIG,
+            "fact_detection",
+            "entities",
+            fallback=(
+                "灵山",
+                "灵山胜境",
+                "五印坛城",
+                "灵山梵宫",
+                "九龙灌浴",
+                "祥符禅寺",
+                "灵山大佛",
+                "菩提大道",
+                "降魔浮雕",
+                "百子戏弥勒",
+                "五智门",
+            ),
         )
-        fact_asks = (
-            "介绍",
-            "要说",
-            "哪些数据",
-            "什么数据",
-            "资料",
-            "依据",
-            "关键",
-            "核心",
-            "位置",
-            "规模",
-            "建筑",
-            "作用",
-            "功能",
-            "用途",
+        fact_asks = term_tuple(
+            PLANNER_RULE_CONFIG,
+            "fact_detection",
+            "asks",
+            fallback=("介绍", "要说", "哪些数据", "什么数据", "资料", "依据", "关键", "核心", "位置", "规模", "建筑", "作用", "功能", "用途"),
         )
-        behavior_signals = ("游客行为", "行为数据", "平均", "人均", "消费", "满意度", "访问量", "接待", "多少游客")
+        behavior_signals = term_tuple(
+            PLANNER_RULE_CONFIG,
+            "fact_detection",
+            "behavior_signals",
+            fallback=("游客行为", "行为数据", "平均", "人均", "消费", "满意度", "访问量", "接待", "多少游客"),
+        )
         return any(entity in query for entity in fact_entities) and any(term in query for term in fact_asks) and not any(
             signal in query for signal in behavior_signals
         )
 
     @staticmethod
     def _prefers_hybrid_rag(query: str, question_type: str) -> bool:
-        if any(keyword in query for keyword in RAG_INTENSIVE_HINTS):
+        if any(
+            keyword in query
+            for keyword in term_tuple(
+                PLANNER_RULE_CONFIG,
+                "hybrid_rag",
+                "intensive_hints",
+                fallback=RAG_INTENSIVE_HINTS,
+            )
+        ):
             return True
         return question_type in {"history", "description", "cultural_meaning"} and any(
-            keyword in query for keyword in ("概况", "整体", "为什么", "资料", "依据", "背景", "内涵")
+            keyword in query
+            for keyword in term_tuple(
+                PLANNER_RULE_CONFIG,
+                "hybrid_rag",
+                "question_type_terms",
+                fallback=("概况", "整体", "为什么", "资料", "依据", "背景", "内涵"),
+            )
         )
 
     @staticmethod
     def _detect_route_profile(query: str) -> str:
-        if any(term in query for term in ("不累", "轻松", "慢游", "老人", "长辈")):
+        if any(
+            term in query
+            for term in term_tuple(
+                PLANNER_RULE_CONFIG,
+                "route_profiles",
+                "relaxed",
+                fallback=("不累", "轻松", "慢游", "老人", "长辈"),
+            )
+        ):
             return "relaxed"
-        for profile, keywords in RECOMMEND_PROFILE_HINTS.items():
+        for profile, keywords in term_map(
+            PLANNER_RULE_CONFIG,
+            "route_profiles",
+            fallback=RECOMMEND_PROFILE_HINTS,
+        ).items():
             if any(keyword in query for keyword in keywords):
                 return profile
         return "general"

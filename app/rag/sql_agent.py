@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.config import resolve_path
 from app.rag.llm_client import generate_chat_completion
+from app.rag.rule_config import load_json_config, term_tuple
 from app.rag.response_contract import compact_rows, make_evidence, make_refusal
 
 
@@ -33,6 +34,8 @@ CREATE TABLE tourist_behavior (
 """
 
 SOURCE_PREFIX = "基于游客行为数据分析，"
+
+SQL_SEMANTIC_RULE_CONFIG = load_json_config("app/rag/config/sql_semantic_rules.json")
 
 
 @dataclass
@@ -514,7 +517,39 @@ class TouristAnalyticsAgent:
 
         return plan
 
+    @staticmethod
+    def _matches_semantic_rule(query: str, rule: Dict[str, Any]) -> bool:
+        include_all = [str(item) for item in rule.get("include_all") or [] if str(item)]
+        if include_all and not all(term in query for term in include_all):
+            return False
+
+        include_any = [str(item) for item in rule.get("include_any") or [] if str(item)]
+        if include_any and not any(term in query for term in include_any):
+            return False
+
+        include_any_groups = rule.get("include_any_groups") or []
+        if include_any_groups:
+            for group in include_any_groups:
+                terms = [str(item) for item in group or [] if str(item)]
+                if terms and not any(term in query for term in terms):
+                    return False
+
+        exclude_any = [str(item) for item in rule.get("exclude_any") or [] if str(item)]
+        if exclude_any and any(term in query for term in exclude_any):
+            return False
+
+        return True
+
     def _detect_metric(self, query: str) -> Optional[str]:
+        metric_rules = SQL_SEMANTIC_RULE_CONFIG.get("metric_rules") or []
+        if isinstance(metric_rules, list):
+            for rule in metric_rules:
+                if not isinstance(rule, dict):
+                    continue
+                metric_key = str(rule.get("metric") or "").strip()
+                if metric_key and self._matches_semantic_rule(query, rule):
+                    return metric_key
+
         if "低满意度记录" in query:
             return "low_satisfaction_count"
         if "高满意度记录" in query:
@@ -876,40 +911,49 @@ Rules:
 
     @staticmethod
     def _wants_attraction_type_dimension(query: str) -> bool:
-        type_dimension_terms = (
-            "哪类景点",
-            "哪种景点",
-            "哪5种景点",
-            "哪五种景点",
-            "哪些类型",
-            "哪几类",
-            "景点类型",
-            "类型排名",
-            "前5类",
-            "前五类",
-            "5种景点类型",
-            "前5种",
-            "前五种",
-            "最喜欢的前",
-            "最火的",
-            "最受欢迎",
-            "去的人最多",
+        type_dimension_terms = term_tuple(
+            SQL_SEMANTIC_RULE_CONFIG,
+            "dimension_rules",
+            "attraction_type_include_any",
+            fallback=(
+                "哪类景点",
+                "哪种景点",
+                "哪5种景点",
+                "哪五种景点",
+                "哪些类型",
+                "哪几类",
+                "景点类型",
+                "类型排名",
+                "前5类",
+                "前五类",
+                "5种景点类型",
+                "前5种",
+                "前五种",
+                "最喜欢的前",
+                "最火的",
+                "最受欢迎",
+                "去的人最多",
+            ),
         )
         return any(term in query for term in type_dimension_terms)
 
     @staticmethod
     def _wants_attraction_name_dimension(query: str) -> bool:
-        if any(term in query for term in ("景点类型", "哪类景点", "哪种景点", "哪5种景点", "哪五种景点", "哪些类型", "哪几类")):
+        if any(
+            term in query
+            for term in term_tuple(
+                SQL_SEMANTIC_RULE_CONFIG,
+                "dimension_rules",
+                "attraction_name_exclude_any",
+                fallback=("景点类型", "哪类景点", "哪种景点", "哪5种景点", "哪五种景点", "哪些类型", "哪几类"),
+            )
+        ):
             return False
-        name_dimension_terms = (
-            "哪5个景点",
-            "哪五个景点",
-            "哪几个景点",
-            "哪些景点",
-            "哪个景点",
-            "前5名",
-            "前五名",
-            "去的人最多",
+        name_dimension_terms = term_tuple(
+            SQL_SEMANTIC_RULE_CONFIG,
+            "dimension_rules",
+            "attraction_name_include_any",
+            fallback=("哪5个景点", "哪五个景点", "哪几个景点", "哪些景点", "哪个景点", "前5名", "前五名", "去的人最多"),
         )
         return any(term in query for term in name_dimension_terms)
 

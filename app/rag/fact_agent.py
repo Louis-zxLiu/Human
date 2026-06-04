@@ -8,10 +8,12 @@ from app.core.config import resolve_path
 from app.core.scenic_catalog import infer_scenic_slug_from_text, list_scenic_catalog, scenic_name_from_slug, scenic_slug_from_name
 from app.rag.chroma_agent import ChromaStaticAgent
 from app.rag.planner import contains_realtime_unsupported_signal
+from app.rag.rule_config import load_json_config, term_map, term_tuple
 from app.rag.response_contract import make_evidence, make_refusal
 
 
 STRUCTURED_OVERRIDES_PATH = Path(resolve_path("app/rag/config/fact_structured_overrides.json"))
+FACT_RULE_CONFIG = load_json_config("app/rag/config/fact_rules.json")
 
 
 ATTRACTION_COLUMNS = [
@@ -202,6 +204,32 @@ UNSUPPORTED_FACT_KEYWORDS = (
     "编一个",
     "没有资料记载",
     "夜间烟花",
+)
+
+FACT_QUESTION_FIELD_MAP = term_map(
+    FACT_RULE_CONFIG,
+    "question_field_map",
+    fallback=QUESTION_FIELD_MAP,
+)
+FACT_COMPARISON_HINTS = term_tuple(
+    FACT_RULE_CONFIG,
+    "comparison_hints",
+    fallback=COMPARISON_HINTS,
+)
+FACT_REFERENCE_POSITION_HINTS = term_tuple(
+    FACT_RULE_CONFIG,
+    "reference_position_hints",
+    fallback=REFERENCE_POSITION_HINTS,
+)
+FACT_REFERENCE_DESCRIPTOR_TERMS = term_tuple(
+    FACT_RULE_CONFIG,
+    "reference_descriptor_terms",
+    fallback=REFERENCE_DESCRIPTOR_TERMS,
+)
+FACT_UNSUPPORTED_KEYWORDS = term_tuple(
+    FACT_RULE_CONFIG,
+    "unsupported_fact_keywords",
+    fallback=UNSUPPORTED_FACT_KEYWORDS,
 )
 
 
@@ -473,7 +501,7 @@ class ScenicFactAgent:
         return mentions[0] if mentions else None
 
     def detect_question_type(self, user_query: str) -> Optional[str]:
-        for field, keywords in QUESTION_FIELD_MAP.items():
+        for field, keywords in FACT_QUESTION_FIELD_MAP.items():
             if any(keyword in user_query for keyword in keywords):
                 return field
         return None
@@ -703,82 +731,96 @@ class ScenicFactAgent:
         question_type: Optional[str] = None,
     ) -> bool:
         query = str(user_query or "")
-        evidence_terms = (
-            "资料",
-            "依据",
-            "关键事实",
-            "关键信息",
-            "核心事实",
-            "提炼",
-            "不能错",
-            "不能讲错",
-            "哪些数字",
-            "讲解重点",
-            "评委问",
-            "答哪些",
-            "该答",
-            "突出",
+        evidence_terms = term_tuple(
+            FACT_RULE_CONFIG,
+            "docx_preference",
+            "evidence_terms",
+            fallback=(
+                "资料",
+                "依据",
+                "关键事实",
+                "关键信息",
+                "核心事实",
+                "提炼",
+                "不能错",
+                "不能讲错",
+                "哪些数字",
+                "讲解重点",
+                "评委问",
+                "答哪些",
+                "该答",
+                "突出",
+            ),
         )
-        strong_docx_terms = (
-            "DOCX",
-            "docx",
-            "资料",
-            "依据",
-            "关键事实",
-            "关键信息",
-            "关键数据",
-            "关键数字",
-            "关键点",
-            "核心事实",
-            "核心数字",
-            "核心内容",
-            "提炼",
-            "不能错",
-            "不能讲错",
-            "必提",
-            "讲解重点",
-            "讲解时",
-            "评委问",
-            "答哪些",
-            "该答",
-            "突出",
+        strong_docx_terms = term_tuple(
+            FACT_RULE_CONFIG,
+            "docx_preference",
+            "strong_terms",
+            fallback=(
+                "DOCX",
+                "docx",
+                "资料",
+                "依据",
+                "关键事实",
+                "关键信息",
+                "关键数据",
+                "关键数字",
+                "关键点",
+                "核心事实",
+                "核心数字",
+                "核心内容",
+                "提炼",
+                "不能错",
+                "不能讲错",
+                "必提",
+                "讲解重点",
+                "讲解时",
+                "评委问",
+                "答哪些",
+                "该答",
+                "突出",
+            ),
         )
-        fine_topics = (
-            "手印",
-            "台阶",
-            "规模",
-            "尺寸",
-            "演出",
-            "表演",
-            "壁画",
-            "坛城",
-            "世界佛教",
-            "交流平台",
-            "圣坛",
-            "华藏塔",
-            "曼茶罗",
+        fine_topics = term_tuple(
+            FACT_RULE_CONFIG,
+            "docx_preference",
+            "fine_topics",
+            fallback=("手印", "台阶", "规模", "尺寸", "演出", "表演", "壁画", "坛城", "世界佛教", "交流平台", "圣坛", "华藏塔", "曼茶罗"),
         )
         structured_attraction = bool(attraction)
         explicit_docx_context = any(term in query for term in strong_docx_terms) or "重点说" in query
-        special_docx_topics = (
-            attraction == "灵山大佛"
-            and any(term in query for term in ("手印", "落成开光", "高度", "材质", "铜板", "建造工艺", "多高")),
-            attraction == "灵山梵宫"
-            and any(term in query for term in ("正式开放", "开放时间", "建筑规模", "莲花圣塔", "穹顶", "传统工艺")),
-            attraction == "祥符禅寺"
-            and any(term in query for term in ("赐额", "千年兴衰", "历史遗存", "撞钟")),
-            attraction == "九龙灌浴"
-            and (
-                "表演" in query
-                or "佛教意义" in query
-                or "规模和尺寸" in query
-                or ("规模" in query and any(term in query for term in ("重点", "关键", "核心")))
-                or any(term in query for term in ("评委", "不能错", "核心事实", "突出哪些", "依据"))
-            ),
-            attraction == "五印坛城" and any(term in query for term in ("壁画", "建筑风格", "转经")),
-        )
+        special_docx_topics = []
+        special_rules = FACT_RULE_CONFIG.get("docx_special_topics") or {}
+        if isinstance(special_rules, dict):
+            for name, terms in special_rules.items():
+                special_docx_topics.append(attraction == name and any(str(term) in query for term in terms or []))
+        if not special_docx_topics:
+            special_docx_topics = [
+                attraction == "灵山大佛"
+                and any(term in query for term in ("手印", "落成开光", "高度", "材质", "铜板", "建造工艺", "多高")),
+                attraction == "灵山梵宫"
+                and any(term in query for term in ("正式开放", "开放时间", "建筑规模", "莲花圣塔", "穹顶", "传统工艺")),
+                attraction == "祥符禅寺"
+                and any(term in query for term in ("赐额", "千年兴衰", "历史遗存", "撞钟")),
+                attraction == "九龙灌浴"
+                and (
+                    "表演" in query
+                    or "佛教意义" in query
+                    or "规模和尺寸" in query
+                    or ("规模" in query and any(term in query for term in ("重点", "关键", "核心")))
+                    or any(term in query for term in ("评委", "不能错", "核心事实", "突出哪些", "依据"))
+                ),
+                attraction == "五印坛城" and any(term in query for term in ("壁画", "建筑风格", "转经")),
+            ]
         if structured_attraction:
-            structured_first_fields = {"location", "open_info", "architecture_params", "highlights", "remarks", "core_function"}
+            structured_first_fields = set(
+                term_tuple(
+                    FACT_RULE_CONFIG,
+                    "docx_preference",
+                    "structured_first_fields",
+                    fallback=("location", "open_info", "architecture_params", "highlights", "remarks", "core_function"),
+                )
+            )
             if question_type in structured_first_fields and not explicit_docx_context and not any(special_docx_topics):
                 return False
             return explicit_docx_context or any(special_docx_topics)
@@ -934,42 +976,47 @@ class ScenicFactAgent:
         return payload if isinstance(payload, list) else []
 
     def _is_unsupported_fact_query(self, user_query: str) -> bool:
-        return any(keyword in user_query for keyword in UNSUPPORTED_FACT_KEYWORDS) or contains_realtime_unsupported_signal(user_query)
+        return any(keyword in user_query for keyword in FACT_UNSUPPORTED_KEYWORDS) or contains_realtime_unsupported_signal(user_query)
 
     def _has_source_conflict(self, user_query: str) -> bool:
         query = str(user_query or "")
-        behavior_terms = ("游客行为数据", "行为数据", "游客行为 Excel", "游客行为Excel", "Excel")
-        docx_terms = ("DOCX", "docx", "历史文化资料", "景区资料", "介绍文档")
-        fact_terms = (
-            "官方开放时间",
-            "开放时间",
-            "位置",
-            "多高",
-            "高度",
-            "文化内涵",
-            "历史",
-            "事实",
-            "门票",
-            "票价",
+        behavior_terms = term_tuple(
+            FACT_RULE_CONFIG,
+            "source_conflict",
+            "behavior_terms",
+            fallback=("游客行为数据", "行为数据", "游客行为 Excel", "游客行为Excel", "Excel"),
         )
-        analytics_terms = (
-            "统计",
-            "平均",
-            "消费",
-            "满意度",
-            "停留",
-            "访问量",
-            "客流",
-            "月份",
-            "男性",
-            "女性",
-            "游客",
+        docx_terms = term_tuple(
+            FACT_RULE_CONFIG,
+            "source_conflict",
+            "docx_terms",
+            fallback=("DOCX", "docx", "历史文化资料", "景区资料", "介绍文档"),
+        )
+        fact_terms = term_tuple(
+            FACT_RULE_CONFIG,
+            "source_conflict",
+            "fact_terms",
+            fallback=("官方开放时间", "开放时间", "位置", "多高", "高度", "文化内涵", "历史", "事实", "门票", "票价"),
+        )
+        analytics_terms = term_tuple(
+            FACT_RULE_CONFIG,
+            "source_conflict",
+            "analytics_terms",
+            fallback=("统计", "平均", "消费", "满意度", "停留", "访问量", "客流", "月份", "男性", "女性", "游客"),
         )
         if any(term in query for term in behavior_terms) and any(term in query for term in fact_terms):
             return True
         if any(term in query for term in docx_terms) and any(term in query for term in analytics_terms):
             return True
-        if "当作" in query and any(term in query for term in ("门票", "票价", "开放时间", "文化内涵")):
+        if "当作" in query and any(
+            term in query
+            for term in term_tuple(
+                FACT_RULE_CONFIG,
+                "source_conflict",
+                "as_if_fact_terms",
+                fallback=("门票", "票价", "开放时间", "文化内涵"),
+            )
+        ):
             return True
         return False
 
@@ -1122,7 +1169,7 @@ class ScenicFactAgent:
     def _is_multi_attraction_comparison_query(user_query: str, mentions: List[str]) -> bool:
         if len(mentions) < 2:
             return False
-        return any(keyword in user_query for keyword in COMPARISON_HINTS)
+        return any(keyword in user_query for keyword in FACT_COMPARISON_HINTS)
 
     def _build_comparison_result(
         self,
@@ -1180,7 +1227,14 @@ class ScenicFactAgent:
         row_b: Dict[str, Any],
         question_type: str,
     ) -> Optional[str]:
-        if not any(keyword in user_query for keyword in ("更适合", "更值得", "哪个", "哪一个")):
+        if not any(
+            keyword in user_query
+            for keyword in term_tuple(
+                FACT_RULE_CONFIG,
+                "comparison_preference_hints",
+                fallback=("更适合", "更值得", "哪个", "哪一个"),
+            )
+        ):
             return None
 
         score_a = self._comparison_score(row_a, user_query, question_type)
@@ -1201,7 +1255,7 @@ class ScenicFactAgent:
         score = 0
         keywords = [
             keyword
-            for keyword in REFERENCE_DESCRIPTOR_TERMS + tuple(term for term in QUESTION_FIELD_MAP.get(question_type, ()))
+            for keyword in FACT_REFERENCE_DESCRIPTOR_TERMS + tuple(term for term in FACT_QUESTION_FIELD_MAP.get(question_type, ()))
             if len(keyword) >= 2 and keyword in user_query
         ]
         for keyword in keywords:
@@ -1231,7 +1285,7 @@ class ScenicFactAgent:
     ) -> Optional[str]:
         if len(mentions) != 1:
             return None
-        if not any(keyword in user_query for keyword in REFERENCE_POSITION_HINTS):
+        if not any(keyword in user_query for keyword in FACT_REFERENCE_POSITION_HINTS):
             return None
         if self.detect_question_type(user_query) == "location":
             return None
@@ -1245,7 +1299,7 @@ class ScenicFactAgent:
 
         best_name = None
         best_score = 0
-        descriptor_terms = [term for term in REFERENCE_DESCRIPTOR_TERMS if term in user_query]
+        descriptor_terms = [term for term in FACT_REFERENCE_DESCRIPTOR_TERMS if term in user_query]
 
         for candidate_name in candidates:
             row = self.get_attraction_row(candidate_name)
