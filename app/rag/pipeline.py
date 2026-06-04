@@ -170,8 +170,16 @@ class ScenicRAGPipeline:
         forced_recommendation_title: Optional[str] = None,
     ) -> Dict[str, Any]:
         started_at = time.perf_counter()
-        general_chat_reply = detect_general_chat_reply(user_query)
-        if general_chat_reply:
+        plan = self.planner.plan(user_query, scenic_slug=scenic_slug)
+        intent = plan.intent
+
+        if plan.strategy == "general_chat":
+            general_chat_reply = (
+                _fallback_general_chat_reply(user_query)
+                or _normalize_general_chat_reply(plan.chat_reply, "你好，我在。")
+                or detect_general_chat_reply(user_query)
+                or "你好，我在。"
+            )
             return self._finalize_response(
                 started_at,
                 user_query,
@@ -184,14 +192,13 @@ class ScenicRAGPipeline:
                     question_type=None,
                     route_profile=None,
                     confidence=1.0,
-                    reasoning="llm_or_heuristic_general_chat",
+                    reasoning=plan.reasoning,
                     scenic_slug=scenic_slug,
+                    planner_source=plan.planner_source,
+                    raw_payload=plan.raw_payload,
                 ),
                 recommendation=None,
             )
-
-        plan = self.planner.plan(user_query, scenic_slug=scenic_slug)
-        intent = plan.intent
 
         if plan.strategy == "refuse_realtime":
             answer = (
@@ -273,7 +280,7 @@ class ScenicRAGPipeline:
                 start_attraction=start_attraction,
                 user_profile=user_profile,
                 scenic_slug=scenic_slug,
-                forced_profile_key=forced_recommendation_profile,
+                forced_profile_key=forced_recommendation_profile or plan.route_profile,
                 forced_title=forced_recommendation_title,
             )
             return self._finalize_response(
@@ -297,6 +304,7 @@ class ScenicRAGPipeline:
             attraction_id=attraction_id,
             attraction_name=start_attraction,
             retrieval_mode="hybrid" if plan.strategy == "hybrid_rag" else "structured_only",
+            planned_question_type=plan.question_type,
         )
         return self._finalize_response(
             started_at,
@@ -322,6 +330,8 @@ class ScenicRAGPipeline:
             "confidence": plan.confidence,
             "reasoning": plan.reasoning,
             "scenic_slug": plan.scenic_slug,
+            "planner_source": getattr(plan, "planner_source", ""),
+            "raw_payload": getattr(plan, "raw_payload", {}),
         }
 
     def _finalize_response(

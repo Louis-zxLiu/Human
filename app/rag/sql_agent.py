@@ -99,6 +99,7 @@ class TouristAnalyticsAgent:
         "avg_stay": {"expr": "round(avg(cast(stay_duration as real)), 2)", "alias": "avg_stay", "label": "平均停留时长"},
         "avg_satisfaction": {"expr": "round(avg(cast(satisfaction as real)), 2)", "alias": "avg_satisfaction", "label": "平均满意度"},
         "avg_group_size": {"expr": "round(avg(cast(group_size as real)), 2)", "alias": "avg_group_size", "label": "平均同行人数"},
+        "min_age": {"expr": "min(cast(age as real))", "alias": "min_age", "label": "最小年龄"},
         "low_satisfaction_count": {"expr": "count(*)", "alias": "low_satisfaction_count", "label": "低满意度记录数"},
         "high_satisfaction_count": {"expr": "count(*)", "alias": "high_satisfaction_count", "label": "高满意度记录数"},
     }
@@ -142,6 +143,20 @@ class TouristAnalyticsAgent:
                     allowed_sources=["behavior_sql"],
                 ),
                 "trace": {"fallback_used": False},
+            }
+
+        comparison = self._gender_comparison_response(user_query)
+        if comparison:
+            return {
+                "answer": comparison,
+                "response_kind": "analytics:special_case",
+                "semantic_plan": {"mode": "gender_comparison"},
+                "sql": None,
+                "rows_preview": [],
+                "evidence": [make_evidence("behavior_sql", "tourist_behavior", snippet=comparison)],
+                "warnings": [],
+                "refusal": None,
+                "trace": {"fallback_used": False, "special_case": True},
             }
 
         special = self._special_case_response(user_query)
@@ -421,11 +436,13 @@ class TouristAnalyticsAgent:
     def _plan_semantic_query(self, user_query: str) -> Optional[SemanticQueryPlan]:
         query = str(user_query or "")
         lowered = query.lower()
-        matched_type = self._match_known_value(query, self._domain_cache["attraction_types"])
+        matched_type = self._match_attraction_type(query)
 
         if any(term in query for term in ("一共有多少条", "多少条记录", "总记录")):
             metric_key = "record_count"
-        elif any(term in query for term in ("平均同行人数", "同行人数", "平均团体人数")):
+        elif any(term in query for term in ("一共接待", "总共接待", "接待了多少", "多少游客", "多少人去过", "有多少人", "游客有多少人", "游客一共有多少")):
+            metric_key = "visits"
+        elif any(term in query for term in ("平均同行人数", "同行人数", "平均团体人数", "几个人一起来", "几个人一起玩", "几人一起")):
             metric_key = "avg_group_size"
         else:
             metric_key = self._detect_metric(query)
@@ -440,7 +457,10 @@ class TouristAnalyticsAgent:
             limit=self._detect_limit(query),
         )
 
-        if "每个月" in query or "按月" in query or "月份" in query:
+        wants_type_dimension = self._wants_attraction_type_dimension(query)
+        wants_attraction_dimension = self._wants_attraction_name_dimension(query)
+
+        if ("每个月" in query or "按月" in query or "月份" in query) and not wants_type_dimension:
             plan.dimension_key = "month"
             plan.dimension_label = "月份"
             plan.query_mode = "time_series" if ("按月" in query or "每个月" in query) else "ranking"
@@ -450,15 +470,25 @@ class TouristAnalyticsAgent:
             plan.dimension_key = "gender"
             plan.dimension_label = "性别"
             plan.query_mode = "grouped"
+        elif wants_attraction_dimension:
+            plan.dimension_key = "attraction_name"
+            plan.dimension_label = "景点"
+            plan.query_mode = "ranking"
+        elif wants_type_dimension:
+            plan.dimension_key = "attraction_type"
+            plan.dimension_label = "景点类型"
+            plan.query_mode = "ranking" if any(term in query for term in ("前", "排名", "最高", "最多", "最受欢迎", "最火", "最喜欢")) else "grouped"
         elif matched_type and any(term in query for term in ("前", "排名", "哪些景点", "哪几个景点", "最常去", "最高")):
             plan.dimension_key = "attraction_name"
             plan.dimension_label = "景点"
             plan.query_mode = "ranking"
-        elif "景点类型" in query or "类型" in query or self._contains_known_type(query):
+        elif "景点类型" in query or "类型" in query:
             plan.dimension_key = "attraction_type"
             plan.dimension_label = "景点类型"
             plan.query_mode = "grouped"
-        elif any(term in query for term in ("景点", "访问量最高", "前3个景点", "哪几个景点")):
+        elif any(term in query for term in ("访问量最高", "前3个景点", "哪几个景点", "哪些景点")) or (
+            "景点" in query and any(term in query for term in ("前", "排名", "最高", "最多", "最常去"))
+        ):
             plan.dimension_key = "attraction_name"
             plan.dimension_label = "景点"
             plan.query_mode = "ranking"
@@ -491,9 +521,11 @@ class TouristAnalyticsAgent:
             return "high_satisfaction_count"
         if "满意度" in query:
             return "avg_satisfaction"
-        if "停留" in query:
+        if any(term in query for term in ("最小", "最年轻", "最小孩子")) and any(term in query for term in ("几岁", "年龄", "孩子")):
+            return "min_age"
+        if any(term in query for term in ("停留", "待多长", "待多久", "逛多久", "一般逛多久")):
             return "avg_stay"
-        if "同行" in query or "团体人数" in query:
+        if any(term in query for term in ("同行", "团体人数", "几个人一起来", "几个人一起玩", "几人一起")):
             return "avg_group_size"
         if "餐饮" in query or "吃饭" in query or "food_cost" in query:
             return "avg_food_cost"
@@ -501,13 +533,13 @@ class TouristAnalyticsAgent:
             return "avg_shopping_cost"
         if "交通" in query:
             return "avg_transport_cost"
-        if "娱乐" in query:
+        if "娱乐" in query or "玩平均花" in query or "玩花" in query or "玩的花费" in query:
             return "avg_entertainment_cost"
         if any(term in query for term in ("门票", "票价", "票费", "票价消费")):
             return "avg_ticket_cost"
         if any(term in query for term in ("消费", "花费", "总消费")):
             return "avg_total_cost"
-        if any(term in query for term in ("访问量", "访问记录", "热门", "偏好", "喜欢")):
+        if any(term in query for term in ("访问量", "访问记录", "热门", "偏好", "喜欢", "最受欢迎", "最火", "最多")):
             return "visits"
         return None
 
@@ -515,6 +547,8 @@ class TouristAnalyticsAgent:
     def _metric_unit(metric_key: str) -> str:
         if metric_key in {"record_count", "visits", "low_satisfaction_count", "high_satisfaction_count"}:
             return "条"
+        if metric_key == "min_age":
+            return "岁"
         if metric_key == "avg_group_size":
             return "人"
         if metric_key == "avg_stay":
@@ -531,6 +565,9 @@ class TouristAnalyticsAgent:
 
     @staticmethod
     def _detect_limit(query: str) -> Optional[int]:
+        number_match = re.search(r"(?:前\s*)?([1-9]\d?)\s*(?:个|类|种|名)", query)
+        if number_match:
+            return int(number_match.group(1))
         if "前5" in query or "前五" in query:
             return 5
         if "前8" in query:
@@ -542,9 +579,9 @@ class TouristAnalyticsAgent:
     def _detect_filters(self, query: str) -> List[Tuple[str, Any]]:
         filters: List[Tuple[str, Any]] = []
 
-        if "女性" in query:
+        if any(term in query for term in ("女性", "女游客", "女的", "女生")):
             filters.append(("gender", "女"))
-        elif "男性" in query:
+        elif any(term in query for term in ("男性", "男游客", "男的", "男生")):
             filters.append(("gender", "男"))
 
         age_range_match = re.search(r"(\d{1,2})\s*(?:到|-|至)\s*(\d{1,2})岁", query)
@@ -573,8 +610,16 @@ class TouristAnalyticsAgent:
             filters.append(("date_range", ("2025-01-01", "2025-07-01")))
         elif "下半年" in query:
             filters.append(("date_range", ("2025-07-01", "2026-01-01")))
+        else:
+            month_match = re.search(r"2025\s*年\s*(\d{1,2})\s*月", query)
+            if month_match:
+                month = int(month_match.group(1))
+                if 1 <= month <= 12:
+                    start = f"2025-{month:02d}-01"
+                    end = f"2025-{month + 1:02d}-01" if month < 12 else "2026-01-01"
+                    filters.append(("date_range", (start, end)))
 
-        matched_type = self._match_known_value(query, self._domain_cache["attraction_types"])
+        matched_type = self._match_attraction_type(query)
         if matched_type:
             filters.append(("attraction_type", matched_type))
 
@@ -720,8 +765,9 @@ class TouristAnalyticsAgent:
             key, value = next(iter(row.items()))
             return f"{SOURCE_PREFIX}{key}为{value}。"
 
+        display_limit = 5 if len(rows) >= 5 else len(rows)
         parts = []
-        for index, item in enumerate(rows[:3], start=1):
+        for index, item in enumerate(rows[:display_limit], start=1):
             rendered = "，".join(f"{key}={value}" for key, value in item.items())
             parts.append(f"{index}. {rendered}")
         return f"{SOURCE_PREFIX}" + "；".join(parts) + "。"
@@ -805,7 +851,89 @@ Rules:
         return True
 
     def _contains_known_type(self, query: str) -> bool:
-        return bool(self._match_known_value(query, self._domain_cache["attraction_types"]))
+        return bool(self._match_attraction_type(query))
+
+    def _gender_comparison_response(self, user_query: str) -> Optional[str]:
+        query = str(user_query or "")
+        if not ("男" in query and "女" in query and any(term in query for term in ("多还是", "谁多", "哪个多"))):
+            return None
+        matched_type = self._match_attraction_type(query)
+        if not matched_type:
+            return None
+        rows = self.execute_sql(
+            "select gender, count(*) as visits from tourist_behavior "
+            "where attraction_type = ? group by gender order by visits desc",
+            [matched_type],
+        )
+        if not rows or "error" in rows[0]:
+            return None
+        counts = {str(row.get("gender")): row.get("visits") for row in rows}
+        male = counts.get("男", 0)
+        female = counts.get("女", 0)
+        winner = "女" if female > male else "男" if male > female else "男女一样多"
+        comparison = "女的多" if winner == "女" else "男的多" if winner == "男" else winner
+        return f"{SOURCE_PREFIX}去{matched_type}的人里，男游客{male}条，女游客{female}条，{comparison}。"
+
+    @staticmethod
+    def _wants_attraction_type_dimension(query: str) -> bool:
+        type_dimension_terms = (
+            "哪类景点",
+            "哪种景点",
+            "哪5种景点",
+            "哪五种景点",
+            "哪些类型",
+            "哪几类",
+            "景点类型",
+            "类型排名",
+            "前5类",
+            "前五类",
+            "5种景点类型",
+            "前5种",
+            "前五种",
+            "最喜欢的前",
+            "最火的",
+            "最受欢迎",
+            "去的人最多",
+        )
+        return any(term in query for term in type_dimension_terms)
+
+    @staticmethod
+    def _wants_attraction_name_dimension(query: str) -> bool:
+        if any(term in query for term in ("景点类型", "哪类景点", "哪种景点", "哪5种景点", "哪五种景点", "哪些类型", "哪几类")):
+            return False
+        name_dimension_terms = (
+            "哪5个景点",
+            "哪五个景点",
+            "哪几个景点",
+            "哪些景点",
+            "哪个景点",
+            "前5名",
+            "前五名",
+            "去的人最多",
+        )
+        return any(term in query for term in name_dimension_terms)
+
+    def _match_attraction_type(self, query: str) -> Optional[str]:
+        normalized_query = self._normalize_type_text(query)
+        for value in sorted(self._domain_cache["attraction_types"], key=len, reverse=True):
+            if not value:
+                continue
+            normalized_value = self._normalize_type_text(value)
+            if value in query or normalized_value in normalized_query:
+                return value
+        return None
+
+    @staticmethod
+    def _normalize_type_text(value: str) -> str:
+        return (
+            str(value or "")
+            .replace("和", "与")
+            .replace("及", "与")
+            .replace("类", "")
+            .replace("的", "")
+            .replace("景点", "")
+            .replace(" ", "")
+        )
 
     @staticmethod
     def _match_known_value(query: str, candidates: Sequence[str]) -> Optional[str]:

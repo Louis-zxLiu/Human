@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = "sk-placeholder"
     LLM_API_BASE: str = "https://api.openai.com/v1"
     LLM_MODEL_NAME: str = "gpt-3.5-turbo"
+    LLM_TIMEOUT_SECONDS: float = 20.0
+    LLM_MAX_RETRIES: int = 1
 
     MODEL_EMBEDDING_NAME: str = "bge-large-zh-v1.5"
     MODEL_EMBEDDING_PATH: str = "models/bge-large-zh-v1.5"

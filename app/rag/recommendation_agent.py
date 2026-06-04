@@ -52,11 +52,11 @@ def get_recommendation_display_label(label: str) -> str:
 def detect_interest_label_clean(user_query: str) -> str:
     query = str(user_query or "").strip().lower()
     rules: List[Tuple[str, Tuple[str, ...]]] = [
+        ("relaxed", ("轻松", "慢游", "不累", "休闲", "夜游", "老人", "长辈")),
         ("history", ("历史", "文化", "人文", "佛教", "禅意")),
-        ("nature", ("自然", "风光", "湖景", "拍照", "打卡", "花海")),
-        ("family", ("亲子", "孩子", "老人", "家庭")),
+        ("nature", ("自然", "风光", "湖景", "拍照", "打卡", "美照", "出片", "花海")),
+        ("family", ("亲子", "孩子", "家庭")),
         ("architecture", ("建筑", "艺术", "工艺", "梵宫", "坛城", "街区", "立面")),
-        ("relaxed", ("轻松", "慢游", "不累", "休闲", "夜游")),
     ]
     for label, keywords in rules:
         if any(keyword in query for keyword in keywords):
@@ -332,7 +332,13 @@ class ScenicRecommendationAgent:
         forced_profile_key: Optional[str] = None,
     ) -> str:
         if forced_profile_key:
-            return normalize_interest_label(forced_profile_key)
+            normalized_forced = normalize_interest_label(forced_profile_key)
+            local_label = detect_interest_label_clean(user_query)
+            if local_label == "relaxed":
+                return local_label
+            if normalized_forced == "general" and local_label != "general":
+                return local_label
+            return normalized_forced
         detected_label = classify_interest_label(user_query)
         return ScenicRecommendationAgent._refine_label_with_profile(detected_label, user_profile)
 
