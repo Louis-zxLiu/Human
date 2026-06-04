@@ -242,6 +242,25 @@ def cmd_generate_unified_eval(args: argparse.Namespace) -> int:
     return 0 if payload["ok"] else 1
 
 
+def cmd_rewrite_unified_eval(args: argparse.Namespace) -> int:
+    ensure_runtime_env()
+    if not ensure_runtime_health(profile="core"):
+        return 1
+    from app.tasks.rewrite_unified_eval import rewrite_unified_eval_cases
+
+    payload = rewrite_unified_eval_cases(
+        dataset_path=Path(args.dataset).resolve(),
+        output_path=Path(args.output).resolve(),
+        cache_path=Path(args.cache).resolve(),
+        report_path=Path(args.report).resolve() if args.report else None,
+        batch_size=args.batch_size,
+        limit=args.limit,
+        temperature=args.temperature,
+    )
+    print_json(payload)
+    return 0 if payload["ok"] else 1
+
+
 def cmd_seed_demo_logs(args: argparse.Namespace) -> int:
     ensure_runtime_env()
     from app.tasks.seed_demo_logs import seed_demo_logs
@@ -369,6 +388,16 @@ def build_parser() -> argparse.ArgumentParser:
     generate_unified.add_argument("--output", default=str(PROJECT_ROOT / "tests" / "unified_eval_cases.jsonl"))
     generate_unified.add_argument("--evidence", default=str(PROJECT_ROOT / "tests" / "docx_rag_evidence.json"))
     generate_unified.set_defaults(func=cmd_generate_unified_eval)
+
+    rewrite_unified = subparsers.add_parser("rewrite-unified-eval")
+    rewrite_unified.add_argument("--dataset", default=str(PROJECT_ROOT / "tests" / "unified_eval_cases.jsonl"))
+    rewrite_unified.add_argument("--output", default=str(PROJECT_ROOT / "tests" / "unified_eval_cases_llm_rewritten.jsonl"))
+    rewrite_unified.add_argument("--cache", default=str(PROJECT_ROOT / ".cache" / "unified_eval_rewrites.jsonl"))
+    rewrite_unified.add_argument("--report", default=str(PROJECT_ROOT / "reports" / "unified_eval_rewrite_report.json"))
+    rewrite_unified.add_argument("--batch-size", type=int, default=16)
+    rewrite_unified.add_argument("--limit", type=int, default=None)
+    rewrite_unified.add_argument("--temperature", type=float, default=0.75)
+    rewrite_unified.set_defaults(func=cmd_rewrite_unified_eval)
 
     seed_demo_logs = subparsers.add_parser("seed-demo-logs")
     seed_demo_logs.add_argument("--reset", action="store_true", help="Remove previous demo_visitor rows before seeding.")
