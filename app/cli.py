@@ -209,10 +209,12 @@ def cmd_eval_unified(args: argparse.Namespace) -> int:
         markdown_report_path=markdown_report_path,
         suites=args.suite,
         limit=args.limit,
+        tier=args.tier,
     )
     print_json(
         {
             "ok": payload["ok"],
+            "tier": payload.get("tier"),
             "case_count": payload["case_count"],
             "overall_score": payload["overall_score"],
             "by_gold_source": payload["by_gold_source"],
@@ -377,6 +379,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_unified.add_argument("--report", default=str(PROJECT_ROOT / "reports" / "unified_eval_report.json"))
     eval_unified.add_argument("--markdown-report", default=str(PROJECT_ROOT / "reports" / "unified_eval_report.md"))
     eval_unified.add_argument("--suite", action="append", help="Filter by suite name. Can be passed multiple times.")
+    eval_unified.add_argument("--tier", choices=["smoke", "regression", "full"], default="full")
     eval_unified.add_argument("--limit", type=int, default=None)
     eval_unified.add_argument("--fail-under", type=float, default=90.0)
     eval_unified.add_argument("--strict", action="store_true", help="Exit non-zero when thresholds are not met.")

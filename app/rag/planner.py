@@ -5,8 +5,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
+from app.core.config import settings
 from app.core.scenic_catalog import infer_scenic_slug_from_text
 from app.rag.llm_client import generate_chat_completion, llm_is_configured
+from app.rag.router_cache import RouterPlanCache
 
 
 QueryIntent = Literal["FACT", "ANALYTICS", "RECOMMEND", "CHAT"]
@@ -229,6 +231,9 @@ class QueryPlan:
 class QueryPlanner:
     """Decide the cheapest reliable execution path before invoking any agent."""
 
+    def __init__(self, cache: Optional[RouterPlanCache] = None) -> None:
+        self.cache = cache or RouterPlanCache()
+
     def plan(self, user_query: str, scenic_slug: Optional[str] = None) -> QueryPlan:
         llm_plan = self._plan_with_llm(user_query, scenic_slug=scenic_slug)
         if llm_plan:
@@ -345,6 +350,18 @@ class QueryPlanner:
             return None
 
         resolved_scenic_slug = scenic_slug or infer_scenic_slug_from_text(query)
+        cached = self.cache.get(query, resolved_scenic_slug, settings.LLM_MODEL_NAME)
+        cached_payload = cached.get("payload") if cached else None
+        if isinstance(cached_payload, dict):
+            plan = self._plan_from_payload(
+                cached_payload,
+                resolved_scenic_slug=resolved_scenic_slug,
+                user_query=query,
+                planner_source="llm_cache",
+            )
+            if plan:
+                return plan
+
         system_prompt = (
             "你是景区问答系统的路由器。你只做意图和执行路径判断，不回答问题。"
             "必须输出严格 JSON，不要输出 Markdown。"
@@ -406,6 +423,7 @@ class QueryPlanner:
         payload = self._parse_json(raw)
         if not payload:
             return None
+        self.cache.set(query, resolved_scenic_slug, settings.LLM_MODEL_NAME, payload)
         return self._plan_from_payload(payload, resolved_scenic_slug=resolved_scenic_slug, user_query=query)
 
     @staticmethod
@@ -434,6 +452,7 @@ class QueryPlanner:
         payload: Dict[str, Any],
         resolved_scenic_slug: Optional[str],
         user_query: str = "",
+        planner_source: str = "llm",
     ) -> Optional[QueryPlan]:
         allowed_intents = {"FACT", "ANALYTICS", "RECOMMEND", "CHAT"}
         allowed_strategies = {
@@ -546,7 +565,7 @@ class QueryPlanner:
             confidence=confidence,
             reasoning=reasoning or ["LLM planner selected route."],
             chat_reply=str(payload.get("chat_reply") or "").strip(),
-            planner_source="llm",
+            planner_source=planner_source,
             raw_payload=payload,
         )
 

@@ -42,6 +42,7 @@ def load_cases(
     dataset_path: Path,
     suites: Optional[Sequence[str]] = None,
     limit: Optional[int] = None,
+    tier: str = "full",
 ) -> List[Dict[str, Any]]:
     suite_filter = {suite.strip() for suite in suites or [] if suite.strip()}
     cases: List[Dict[str, Any]] = []
@@ -55,9 +56,111 @@ def load_cases(
             if suite_filter and case.get("suite") not in suite_filter:
                 continue
             cases.append(case)
-            if limit and len(cases) >= limit:
-                break
+    cases = select_eval_tier(cases, tier=tier)
+    if limit:
+        cases = cases[:limit]
     return cases
+
+
+def select_eval_tier(cases: List[Dict[str, Any]], tier: str = "full") -> List[Dict[str, Any]]:
+    normalized = str(tier or "full").strip().lower()
+    if normalized == "full":
+        return cases
+    if normalized == "smoke":
+        return _balanced_pick(cases, per_category=8, include_hard=True)
+    if normalized == "regression":
+        return _build_regression_tier(cases) or cases
+    raise ValueError(f"unknown eval tier: {tier}")
+
+
+def _balanced_pick(cases: List[Dict[str, Any]], per_category: int, include_hard: bool) -> List[Dict[str, Any]]:
+    by_category: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for case in cases:
+        by_category[str(case.get("category") or "UNKNOWN")].append(case)
+
+    selected: List[Dict[str, Any]] = []
+    seen = set()
+    for category in sorted(by_category):
+        bucket = by_category[category]
+        preferred = [case for case in bucket if include_hard and case.get("difficulty") == "hard"]
+        preferred.extend(case for case in bucket if case not in preferred)
+        for case in preferred[:per_category]:
+            case_id = str(case.get("id") or "")
+            if case_id not in seen:
+                selected.append(case)
+                seen.add(case_id)
+    return selected
+
+
+def _build_regression_tier(cases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    selected: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    priority_ids = _recent_failure_ids()
+
+    def add_case(case: Dict[str, Any]) -> None:
+        case_id = str(case.get("id") or "")
+        if case_id and case_id not in seen:
+            selected.append(case)
+            seen.add(case_id)
+
+    case_by_id = {str(case.get("id") or ""): case for case in cases}
+    for case_id in sorted(priority_ids):
+        case = case_by_id.get(case_id)
+        if case:
+            add_case(case)
+
+    by_category: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    by_style: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    holdout_cases: List[Dict[str, Any]] = []
+    for case in cases:
+        by_category[str(case.get("category") or "UNKNOWN")].append(case)
+        if case.get("suite") == "holdout":
+            holdout_cases.append(case)
+        style = str(case.get("rewrite_style") or "").strip()
+        if style:
+            by_style[style].append(case)
+
+    for category in sorted(by_category):
+        hard_cases = [case for case in by_category[category] if case.get("difficulty") == "hard"]
+        for case in hard_cases[:10]:
+            add_case(case)
+
+    for category in ("BOUNDARY", "FUSION"):
+        for case in by_category.get(category, [])[:12]:
+            add_case(case)
+
+    for style in sorted(by_style):
+        for case in by_style[style][:6]:
+            add_case(case)
+
+    for case in holdout_cases[:20]:
+        add_case(case)
+
+    return selected
+
+
+def _recent_failure_ids() -> set[str]:
+    candidates = (
+        PROJECT_ROOT / ".tmp" / "full1200_failed_54_regression.jsonl",
+        PROJECT_ROOT / ".tmp" / "eval_shards" / "shard3_failed_15.jsonl",
+    )
+    ids: set[str] = set()
+    for path in candidates:
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as file_obj:
+            for raw_line in file_obj:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                case_id = str(item.get("id") or "")
+                if case_id:
+                    ids.add(case_id)
+    return ids
 
 
 def execute_gold_sql(sql: Optional[str], db_path: Path = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
@@ -86,8 +189,9 @@ def score_unified_eval(
     markdown_report_path: Optional[Path] = DEFAULT_MARKDOWN_REPORT_PATH,
     suites: Optional[Sequence[str]] = None,
     limit: Optional[int] = None,
+    tier: str = "full",
 ) -> Dict[str, Any]:
-    cases = load_cases(dataset_path, suites=suites, limit=limit)
+    cases = load_cases(dataset_path, suites=suites, limit=limit, tier=tier)
     pipeline = ScenicRAGPipeline()
 
     scored_cases = []
@@ -138,6 +242,7 @@ def score_unified_eval(
     payload = {
         "ok": _passes_thresholds(overall, source_stats),
         "dataset": str(dataset_path),
+        "tier": tier,
         "case_count": len(scored_cases),
         "overall_score": overall,
         "total_points": round(total_score, 2),
@@ -587,6 +692,7 @@ def _compact_runtime_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "ok": payload["ok"],
         "dataset": payload["dataset"],
+        "tier": payload.get("tier", "full"),
         "case_count": payload["case_count"],
         "overall_score": payload["overall_score"],
         "by_gold_source": payload["by_gold_source"],
@@ -600,6 +706,7 @@ def render_markdown_report(payload: Dict[str, Any]) -> str:
         "# 统一自测集评测报告",
         "",
         f"- 数据集：`{payload['dataset']}`",
+        f"- 评测层级：{payload.get('tier', 'full')}",
         f"- 样例数：{payload['case_count']}",
         f"- 总分：{payload['overall_score']} / 100",
         f"- 结果：{'通过' if payload['ok'] else '未通过'}",

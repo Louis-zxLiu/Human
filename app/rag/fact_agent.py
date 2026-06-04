@@ -11,6 +11,9 @@ from app.rag.planner import contains_realtime_unsupported_signal
 from app.rag.response_contract import make_evidence, make_refusal
 
 
+STRUCTURED_OVERRIDES_PATH = Path(resolve_path("app/rag/config/fact_structured_overrides.json"))
+
+
 ATTRACTION_COLUMNS = [
     "scenic_name",
     "attraction_id",
@@ -216,6 +219,7 @@ class ScenicFactAgent:
         self._rag_agent: Optional[ChromaStaticAgent] = None
         self._attraction_aliases = self._build_aliases()
         self._docx_evidence = self._load_docx_evidence()
+        self._structured_overrides = self._load_structured_overrides()
 
     def answer(
         self,
@@ -290,7 +294,9 @@ class ScenicFactAgent:
         question_query = self._strip_attraction_mentions(user_query, mentioned_attractions)
         question_type = self._resolve_question_type(user_query, question_query, planned_question_type)
 
-        structured_override = self._answer_structured_override(user_query, attraction, question_type)
+        structured_override = self._answer_configured_structured_override(user_query, attraction, question_type)
+        if not structured_override:
+            structured_override = self._answer_structured_override(user_query, attraction, question_type)
         if structured_override:
             return self._result(
                 structured_override,
@@ -471,6 +477,62 @@ class ScenicFactAgent:
             if any(keyword in user_query for keyword in keywords):
                 return field
         return None
+
+    @staticmethod
+    def _load_structured_overrides() -> List[Dict[str, Any]]:
+        if not STRUCTURED_OVERRIDES_PATH.exists():
+            return []
+        try:
+            payload = json.loads(STRUCTURED_OVERRIDES_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict) and str(item.get("answer") or "").strip()]
+
+    def _answer_configured_structured_override(
+        self,
+        user_query: str,
+        attraction: Optional[str],
+        question_type: Optional[str],
+    ) -> Optional[str]:
+        query = str(user_query or "")
+        name = str(attraction or "")
+        for rule in self._structured_overrides:
+            if self._structured_override_matches(rule, query, name, question_type):
+                answer = str(rule.get("answer") or "").strip()
+                if answer:
+                    return answer
+        return None
+
+    @staticmethod
+    def _structured_override_matches(
+        rule: Dict[str, Any],
+        query: str,
+        attraction: str,
+        question_type: Optional[str],
+    ) -> bool:
+        rule_attraction = str(rule.get("attraction") or "").strip()
+        if rule_attraction and rule_attraction != attraction:
+            return False
+
+        question_types = [str(item) for item in rule.get("question_types") or [] if str(item)]
+        if question_types and question_type not in question_types:
+            return False
+
+        include_all = [str(item) for item in rule.get("include_all") or [] if str(item)]
+        if include_all and not all(term in query for term in include_all):
+            return False
+
+        include_any = [str(item) for item in rule.get("include_any") or [] if str(item)]
+        if include_any and not any(term in query for term in include_any):
+            return False
+
+        exclude_any = [str(item) for item in rule.get("exclude_any") or [] if str(item)]
+        if exclude_any and any(term in query for term in exclude_any):
+            return False
+
+        return True
 
     def _resolve_question_type(
         self,

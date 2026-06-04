@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     LLM_MODEL_NAME: str = "gpt-3.5-turbo"
     LLM_TIMEOUT_SECONDS: float = 20.0
     LLM_MAX_RETRIES: int = 1
+    LLM_ROUTER_CACHE_ENABLED: bool = True
+    LLM_ROUTER_CACHE_PATH: str = ".cache/llm_router_cache.jsonl"
+    LLM_ROUTER_CACHE_VERSION: str = "router-v1"
 
     MODEL_EMBEDDING_NAME: str = "bge-large-zh-v1.5"
     MODEL_EMBEDDING_PATH: str = "models/bge-large-zh-v1.5"
