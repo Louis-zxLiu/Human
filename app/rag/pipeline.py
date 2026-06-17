@@ -5,12 +5,16 @@ from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 from app.core.runtime import merge_runtime_status, utc_timestamp
+from app.rag.agent_loop import AgentLoopController, AgentStep
 from app.rag.fact_agent import ScenicFactAgent, extract_interest_label
 from app.rag.llm_client import generate_chat_completion
 from app.rag.planner import QueryPlanner
 from app.rag.recommendation_agent import ScenicRecommendationAgent
 from app.rag.response_contract import make_refusal
 from app.rag.sql_agent import TouristAnalyticsAgent
+from app.rag.tool_runner import ToolCall, ToolObservation, ToolRunner
+
+REFERENCE_PRONOUN_PATTERN = re.compile(r"(它|这里|这个景点|这个地方|刚才那个|刚刚那个|上一个|这个)")
 
 
 GENERAL_CHAT_EXACT_PATTERNS = (
@@ -73,7 +77,7 @@ def _fallback_general_chat_reply(user_query: str) -> Optional[str]:
     if re.fullmatch(r"(再见|拜拜|bye|goodbye)[!,.?~]*", query, re.IGNORECASE):
         return "\u597d\uff0c\u968f\u65f6\u53eb\u6211\u3002"
     if re.fullmatch(r"(你是谁|你是干嘛的|你能做什么|介绍一下你自己)[!,.?~]*", query):
-        return "\u6211\u662f\u666f\u533a\u5bfc\u89c8\u52a9\u624b\u3002"
+        return "我是景区导览助手，可以陪你聊天，也可以帮你查景点介绍、规划路线、分析游客行为数据。"
     if re.fullmatch(r"(好的|好哦|收到|明白了|嗯嗯|行|ok|okay)[!,.?~]*", query, re.IGNORECASE):
         return "\u597d\u7684\u3002"
     if any(pattern.fullmatch(str(user_query or "").strip()) for pattern in GENERAL_CHAT_EXACT_PATTERNS):
@@ -81,15 +85,98 @@ def _fallback_general_chat_reply(user_query: str) -> Optional[str]:
     return None
 
 
-def _normalize_general_chat_reply(reply: str, fallback: str) -> str:
+def _looks_like_non_social_task(user_query: str) -> bool:
+    query = re.sub(r"\s+", "", str(user_query or ""))
+    if not query:
+        return False
+    task_terms = (
+        "\u662f\u4ec0\u4e48",
+        "\u5728\u54ea",
+        "\u54ea\u91cc",
+        "\u600e\u4e48",
+        "\u600e\u6837",
+        "\u591a\u5c11",
+        "\u51e0",
+        "\u54ea\u4e2a",
+        "\u4ecb\u7ecd",
+        "\u63a8\u8350",
+        "\u8def\u7ebf",
+        "\u666f\u70b9",
+        "\u666f\u533a",
+        "\u6e38\u5ba2",
+        "\u6570\u636e",
+        "\u7edf\u8ba1",
+        "\u5206\u6790",
+        "浠€涔",
+        "鍦ㄥ摢",
+        "鍝噷",
+        "鎬庝箞",
+        "澶氬皯",
+        "鍝釜",
+        "浠嬬粛",
+        "鎺ㄨ崘",
+        "璺嚎",
+        "鏅偣",
+        "鏅尯",
+        "娓稿",
+        "鏁版嵁",
+        "缁熻",
+        "鍒嗘瀽",
+    )
+    return any(term in query for term in task_terms)
+
+
+def _normalize_general_chat_reply(reply: str, fallback: str, max_chars: int = 80) -> str:
     normalized = re.sub(r"\s+", " ", str(reply or "")).strip().strip("\"'")
     if not normalized:
         return fallback
     parts = [part.strip() for part in re.split(r"(?<=[。！？!?])", normalized) if part.strip()]
-    short_reply = parts[0] if parts else normalized
-    if len(short_reply) > 24:
-        short_reply = short_reply[:24].rstrip("，。！？!? ")
+    short_reply = "".join(parts[:2]) if parts else normalized
+    if len(short_reply) > max_chars:
+        short_reply = short_reply[:max_chars].rstrip("，。！？!? ")
     return short_reply or fallback
+
+
+def _build_clarification_reply(user_query: str, question_type: Optional[str] = None, scenic_slug: Optional[str] = None) -> str:
+    query = str(user_query or "")
+    if question_type == "highlights" or any(term in query for term in ("好玩", "好看", "看点", "亮点", "特色")):
+        return "可以，我先帮你缩小范围。你想了解哪个景点的看点？也可以告诉我你偏自然风光、历史文化、亲子还是拍照打卡。"
+    if any(term in query for term in ("路线", "怎么逛", "怎么走", "安排", "规划")):
+        return "可以规划。你从哪个位置出发，同行有没有老人或孩子，想轻松逛还是多看几个核心景点？"
+    if scenic_slug:
+        return "可以介绍。你想了解哪个具体景点？如果还没确定，我可以先从代表性景点、历史文化、主要看点或游览建议里选一个方向讲。"
+    return "可以介绍。你想了解哪个城市、景区或具体景点？如果还没确定，也可以告诉我偏自然风光、历史文化、亲子游还是拍照打卡。"
+
+
+def _last_attraction_from_context(
+    conversation_context: Optional[list[Dict[str, Any]]] = None,
+    session_memory: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    memory_attraction = (session_memory or {}).get("last_attraction")
+    if memory_attraction:
+        return str(memory_attraction)
+    for item in reversed(list(conversation_context or [])):
+        meta = item.get("meta") if isinstance(item, dict) else None
+        if isinstance(meta, dict) and meta.get("matched_attraction"):
+            return str(meta["matched_attraction"])
+    return None
+
+
+def _resolve_context_attraction(
+    user_query: str,
+    explicit_start: Optional[str],
+    conversation_context: Optional[list[Dict[str, Any]]] = None,
+    session_memory: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    if explicit_start:
+        return explicit_start
+    last_attraction = _last_attraction_from_context(conversation_context, session_memory)
+    if not last_attraction:
+        return None
+    query = str(user_query or "")
+    if last_attraction in query or REFERENCE_PRONOUN_PATTERN.search(query):
+        return last_attraction
+    return None
 
 
 def detect_general_chat_reply(user_query: str) -> Optional[str]:
@@ -158,6 +245,12 @@ class ScenicRAGPipeline:
             fact_agent=self.fact_agent,
             analytics_agent=self.analytics_agent,
         )
+        self.tool_runner = ToolRunner(
+            fact_agent=self.fact_agent,
+            analytics_agent=self.analytics_agent,
+            recommendation_agent=self.recommendation_agent,
+        )
+        self.agent_loop = AgentLoopController()
 
     def process_query(
         self,
@@ -168,15 +261,41 @@ class ScenicRAGPipeline:
         attraction_id: Optional[str] = None,
         forced_recommendation_profile: Optional[str] = None,
         forced_recommendation_title: Optional[str] = None,
+        conversation_context: Optional[list[Dict[str, Any]]] = None,
+        session_memory: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         started_at = time.perf_counter()
-        plan = self.planner.plan(user_query, scenic_slug=scenic_slug)
+        plan = self.planner.plan(
+            user_query,
+            scenic_slug=scenic_slug,
+            conversation_context=conversation_context,
+            session_memory=session_memory,
+        )
         intent = plan.intent
+        context_attraction = _resolve_context_attraction(
+            user_query,
+            start_attraction,
+            conversation_context=conversation_context,
+            session_memory=session_memory,
+        )
+
+        if plan.strategy == "general_chat":
+            fallback_chat_reply = _fallback_general_chat_reply(user_query)
+            screened_chat_reply = None if _looks_like_non_social_task(user_query) else (
+                fallback_chat_reply or detect_general_chat_reply(user_query)
+            )
+            if not screened_chat_reply:
+                plan.intent = "FACT"
+                plan.strategy = "structured_fact"
+                plan.reasoning = list(getattr(plan, "reasoning", []) or []) + [
+                    "General-chat plan was not confirmed by chat screener; continuing with tool execution."
+                ]
+                intent = plan.intent
 
         if plan.strategy == "general_chat":
             general_chat_reply = (
                 _fallback_general_chat_reply(user_query)
-                or _normalize_general_chat_reply(plan.chat_reply, "你好，我在。")
+                or _normalize_general_chat_reply(plan.chat_reply, "你好，我在。", max_chars=80)
                 or detect_general_chat_reply(user_query)
                 or "你好，我在。"
             )
@@ -197,6 +316,23 @@ class ScenicRAGPipeline:
                     planner_source=plan.planner_source,
                     raw_payload=plan.raw_payload,
                 ),
+                recommendation=None,
+            )
+
+        if plan.strategy == "ask_clarification":
+            answer = _normalize_general_chat_reply(
+                plan.chat_reply,
+                _build_clarification_reply(user_query, plan.question_type, plan.scenic_slug or scenic_slug),
+                max_chars=96,
+            )
+            return self._finalize_response(
+                started_at,
+                user_query,
+                "CHAT",
+                "dialog_agent",
+                answer,
+                "clarification",
+                plan,
                 recommendation=None,
             )
 
@@ -250,76 +386,392 @@ class ScenicRAGPipeline:
                 ),
             )
 
-        if plan.strategy == "semantic_sql" or intent == "ANALYTICS":
-            result = self.analytics_agent.query_with_trace(user_query)
-            return self._finalize_response(
-                started_at,
-                user_query,
-                intent,
-                "behavior_analytics",
-                result["answer"],
-                result.get("response_kind", "analytics"),
-                plan,
-                recommendation=None,
-                evidence=result.get("evidence"),
-                refusal=result.get("refusal"),
-                warnings=result.get("warnings"),
-                trace={
-                    "analytics": {
-                        "semantic_plan": result.get("semantic_plan"),
-                        "sql": result.get("sql"),
-                        "rows_preview": result.get("rows_preview"),
-                    },
-                    **(result.get("trace") or {}),
-                },
-            )
-
-        if plan.strategy == "route_planner" or intent == "RECOMMEND":
-            result = self.recommendation_agent.answer(
-                user_query,
-                start_attraction=start_attraction,
-                user_profile=user_profile,
-                scenic_slug=scenic_slug,
-                forced_profile_key=forced_recommendation_profile or plan.route_profile,
-                forced_title=forced_recommendation_title,
-            )
-            return self._finalize_response(
-                started_at,
-                user_query,
-                intent,
-                "scenic_recommendation",
-                result["answer"],
-                result.get("response_kind", "recommendation"),
-                plan,
-                recommendation=result.get("recommendation"),
-                matched_attraction=result.get("matched_attraction"),
-                recommendation_label=result.get("recommendation_label") or extract_interest_label(user_query),
-                evidence=result.get("evidence"),
-                trace=result.get("trace"),
-            )
-
-        result = self.fact_agent.answer(
-            user_query,
-            scenic_slug=plan.scenic_slug or scenic_slug,
+        observations, agent_steps = self._run_agent_tool_loop(
+            user_query=user_query,
+            plan=plan,
+            intent=intent,
+            user_profile=user_profile,
+            context_attraction=context_attraction,
+            scenic_slug=scenic_slug,
             attraction_id=attraction_id,
-            attraction_name=start_attraction,
-            retrieval_mode="hybrid" if plan.strategy == "hybrid_rag" else "structured_only",
-            planned_question_type=plan.question_type,
+            forced_recommendation_profile=forced_recommendation_profile,
+            forced_recommendation_title=forced_recommendation_title,
+        )
+        final_observation = self._select_final_observation(observations)
+        result = self._synthesize_tool_result(user_query, plan, observations, final_observation)
+        agent_type = self._agent_type_for_tool(final_observation.tool_name)
+        trace = self._build_tool_trace(
+            observations,
+            agent_steps,
+            conversation_context=conversation_context,
+            session_memory=session_memory,
+            context_attraction=context_attraction,
+            result=result,
         )
         return self._finalize_response(
             started_at,
             user_query,
             intent,
-            "scenic_fact",
+            agent_type,
             result["answer"],
             result.get("response_kind", "fact"),
             plan,
-            recommendation=None,
+            recommendation=result.get("recommendation"),
             matched_attraction=result.get("matched_attraction"),
+            recommendation_label=result.get("recommendation_label") or (
+                extract_interest_label(user_query) if agent_type == "scenic_recommendation" else None
+            ),
             evidence=result.get("evidence"),
             refusal=result.get("refusal"),
-            trace=result.get("trace"),
+            warnings=result.get("warnings"),
+            trace=trace,
         )
+
+    def _run_agent_tool_loop(
+        self,
+        *,
+        user_query: str,
+        plan: Any,
+        intent: str,
+        user_profile: Optional[str],
+        context_attraction: Optional[str],
+        scenic_slug: Optional[str],
+        attraction_id: Optional[str],
+        forced_recommendation_profile: Optional[str],
+        forced_recommendation_title: Optional[str],
+    ) -> tuple[list[ToolObservation], list[AgentStep]]:
+        observations: list[ToolObservation] = []
+        agent_steps: list[AgentStep] = []
+        seen_tools: set[str] = set()
+        first_call = self._tool_call_from_plan(
+            user_query=user_query,
+            plan=plan,
+            intent=intent,
+            user_profile=user_profile,
+            context_attraction=context_attraction,
+            scenic_slug=scenic_slug,
+            attraction_id=attraction_id,
+            forced_recommendation_profile=forced_recommendation_profile,
+            forced_recommendation_title=forced_recommendation_title,
+        )
+        first_step = AgentStep(
+            action="call_tool",
+            reason=first_call.reason or "planner_selected_initial_tool",
+            source="planner",
+            tool_call=first_call,
+        )
+        agent_steps.append(first_step)
+        next_step: Optional[AgentStep] = first_step
+
+        while next_step and next_step.action == "call_tool" and next_step.tool_call and len(observations) < 3:
+            call = next_step.tool_call
+            if call.name in seen_tools:
+                agent_steps.append(
+                    AgentStep(
+                        action="ask_clarification",
+                        reason=f"tool_already_called:{call.name}",
+                        source="agent_policy_fallback",
+                    )
+                )
+                break
+            seen_tools.add(call.name)
+            observation = self.tool_runner.run(call)
+            observations.append(observation)
+            candidate_calls = self._candidate_tools_after_observation(
+                observation,
+                user_query=user_query,
+                plan=plan,
+                user_profile=user_profile,
+                context_attraction=context_attraction,
+                scenic_slug=scenic_slug,
+                attraction_id=attraction_id,
+                forced_recommendation_profile=forced_recommendation_profile,
+                forced_recommendation_title=forced_recommendation_title,
+            )
+            candidate_calls = [candidate for candidate in candidate_calls if candidate.name not in seen_tools]
+            next_step = self.agent_loop.decide_next(
+                user_query=user_query,
+                plan=plan,
+                observations=observations,
+                candidate_calls=candidate_calls,
+            )
+            agent_steps.append(next_step)
+            if next_step.action != "call_tool":
+                break
+        return observations, agent_steps
+
+    def _tool_call_from_plan(
+        self,
+        *,
+        user_query: str,
+        plan: Any,
+        intent: str,
+        user_profile: Optional[str],
+        context_attraction: Optional[str],
+        scenic_slug: Optional[str],
+        attraction_id: Optional[str],
+        forced_recommendation_profile: Optional[str],
+        forced_recommendation_title: Optional[str],
+    ) -> ToolCall:
+        if plan.strategy == "semantic_sql" or intent == "ANALYTICS":
+            return ToolCall("behavior_sql", {"user_query": user_query}, reason="planner_selected_semantic_sql")
+        if plan.strategy == "route_planner" or intent == "RECOMMEND":
+            return ToolCall(
+                "route_planner",
+                {
+                    "user_query": user_query,
+                    "start_attraction": context_attraction,
+                    "user_profile": user_profile,
+                    "scenic_slug": scenic_slug,
+                    "forced_profile_key": forced_recommendation_profile or plan.route_profile,
+                    "forced_title": forced_recommendation_title,
+                },
+                reason="planner_selected_route_planner",
+            )
+        tool_name = "hybrid_rag" if plan.strategy == "hybrid_rag" else "structured_fact"
+        return self._fact_tool_call(
+            tool_name,
+            user_query=user_query,
+            plan=plan,
+            context_attraction=context_attraction,
+            scenic_slug=scenic_slug,
+            attraction_id=attraction_id,
+            reason=f"planner_selected_{tool_name}",
+        )
+
+    def _fact_tool_call(
+        self,
+        tool_name: str,
+        *,
+        user_query: str,
+        plan: Any,
+        context_attraction: Optional[str],
+        scenic_slug: Optional[str],
+        attraction_id: Optional[str],
+        reason: str,
+    ) -> ToolCall:
+        return ToolCall(
+            tool_name,
+            {
+                "user_query": user_query,
+                "scenic_slug": plan.scenic_slug or scenic_slug,
+                "attraction_id": attraction_id,
+                "attraction_name": context_attraction,
+                "planned_question_type": plan.question_type,
+            },
+            reason=reason,
+        )
+
+    def _candidate_tools_after_observation(
+        self,
+        observation: ToolObservation,
+        *,
+        user_query: str,
+        plan: Any,
+        user_profile: Optional[str],
+        context_attraction: Optional[str],
+        scenic_slug: Optional[str],
+        attraction_id: Optional[str],
+        forced_recommendation_profile: Optional[str],
+        forced_recommendation_title: Optional[str],
+    ) -> list[ToolCall]:
+        if not observation.insufficient:
+            return []
+        suggested = set(observation.suggested_next_tools or [])
+        candidates: list[ToolCall] = []
+        if observation.tool_name == "structured_fact":
+            candidates.append(
+                self._fact_tool_call(
+                    "hybrid_rag",
+                    user_query=user_query,
+                    plan=plan,
+                    context_attraction=context_attraction,
+                    scenic_slug=scenic_slug,
+                    attraction_id=attraction_id,
+                    reason="agent_observation_suggested_hybrid_rag",
+                )
+            )
+        if observation.tool_name == "behavior_sql" and (
+            "hybrid_rag" in suggested or observation.response_kind in {"analytics:unresolved", "analytics:empty"}
+        ):
+            candidates.append(
+                self._fact_tool_call(
+                    "hybrid_rag",
+                    user_query=user_query,
+                    plan=plan,
+                    context_attraction=context_attraction,
+                    scenic_slug=scenic_slug,
+                    attraction_id=attraction_id,
+                    reason="agent_observation_suggested_hybrid_rag_after_sql",
+                )
+            )
+        if observation.tool_name == "route_planner" and ("structured_fact" in suggested or observation.insufficient):
+            candidates.append(
+                self._fact_tool_call(
+                    "structured_fact",
+                    user_query=user_query,
+                    plan=plan,
+                    context_attraction=context_attraction,
+                    scenic_slug=scenic_slug,
+                    attraction_id=attraction_id,
+                    reason="agent_observation_suggested_structured_fact_after_route",
+                )
+            )
+        return candidates
+
+    @staticmethod
+    def _select_final_observation(observations: list[ToolObservation]) -> ToolObservation:
+        for observation in reversed(observations):
+            if observation.ok and not observation.insufficient:
+                return observation
+        for observation in reversed(observations):
+            if observation.ok:
+                return observation
+        return observations[-1]
+
+    def _synthesize_tool_result(
+        self,
+        user_query: str,
+        plan: Any,
+        observations: list[ToolObservation],
+        final_observation: ToolObservation,
+    ) -> Dict[str, Any]:
+        result = dict(final_observation.result or {})
+        result.setdefault("answer", final_observation.answer)
+        result.setdefault("response_kind", final_observation.response_kind)
+        result.setdefault("evidence", final_observation.evidence)
+        result.setdefault("refusal", final_observation.refusal)
+        result.setdefault("warnings", final_observation.warnings)
+        if result.get("response_kind") == "structured_override":
+            evidence_field = ""
+            for item in result.get("evidence") or []:
+                if isinstance(item, dict) and item.get("field"):
+                    evidence_field = str(item["field"])
+                    break
+            result["response_kind"] = f"field:{evidence_field or plan.question_type or 'description'}"
+
+        if final_observation.insufficient and not final_observation.refusal:
+            result["answer"] = _build_clarification_reply(user_query, plan.question_type, plan.scenic_slug)
+            result["response_kind"] = "clarification"
+            result["refusal"] = None
+            result["warnings"] = list(result.get("warnings") or []) + ["agent_tool_result_insufficient"]
+            return result
+
+        if len(observations) <= 1:
+            return result
+
+        best_answer = str(result.get("answer") or "").strip()
+        supporting = [
+            observation
+            for observation in observations
+            if observation is not final_observation
+            and observation.ok
+            and observation.evidence
+            and not observation.insufficient
+        ]
+        if not best_answer or not supporting:
+            return result
+
+        synthesized = self._try_llm_synthesis(user_query, plan, final_observation, supporting)
+        if synthesized:
+            result["answer"] = synthesized
+            result["response_kind"] = result.get("response_kind") or final_observation.response_kind
+            result["warnings"] = list(result.get("warnings") or []) + ["agent_synthesized_from_tool_observations"]
+        return result
+
+    @staticmethod
+    def _agent_type_for_tool(tool_name: str) -> str:
+        return {
+            "behavior_sql": "behavior_analytics",
+            "route_planner": "scenic_recommendation",
+            "structured_fact": "scenic_fact",
+            "hybrid_rag": "scenic_fact",
+        }.get(tool_name, "dialog_agent")
+
+    def _build_tool_trace(
+        self,
+        observations: list[ToolObservation],
+        agent_steps: list[AgentStep],
+        *,
+        conversation_context: Optional[list[Dict[str, Any]]],
+        session_memory: Optional[Dict[str, Any]],
+        context_attraction: Optional[str],
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        final_trace = dict(result.get("trace") or {})
+        trace: Dict[str, Any] = {
+            "conversation": {
+                "used_context": bool(conversation_context or session_memory),
+                "context_attraction": context_attraction,
+            },
+            "tools": {
+                "available": [spec["name"] for spec in ToolRunner.specs()],
+                "calls": [observation.to_trace() for observation in observations],
+                "self_corrections": max(0, len(observations) - 1),
+                "final_tool": observations[-1].tool_name if observations else None,
+            },
+            "agent_loop": {
+                "steps": [step.to_trace() for step in agent_steps],
+                "step_count": len(agent_steps),
+            },
+            "synthesis": {
+                "source": "tool_observations",
+                "observation_count": len(observations),
+            },
+        }
+        analytics_trace = {
+            "semantic_plan": result.get("semantic_plan"),
+            "sql": result.get("sql"),
+            "rows_preview": result.get("rows_preview"),
+        }
+        if result.get("semantic_plan") or result.get("sql") or result.get("rows_preview"):
+            trace["analytics"] = analytics_trace
+        trace.update(final_trace)
+        return trace
+
+    def _try_llm_synthesis(
+        self,
+        user_query: str,
+        plan: Any,
+        final_observation: ToolObservation,
+        supporting: list[ToolObservation],
+    ) -> Optional[str]:
+        if not supporting:
+            return None
+        snippets = []
+        for observation in [final_observation] + supporting[:2]:
+            snippets.append(
+                {
+                    "tool": observation.tool_name,
+                    "response_kind": observation.response_kind,
+                    "answer": observation.answer[:600],
+                    "evidence_count": len(observation.evidence or []),
+                }
+            )
+        system_prompt = (
+            "You are the final answer composer for a scenic-guide agent. "
+            "Use only the supplied tool observations. Return concise Simplified Chinese only."
+        )
+        prompt = (
+            f"User query: {user_query}\n"
+            f"Planner strategy: {plan.strategy}, question_type: {plan.question_type}\n"
+            f"Tool observations: {json.dumps(snippets, ensure_ascii=False)}\n"
+            "Compose a natural final answer. Do not invent facts."
+        )
+        try:
+            answer = generate_chat_completion(
+                prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,
+                max_tokens=360,
+                return_error_text=False,
+            )
+        except Exception:
+            return None
+        cleaned = str(answer or "").strip().strip("\"'")
+        if not cleaned or cleaned.startswith("Error"):
+            return None
+        return cleaned
 
     @staticmethod
     def _plan_payload(plan: Any) -> Dict[str, Any]:

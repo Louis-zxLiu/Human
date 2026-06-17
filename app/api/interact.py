@@ -33,6 +33,7 @@ _pipeline_cache: Optional[ScenicRAGPipeline] = None
 _location_agent_cache: Optional[ScenicLocationAgent] = None
 INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
 WEAK_GPS_SESSIONS: Dict[str, Dict[str, Any]] = {}
+CONVERSATION_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 
 class TextInteractRequest(BaseModel):
@@ -57,6 +58,8 @@ def clear_runtime_cache() -> None:
     global _pipeline_cache, _location_agent_cache
     _pipeline_cache = None
     _location_agent_cache = None
+    WEAK_GPS_SESSIONS.clear()
+    CONVERSATION_SESSIONS.clear()
 
 
 def _build_rag_metadata(
@@ -248,6 +251,118 @@ def set_weak_gps_context(session_key: str, context: Dict[str, Any]) -> None:
     WEAK_GPS_SESSIONS[session_key] = context
 
 
+def parse_conversation_context(raw: Optional[str]) -> list[Dict[str, Any]]:
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    context: list[Dict[str, Any]] = []
+    for item in payload[-8:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "")[:16]
+        content = str(item.get("content") or "").strip()[:260]
+        if role not in {"user", "assistant"} or not content:
+            continue
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else None
+        context.append({"role": role, "content": content, "meta": meta})
+    return context
+
+
+def get_conversation_memory(session_key: str) -> Dict[str, Any]:
+    return dict(CONVERSATION_SESSIONS.get(session_key) or {})
+
+
+def _extract_preference_memory(
+    user_text: str,
+    pipeline_result: Dict[str, Any],
+    previous: Dict[str, Any],
+    route_label: Optional[str] = None,
+) -> Dict[str, Any]:
+    preferences = dict(previous.get("preferences") or {})
+    text = str(user_text or "")
+    label = str(route_label or pipeline_result.get("recommendation_label") or "")
+    profile_key = str(((pipeline_result.get("recommendation") or {}).get("profile_key")) or "")
+    preference_terms = {
+        "history": ("历史", "文化", "佛教", "典故", "人文", "history"),
+        "nature": ("自然", "风景", "风光", "山水", "拍照", "nature"),
+        "family": ("亲子", "孩子", "小孩", "老人", "家庭", "family"),
+        "architecture": ("建筑", "艺术", "宫殿", "藏式", "architecture"),
+        "relaxed": ("轻松", "少走", "休闲", "慢慢", "relaxed"),
+    }
+    source = f"{text} {label} {profile_key}".lower()
+    interests = set(preferences.get("interests") or [])
+    for key, terms in preference_terms.items():
+        if key == profile_key or any(term.lower() in source for term in terms):
+            interests.add(key)
+    if interests:
+        preferences["interests"] = sorted(interests)
+    if pipeline_result.get("matched_attraction"):
+        preferences["last_named_attraction"] = pipeline_result.get("matched_attraction")
+    scenic_slug = (pipeline_result.get("recommendation") or {}).get("scenic_slug") or (pipeline_result.get("plan") or {}).get("scenic_slug")
+    if scenic_slug:
+        preferences["scenic_slug"] = scenic_slug
+    return preferences
+
+
+def _extract_tool_memory(pipeline_result: Dict[str, Any]) -> list[Dict[str, Any]]:
+    calls = (((pipeline_result.get("observability") or {}).get("trace") or {}).get("tools") or {}).get("calls") or []
+    compact = []
+    for call in calls[-3:]:
+        if not isinstance(call, dict):
+            continue
+        compact.append(
+            {
+                "tool_name": call.get("tool_name"),
+                "ok": call.get("ok"),
+                "response_kind": call.get("response_kind"),
+                "insufficient": call.get("insufficient"),
+            }
+        )
+    return compact
+
+
+def update_conversation_memory(
+    session_key: str,
+    user_text: str,
+    assistant_text: str,
+    pipeline_result: Dict[str, Any],
+    scenic_slug: Optional[str] = None,
+    attraction_id: Optional[str] = None,
+    route_label: Optional[str] = None,
+) -> None:
+    plan = pipeline_result.get("plan") or {}
+    previous = CONVERSATION_SESSIONS.get(session_key) or {}
+    matched_attraction = pipeline_result.get("matched_attraction") or previous.get("last_attraction")
+    memory = {
+        "last_user_text": str(user_text or "")[:220],
+        "last_assistant_text": str(assistant_text or "")[:260],
+        "last_intent": pipeline_result.get("intent"),
+        "last_strategy": plan.get("strategy"),
+        "last_response_kind": pipeline_result.get("response_kind"),
+        "last_attraction": matched_attraction,
+        "last_scenic_slug": scenic_slug or plan.get("scenic_slug") or previous.get("last_scenic_slug"),
+        "last_attraction_id": attraction_id or previous.get("last_attraction_id"),
+        "last_route_label": route_label or pipeline_result.get("recommendation_label") or previous.get("last_route_label"),
+        "preferences": _extract_preference_memory(user_text, pipeline_result, previous, route_label=route_label),
+        "last_tools": _extract_tool_memory(pipeline_result),
+        "updated_at": time.time(),
+    }
+    if pipeline_result.get("response_kind") == "clarification":
+        memory["pending_clarification"] = {
+            "question": str(user_text or "")[:220],
+            "question_type": plan.get("question_type"),
+            "strategy": plan.get("strategy"),
+        }
+    elif previous.get("pending_clarification"):
+        memory["pending_clarification"] = None
+    CONVERSATION_SESSIONS[session_key] = {key: value for key, value in memory.items() if value is not None}
+
+
 def handle_weak_gps_flow(
     user_text: str,
     gps_status: str,
@@ -255,6 +370,7 @@ def handle_weak_gps_flow(
     user_profile: Optional[str],
     scenic_slug: Optional[str] = None,
     attraction_id: Optional[str] = None,
+    conversation_context: Optional[list[Dict[str, Any]]] = None,
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
     if gps_status != "weak":
         pop_weak_gps_context(session_key)
@@ -293,6 +409,8 @@ def handle_weak_gps_flow(
                 start_attraction=current_attraction,
                 scenic_slug=pending.get("scenic_slug"),
                 attraction_id=pending.get("attraction_id"),
+                conversation_context=conversation_context,
+                session_memory=get_conversation_memory(session_key),
             )
             recommendation_result["agent_type"] = "weak_gps_recommendation"
             recommendation_result["matched_attraction"] = current_attraction
@@ -342,6 +460,7 @@ def run_answer_pipeline(
     attraction_id: Optional[str] = None,
     forced_recommendation_profile: Optional[str] = None,
     forced_recommendation_title: Optional[str] = None,
+    conversation_context: Optional[list[Dict[str, Any]]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     gps_result = handle_weak_gps_flow(
         user_text,
@@ -350,6 +469,7 @@ def run_answer_pipeline(
         user_profile,
         scenic_slug=scenic_slug,
         attraction_id=attraction_id,
+        conversation_context=conversation_context,
     )
     if gps_result:
         return gps_result
@@ -361,6 +481,8 @@ def run_answer_pipeline(
         attraction_id=attraction_id,
         forced_recommendation_profile=forced_recommendation_profile,
         forced_recommendation_title=forced_recommendation_title,
+        conversation_context=conversation_context,
+        session_memory=get_conversation_memory(session_key),
     )
     result["gps_state"] = "normal" if gps_status != "weak" else "weak_without_followup"
     result["gps_candidates"] = []
@@ -378,6 +500,7 @@ def _generate_fresh_avatar_response(
     prefer_compact_recommendation: bool = False,
     forced_recommendation_profile: Optional[str] = None,
     forced_recommendation_title: Optional[str] = None,
+    conversation_context: Optional[list[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     start_time = time.time()
     session_key = get_session_key(username, client_session_id)
@@ -410,6 +533,7 @@ def _generate_fresh_avatar_response(
         attraction_id=attraction_id,
         forced_recommendation_profile=forced_recommendation_profile,
         forced_recommendation_title=forced_recommendation_title,
+        conversation_context=conversation_context,
     )
     assistant_text = _select_avatar_response_text(
         assistant_text,
@@ -456,6 +580,15 @@ def _generate_fresh_avatar_response(
 
     latency = time.time() - start_time
     print(f"[Multimodal] processed in {latency:.2f}s via {pipeline_result['intent']}")
+    update_conversation_memory(
+        session_key,
+        user_text,
+        assistant_text,
+        pipeline_result,
+        scenic_slug=scenic_slug,
+        attraction_id=attraction_id,
+        route_label=route_label,
+    )
 
     return {
         "user_text": user_text,
@@ -578,6 +711,7 @@ def generate_avatar_response(
     attraction_id: Optional[str] = None,
     route_label: Optional[str] = None,
     preset_route_key: Optional[str] = None,
+    conversation_context: Optional[list[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     preset_route = preset_route_cache.resolve_route(
         user_text,
@@ -593,6 +727,7 @@ def generate_avatar_response(
             scenic_slug=scenic_slug,
             attraction_id=attraction_id,
             route_label=route_label,
+            conversation_context=conversation_context,
         )
         return _apply_fixed_reply_cache(result)
 
@@ -609,6 +744,7 @@ def generate_avatar_response(
             prefer_compact_recommendation=True,
             forced_recommendation_profile=route.get("profile_key"),
             forced_recommendation_title=route.get("title"),
+            conversation_context=conversation_context,
         ),
     )
     result = {
@@ -619,7 +755,18 @@ def generate_avatar_response(
         "rag_metadata": payload.get("rag_metadata") or {},
     }
     cache_status = "hit" if payload.get("cache_hit") else "generated"
-    return _apply_preset_route_metadata(result, preset_route, cache_status)
+    result = _apply_preset_route_metadata(result, preset_route, cache_status)
+    session_key = get_session_key(username, client_session_id)
+    update_conversation_memory(
+        session_key,
+        user_text,
+        result.get("assistant_text", ""),
+        result.get("rag_metadata") or {},
+        scenic_slug=preset_route.get("scenic_slug") or scenic_slug,
+        attraction_id=attraction_id,
+        route_label=route_label or preset_route.get("title"),
+    )
+    return result
 
 
 def refresh_preset_route_cache() -> Dict[str, int]:
@@ -692,6 +839,9 @@ async def interact_stream_ws(websocket: WebSocket):
             attraction_id = payload.get("attractionId")
             route_label = payload.get("routeLabel")
             preset_route_key = payload.get("presetRouteKey")
+            conversation_context = payload.get("conversation_context") or []
+            if not isinstance(conversation_context, list):
+                conversation_context = []
             session_key = get_session_key("anonymous", client_session_id, fallback=ws_session_key)
 
             if "text" in payload:
@@ -726,6 +876,7 @@ async def interact_stream_ws(websocket: WebSocket):
                 user_profile=None,
                 scenic_slug=scenic_slug,
                 attraction_id=attraction_id,
+                conversation_context=conversation_context,
             )
             assistant_text = _select_avatar_response_text(
                 assistant_text,
@@ -760,6 +911,15 @@ async def interact_stream_ws(websocket: WebSocket):
                 route_label=route_label,
             )
             await websocket.send_json({"type": "done", "full_text": assistant_text, "rag_metadata": rag_metadata})
+            update_conversation_memory(
+                session_key,
+                user_text,
+                assistant_text,
+                pipeline_result,
+                scenic_slug=scenic_slug,
+                attraction_id=attraction_id,
+                route_label=route_label,
+            )
 
             try:
                 log_service.analyze_and_log(
@@ -798,6 +958,7 @@ async def interact_audio(
     attractionId: Optional[str] = Form(None),
     routeLabel: Optional[str] = Form(None),
     presetRouteKey: Optional[str] = Form(None),
+    conversation_context: Optional[str] = Form(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     api_start_time = time.time()
@@ -833,6 +994,7 @@ async def interact_audio(
         attraction_id=attractionId,
         route_label=routeLabel,
         preset_route_key=presetRouteKey,
+        conversation_context=parse_conversation_context(conversation_context),
     )
 
     total_latency = time.time() - api_start_time
@@ -859,6 +1021,7 @@ async def interact_text(
     attractionId: Optional[str] = Form(None),
     routeLabel: Optional[str] = Form(None),
     presetRouteKey: Optional[str] = Form(None),
+    conversation_context: Optional[str] = Form(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     api_start_time = time.time()
@@ -881,6 +1044,7 @@ async def interact_text(
         attraction_id=attractionId,
         route_label=routeLabel,
         preset_route_key=presetRouteKey,
+        conversation_context=parse_conversation_context(conversation_context),
     )
 
     total_latency = time.time() - api_start_time

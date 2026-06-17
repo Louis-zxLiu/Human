@@ -58,7 +58,12 @@ async def chat_completions(request: ChatCompletionRequest):
     if not user_message:
         raise HTTPException(status_code=400, detail="No user message found in the request.")
 
-    result = get_pipeline().process_query(user_message)
+    conversation_context = [
+        {"role": msg.role, "content": msg.content[:260], "meta": msg.metadata}
+        for msg in request.messages[-8:]
+        if msg.content
+    ]
+    result = get_pipeline().process_query(user_message, conversation_context=conversation_context)
     answer = result["answer"]
     rag_metadata = {
         "intent": result["intent"],

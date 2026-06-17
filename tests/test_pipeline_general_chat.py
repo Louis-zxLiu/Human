@@ -32,6 +32,31 @@ class PipelineGeneralChatTests(unittest.TestCase):
             reply = detect_general_chat_reply("\u8c22\u8c22")
         self.assertEqual(reply, "\u4e0d\u5ba2\u6c14\uff0c\u6211\u5728\u3002")
 
+    def test_vague_scenic_intro_asks_for_clarification(self):
+        pipeline = ScenicRAGPipeline()
+        result = pipeline.process_query("介绍一下景点")
+        self.assertEqual(result["intent"], "CHAT")
+        self.assertEqual(result["agent_type"], "dialog_agent")
+        self.assertEqual(result["response_kind"], "clarification")
+        self.assertIsNone(result["refusal"])
+        self.assertIn("哪个", result["answer"])
+
+    def test_reference_query_uses_context_attraction(self):
+        pipeline = ScenicRAGPipeline()
+        result = pipeline.process_query(
+            "它有什么亮点？",
+            conversation_context=[
+                {
+                    "role": "assistant",
+                    "content": "灵山大佛的信息如下。",
+                    "meta": {"matched_attraction": "灵山大佛", "response_kind": "overview"},
+                }
+            ],
+            session_memory={"last_attraction": "灵山大佛"},
+        )
+        self.assertEqual(result["matched_attraction"], "灵山大佛")
+        self.assertTrue(result["observability"]["trace"]["conversation"]["used_context"])
+
 
 if __name__ == "__main__":
     unittest.main()

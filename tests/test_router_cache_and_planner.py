@@ -31,17 +31,17 @@ class RouterCacheAndPlannerTests(unittest.TestCase):
             self.assertEqual(cache.stats()["entries"], 0)
             self.assertEqual(cache.stats()["clears"], 1)
 
-    def test_planner_cache_hit_still_applies_local_postprocessing(self):
+    def test_planner_cache_hit_still_applies_hard_boundary_postprocessing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cache = RouterPlanCache(path=Path(temp_dir) / "router.jsonl", enabled=True)
-            query = "五智门在游览路线上起啥作用？"
+            query = "灵山胜境今天实时有多少人？"
             cache.set(
                 query,
                 "lingshan",
                 "test-model",
                 {
-                    "intent": "RECOMMEND",
-                    "strategy": "route_planner",
+                    "intent": "FACT",
+                    "strategy": "structured_fact",
                     "question_type": "description",
                     "route_profile": "general",
                     "confidence": 0.9,
@@ -56,25 +56,107 @@ class RouterCacheAndPlannerTests(unittest.TestCase):
                 plan = planner.plan(query, scenic_slug="lingshan")
 
             self.assertEqual(plan.intent, "FACT")
-            self.assertEqual(plan.strategy, "structured_fact")
+            self.assertEqual(plan.strategy, "refuse_realtime")
             self.assertEqual(plan.planner_source, "llm_cache")
             self.assertEqual(planner.cache_stats()["hits"], 1)
 
-    def test_heuristic_routes_core_cases(self):
+    def test_agent_plan_accepts_llm_tool_selection(self):
         planner = QueryPlanner(cache=RouterPlanCache(enabled=False))
 
-        route_plan = planner.plan("自然风光爱好者，灵山胜境推荐一条路线，每站介绍下。")
+        route_payload = {
+            "intent": "RECOMMEND",
+            "strategy": "route_planner",
+            "question_type": "description",
+            "route_profile": "nature",
+            "confidence": 0.92,
+            "reasoning": ["agent selected route tool"],
+        }
+        with patch("app.rag.planner.llm_is_configured", return_value=True), patch(
+            "app.rag.planner.generate_chat_completion",
+            return_value=str(route_payload).replace("'", '"'),
+        ):
+            route_plan = planner.plan("自然风光爱好者，灵山胜境推荐一条路线，每站介绍下。")
         self.assertEqual(route_plan.intent, "RECOMMEND")
         self.assertEqual(route_plan.strategy, "route_planner")
         self.assertEqual(route_plan.route_profile, "nature")
 
-        fact_plan = planner.plan("五智门在游览路线上起啥作用？")
-        self.assertEqual(fact_plan.intent, "FACT")
-        self.assertEqual(fact_plan.strategy, "structured_fact")
+        clarification_payload = {
+            "intent": "CHAT",
+            "strategy": "ask_clarification",
+            "question_type": "description",
+            "route_profile": "general",
+            "confidence": 0.9,
+            "chat_reply": "你想了解哪个景点？",
+            "reasoning": ["missing attraction"],
+        }
+        with patch("app.rag.planner.llm_is_configured", return_value=True), patch(
+            "app.rag.planner.generate_chat_completion",
+            return_value=str(clarification_payload).replace("'", '"'),
+        ):
+            clarification_plan = planner.plan("介绍一下景点")
+        self.assertEqual(clarification_plan.intent, "CHAT")
+        self.assertEqual(clarification_plan.strategy, "ask_clarification")
 
-        analytics_plan = planner.plan("豫园一般逛多久？")
-        self.assertEqual(analytics_plan.intent, "ANALYTICS")
-        self.assertEqual(analytics_plan.strategy, "semantic_sql")
+    def test_agent_prompt_receives_conversation_context_and_bypasses_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache = RouterPlanCache(path=Path(temp_dir) / "router.jsonl", enabled=True)
+            query = "它有什么亮点？"
+            cache.set(
+                query,
+                "lingshan",
+                "test-model",
+                {
+                    "intent": "CHAT",
+                    "strategy": "ask_clarification",
+                    "question_type": "description",
+                    "route_profile": "general",
+                    "confidence": 0.7,
+                },
+            )
+            planner = QueryPlanner(cache=cache)
+            captured = {}
+
+            def fake_generate(prompt, *args, **kwargs):
+                captured["prompt"] = prompt
+                return (
+                    '{"intent":"FACT","strategy":"structured_fact","question_type":"highlights",'
+                    '"route_profile":"general","requires_realtime_data":false,'
+                    '"source_conflict":false,"confidence":0.9,"reasoning":["context object"]}'
+                )
+
+            with patch("app.rag.planner.settings.LLM_MODEL_NAME", "test-model"), patch(
+                "app.rag.planner.llm_is_configured",
+                return_value=True,
+            ), patch("app.rag.planner.generate_chat_completion", side_effect=fake_generate):
+                plan = planner.plan(
+                    query,
+                    scenic_slug="lingshan",
+                    conversation_context=[
+                        {
+                            "role": "assistant",
+                            "content": "灵山大佛的信息如下。",
+                            "meta": {"matched_attraction": "灵山大佛", "response_kind": "overview"},
+                        }
+                    ],
+                    session_memory={"last_attraction": "灵山大佛"},
+                )
+
+            self.assertEqual(plan.intent, "FACT")
+            self.assertEqual(plan.strategy, "structured_fact")
+            self.assertIn("灵山大佛", captured["prompt"])
+            self.assertEqual(planner.cache_stats()["hits"], 0)
+
+    def test_code_guards_only_hard_boundaries_when_llm_unavailable(self):
+        planner = QueryPlanner(cache=RouterPlanCache(enabled=False))
+
+        with patch("app.rag.planner.llm_is_configured", return_value=False):
+            fallback_plan = planner.plan("灵山胜境推荐一条路线，每站介绍下。")
+        self.assertEqual(fallback_plan.intent, "CHAT")
+        self.assertEqual(fallback_plan.strategy, "ask_clarification")
+
+        with patch("app.rag.planner.llm_is_configured", return_value=False):
+            realtime_plan = planner.plan("灵山胜境今天实时有多少人？")
+        self.assertEqual(realtime_plan.strategy, "refuse_realtime")
 
 
 if __name__ == "__main__":

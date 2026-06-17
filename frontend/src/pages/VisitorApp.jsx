@@ -200,6 +200,26 @@ function base64ToBlobUrl(base64, mimeType) {
   return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
 }
 
+function buildConversationContext(messages = []) {
+  return messages
+    .filter((message) => message?.content && message.role)
+    .slice(-6)
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content).slice(0, 220),
+      meta: message.meta
+        ? {
+            intent: message.meta.intent,
+            response_kind: message.meta.response_kind,
+            matched_attraction: message.meta.matched_attraction,
+            recommendation_label: message.meta.recommendation_label,
+            scenic_slug: message.meta.scenic_slug,
+            attraction_id: message.meta.attraction_id,
+          }
+        : null,
+    }));
+}
+
 export function VisitorApp({ guideContext = {}, embedded = false, productTone = false }) {
   const username = localStorage.getItem("username") || "游客";
   const role = localStorage.getItem("user_role") || "user";
@@ -466,6 +486,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       attractionId: activeGuideContext.attractionId,
       routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
       presetRouteKey: options.presetRouteKey || "",
+      conversationContext: buildConversationContext(messagesRef.current),
     });
     const result = await sendTextMessage(formData);
 
@@ -535,6 +556,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           attractionId: activeGuideContext.attractionId,
           routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
           presetRouteKey: options.presetRouteKey || "",
+          conversation_context: buildConversationContext(workingMessages),
         }));
         setStreamNotice("实时链路已连接，正在分段生成文本、语音和数字人画面。");
       };
@@ -721,6 +743,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
               scenicSlug: activeGuideContext.scenicSlug,
               attractionId: activeGuideContext.attractionId,
               routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+              conversationContext: buildConversationContext(messagesRef.current),
             });
             const result = await sendAudioMessage(formData);
             setActiveQuestion(result.user_text || "语音提问");
@@ -745,6 +768,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             scenicSlug: activeGuideContext.scenicSlug,
             attractionId: activeGuideContext.attractionId,
             routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+            conversationContext: buildConversationContext(messagesRef.current),
           });
           const result = await sendAudioMessage(formData);
           setActiveQuestion(result.user_text || "语音提问");

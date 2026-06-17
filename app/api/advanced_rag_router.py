@@ -44,10 +44,15 @@ async def chat_completions(request: ChatCompletionRequest):
     if not user_query:
         return {"error": "No user message found in the request."}
         
-    # 调用我们刚刚构建的 Pipeline 核心入口
-    # 返回字典: {"query": ..., "intent": ..., "agent_type": ..., "answer": ...}
+    conversation_context = [
+        {"role": msg.role, "content": msg.content[:260], "meta": None}
+        for msg in request.messages[-8:]
+        if msg.content
+    ]
+
+    # 调用 Pipeline 核心入口，保留最近消息给主对话 Agent 做多轮决策。
     rag_pipeline = get_rag_pipeline()
-    result = rag_pipeline.process_query(user_query)
+    result = rag_pipeline.process_query(user_query, conversation_context=conversation_context)
     final_answer = result["answer"]
     rag_metadata = {
         "intent": result["intent"],

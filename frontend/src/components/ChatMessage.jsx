@@ -19,6 +19,9 @@ function sourceBadges(meta) {
   if (meta.intent === "FACT") {
     badges.push({ text: "DOCX 景区知识库", state: "info" });
   }
+  if (meta.response_kind === "clarification") {
+    badges.push({ text: "需要补充信息", state: "warning" });
+  }
   if (meta.intent === "ANALYTICS") {
     badges.push({ text: "游客行为数据", state: "success" });
   }
