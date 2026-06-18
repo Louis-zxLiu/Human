@@ -9,6 +9,7 @@ set "PROJECT_CONDARC=%PROJECT_ROOT%.condarc"
 set "CONDA_PKGS_DIRS=%PROJECT_ROOT%.conda_pkgs"
 set "PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
 set "TORCH_WHL_INDEX_URL=https://download.pytorch.org/whl/cu126"
+if not defined HF_ENDPOINT set "HF_ENDPOINT=https://hf-mirror.com"
 cd /d "%PROJECT_ROOT%"
 mkdir "%PROJECT_ROOT%.tmp" 2>nul
 mkdir "%CONDA_PKGS_DIRS%" 2>nul
@@ -32,6 +33,7 @@ if %errorlevel% neq 0 (
 echo [BOOTSTRAP] Ensuring conda environment %CONDA_ENV_PREFIX% ...
 echo [BOOTSTRAP] Using project Conda mirror config: %PROJECT_CONDARC%
 echo [BOOTSTRAP] Using project package cache: %CONDA_PKGS_DIRS%
+echo [BOOTSTRAP] Using Hugging Face endpoint: %HF_ENDPOINT%
 if exist "%CONDA_ENV_PREFIX%" if not exist "%CONDA_PYTHON%" (
     echo [BOOTSTRAP] Existing env directory is incomplete. Rebuilding %CONDA_ENV_PREFIX% ...
     rmdir /s /q "%CONDA_ENV_PREFIX%"

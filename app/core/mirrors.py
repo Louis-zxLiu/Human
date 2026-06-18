@@ -36,6 +36,12 @@ def get_hf_endpoint() -> str:
     return load_env_value("HF_ENDPOINT", DEFAULT_HF_ENDPOINT) or DEFAULT_HF_ENDPOINT
 
 
+def configure_hf_endpoint() -> str:
+    endpoint = get_hf_endpoint()
+    os.environ["HF_ENDPOINT"] = endpoint
+    return endpoint
+
+
 def current_condarc_path() -> Path | None:
     configured = os.getenv("CONDARC")
     if not configured:

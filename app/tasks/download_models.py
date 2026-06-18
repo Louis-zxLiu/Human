@@ -1,13 +1,14 @@
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List
 
+from app.core.mirrors import configure_hf_endpoint, get_hf_endpoint
+from app.core.runtime import PROJECT_ROOT, merge_runtime_status
+
+configure_hf_endpoint()
+
 import whisper
 from huggingface_hub import snapshot_download
-
-from app.core.mirrors import get_hf_endpoint
-from app.core.runtime import PROJECT_ROOT, merge_runtime_status
 
 
 MANIFEST_PATH = PROJECT_ROOT / "scripts" / "model_manifest.json"
@@ -32,8 +33,7 @@ def ensure_hf_snapshot(model: Dict[str, Any]) -> Dict[str, Any]:
     if has_required_files(target_dir, model["required_files"]):
         return {"name": model["name"], "status": "skipped", "reason": "already_ready"}
 
-    hf_endpoint = get_hf_endpoint()
-    os.environ["HF_ENDPOINT"] = hf_endpoint
+    configure_hf_endpoint()
     snapshot_download(
         repo_id=model["repo_id"],
         local_dir=str(target_dir),

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import List
 
+from app.core.mirrors import configure_hf_endpoint
 from app.core.runtime_health import collect_runtime_health_report
 from app.core.runtime import CONDA_ENV_PREFIX, PROJECT_ROOT
 
@@ -115,6 +116,7 @@ def cmd_bootstrap(_: argparse.Namespace) -> int:
     env_file = PROJECT_ROOT / ".env"
     if not env_file.exists() and env_example.exists():
         env_file.write_text(env_example.read_text(encoding="utf-8"), encoding="utf-8")
+    configure_hf_endpoint()
 
     code = ensure_gpu_torch_runtime()
     if code != 0:
