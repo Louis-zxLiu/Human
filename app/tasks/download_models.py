@@ -7,9 +7,6 @@ from app.core.runtime import PROJECT_ROOT, merge_runtime_status
 
 configure_hf_endpoint()
 
-import whisper
-from huggingface_hub import snapshot_download
-
 
 MANIFEST_PATH = PROJECT_ROOT / "scripts" / "model_manifest.json"
 
@@ -23,24 +20,31 @@ def resolve_target_dir(relative_path: str) -> Path:
     return (PROJECT_ROOT / relative_path).resolve()
 
 
-def has_required_files(target_dir: Path, required_files: List[str]) -> bool:
-    return all((target_dir / relative_path).exists() for relative_path in required_files)
+def has_required_files(target_dir: Path, model: Dict[str, Any]) -> bool:
+    required_files = model.get("required_files", [])
+    required_any_files = model.get("required_any_files", [])
+    return all((target_dir / relative_path).exists() for relative_path in required_files) and all(
+        any((target_dir / relative_path).exists() for relative_path in alternatives)
+        for alternatives in required_any_files
+    )
 
 
 def ensure_hf_snapshot(model: Dict[str, Any]) -> Dict[str, Any]:
     target_dir = resolve_target_dir(model["target_dir"])
     target_dir.mkdir(parents=True, exist_ok=True)
-    if has_required_files(target_dir, model["required_files"]):
+    if has_required_files(target_dir, model):
         return {"name": model["name"], "status": "skipped", "reason": "already_ready"}
 
     configure_hf_endpoint()
+    from huggingface_hub import snapshot_download
+
     snapshot_download(
         repo_id=model["repo_id"],
         local_dir=str(target_dir),
         local_dir_use_symlinks=False,
         resume_download=True,
     )
-    if not has_required_files(target_dir, model["required_files"]):
+    if not has_required_files(target_dir, model):
         raise RuntimeError(f"Model downloaded but required files are still missing: {model['name']}")
     return {"name": model["name"], "status": "downloaded", "target_dir": str(target_dir)}
 
@@ -48,11 +52,13 @@ def ensure_hf_snapshot(model: Dict[str, Any]) -> Dict[str, Any]:
 def ensure_openai_whisper(model: Dict[str, Any]) -> Dict[str, Any]:
     target_dir = resolve_target_dir(model["target_dir"])
     target_dir.mkdir(parents=True, exist_ok=True)
-    if has_required_files(target_dir, model["required_files"]):
+    if has_required_files(target_dir, model):
         return {"name": model["name"], "status": "skipped", "reason": "already_ready"}
 
+    import whisper
+
     whisper.load_model(model["model_name"], download_root=str(target_dir), device="cpu")
-    if not has_required_files(target_dir, model["required_files"]):
+    if not has_required_files(target_dir, model):
         raise RuntimeError(f"Whisper runtime download incomplete: {model['name']}")
     return {"name": model["name"], "status": "downloaded", "target_dir": str(target_dir)}
 

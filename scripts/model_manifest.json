@@ -7,9 +7,14 @@
       "target_dir": "models/bge-large-zh-v1.5",
       "required_files": [
         "config.json",
-        "model.safetensors",
         "tokenizer.json",
         "vocab.txt"
+      ],
+      "required_any_files": [
+        [
+          "model.safetensors",
+          "pytorch_model.bin"
+        ]
       ]
     },
     {
