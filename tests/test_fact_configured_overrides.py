@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from app.rag.fact_agent import ScenicFactAgent
 
@@ -59,6 +60,41 @@ class FactConfiguredOverridesTests(unittest.TestCase):
                 question_type="architecture_params",
             )
         )
+
+    def test_fact_semantic_agent_uses_llm_structured_plan(self):
+        payload = (
+            '{"attraction_name":"灵山大照壁","question_type":"location","evidence_mode":"structured",'
+            '"is_comparison":false,"compared_attractions":[],"confidence":0.92,"reasoning":"询问景点位置。"}'
+        )
+
+        with patch("app.rag.fact_agent.llm_is_configured", return_value=True), patch(
+            "app.rag.fact_agent.generate_chat_completion", return_value=payload
+        ) as generate:
+            plan = self.agent._plan_with_fact_semantic_agent(
+                "灵山大照壁在哪儿？",
+                scenic_slug=None,
+                context_row=None,
+                retrieval_mode="structured_only",
+                planned_question_type=None,
+            )
+
+        self.assertTrue(generate.called)
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.attraction_name, "灵山大照壁")
+        self.assertEqual(plan.question_type, "location")
+        self.assertEqual(plan.planner_source, "fact_semantic_agent")
+
+    def test_fact_semantic_agent_rejects_unknown_field(self):
+        plan = self.agent._plan_from_fact_semantic_payload(
+            {
+                "attraction_name": "灵山大照壁",
+                "question_type": "made_up_field",
+                "evidence_mode": "structured",
+            },
+            scenic_slug=None,
+        )
+
+        self.assertIsNone(plan)
 
 
 if __name__ == "__main__":

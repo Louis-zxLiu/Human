@@ -205,7 +205,6 @@ class ScenicRecommendationAgent:
             f"适合原因：{profile['reason']}{profile_text}",
             f"预计游览时长：{profile['estimated_duration']}",
             f"建议讲解重点：{profile['highlights']}",
-            f"游客行为分析补充：{analytics_hint or '当前行为分析层暂时无额外补充，建议以景点讲解体验为主。'}",
         ]
         if route_items:
             stop_lines = [f"{item['order']}. {item['name']}：{item['rationale']}" for item in route_items]

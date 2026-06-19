@@ -156,6 +156,17 @@ class QueryPlanner:
         )
         if llm_plan:
             return llm_plan
+        if llm_is_configured():
+            return QueryPlan(
+                intent="CHAT",
+                strategy="ask_clarification",
+                scenic_slug=scenic_slug or infer_scenic_slug_from_text(user_query),
+                question_type="description",
+                confidence=0.4,
+                reasoning=["LLM planner failed; asking for clarification instead of using heuristic semantic routing."],
+                chat_reply="我需要先确认一下你的具体需求：你想查景点资料、规划路线，还是分析游客数据？",
+                planner_source="llm_planner_failed",
+            )
         return self._heuristic_plan(user_query, scenic_slug=scenic_slug)
 
     def _heuristic_plan(self, user_query: str, scenic_slug: Optional[str] = None) -> QueryPlan:
@@ -282,8 +293,14 @@ class QueryPlanner:
             "参考例子：\n"
             "- “总共有多少条记录？” => ANALYTICS + semantic_sql\n"
             "- “哪5个景点去的人最多？” => ANALYTICS + semantic_sql\n"
+            "- “女游客票务平均是多少？” => ANALYTICS + semantic_sql\n"
+            "- “玩下来一般要小孩几岁？” => ANALYTICS + semantic_sql\n"
             "- “灵山大照壁有啥用？” => FACT + structured_fact + core_function\n"
             "- “灵山胜境概况里重点讲啥？” => FACT + hybrid_rag + description\n"
+            "- “吉祥颂演出信息，评委问时该答哪些事实？” => FACT + hybrid_rag + open_info\n"
+            "- “九龙灌浴表演，评委问时该答啥？” => FACT + hybrid_rag + description\n"
+            "- “祥符禅寺哪里最值得去？” => FACT + structured_fact + highlights\n"
+            "- “去百子戏弥勒玩，有什么特别推荐的体验吗？” => FACT + structured_fact + highlights\n"
             "- “介绍一下景点” => CHAT + ask_clarification + description\n"
             "- “这里有什么好看的？” => CHAT + ask_clarification + highlights\n"
             "- “喜欢佛教文化，灵山胜境咋逛？” => RECOMMEND + route_planner + history\n"
@@ -435,7 +452,10 @@ class QueryPlanner:
         requires_realtime_data = QueryPlanner._coerce_bool(payload.get("requires_realtime_data"))
         source_conflict = QueryPlanner._coerce_bool(payload.get("source_conflict"))
         query = str(user_query or "")
-        if QueryPlanner._has_source_conflict(query):
+        if QueryPlanner._requires_fabrication_refusal(query) or QueryPlanner._requires_external_event_refusal(query):
+            strategy = "refuse_realtime"
+            requires_realtime_data = True
+        elif QueryPlanner._has_source_conflict(query):
             strategy = "refuse_source_conflict"
             source_conflict = True
         elif QueryPlanner._requires_realtime_data(query) and not QueryPlanner._is_historical_analytics_query(query):
@@ -476,7 +496,6 @@ class QueryPlanner:
             requires_realtime_data = False
         if strategy in {"refuse_realtime", "refuse_source_conflict"} and intent == "CHAT":
             intent = QueryPlanner._default_intent(query)
-
         question_type = str(payload.get("question_type") or "description").strip()
         if question_type not in allowed_question_types:
             question_type = "description"
@@ -573,10 +592,30 @@ class QueryPlanner:
                 "推断",
                 "手机号",
                 "真实姓名",
+                "家庭住址",
+                "住址",
+                "家住",
                 "夜场",
+                "烟花",
                 "实时",
             )
         )
+
+    @staticmethod
+    def _requires_fabrication_refusal(query: str) -> bool:
+        if not query:
+            return False
+        asks_to_invent = any(term in query for term in ("编", "编造", "随便写", "没写也行", "没有资料也行"))
+        fact_target = any(term in query for term in ("时间", "开放", "夜场", "烟花", "票价", "门票", "排队", "车位"))
+        return asks_to_invent and fact_target
+
+    @staticmethod
+    def _requires_external_event_refusal(query: str) -> bool:
+        if not query:
+            return False
+        event_signal = any(term in query for term in ("烟花", "烟花秀", "夜场", "夜间活动"))
+        schedule_signal = any(term in query for term in ("几点", "时间", "开始", "开放", "安排"))
+        return event_signal and schedule_signal
 
     @staticmethod
     def _is_simple_social_chat(query: str) -> bool:
@@ -601,6 +640,8 @@ class QueryPlanner:
 
     @staticmethod
     def _has_source_conflict(query: str) -> bool:
+        if QueryPlanner._is_behavior_cost_stat_query(query):
+            return False
         has_docx = any(term.lower() in query for term in DOCX_TERMS)
         has_behavior = any(term.lower() in query for term in BEHAVIOR_TERMS)
         has_fact = any(term in query for term in FACT_TERMS)
@@ -631,9 +672,20 @@ class QueryPlanner:
             return True
         if has_behavior and has_fact and not has_behavior_metric:
             return True
-        if "当作" in query and any(term in query for term in ("门票", "票价", "开放时间", "文化内涵")):
+        if any(term in query for term in ("当作", "当成", "说成", "当")) and any(
+            term in query for term in ("门票", "票价", "开放时间", "文化内涵")
+        ):
             return True
         return False
+
+    @staticmethod
+    def _is_behavior_cost_stat_query(query: str) -> bool:
+        if not query:
+            return False
+        has_cost_field = any(term in query for term in ("门票", "票", "餐饮", "吃饭", "购物", "交通", "娱乐", "花费", "消费", "多少钱"))
+        has_stat = any(term in query for term in ("平均", "人均", "均值", "一般", "多少"))
+        has_official_boundary = any(term in query for term in ("官方", "当作", "等于", "是不是官方"))
+        return has_cost_field and has_stat and not has_official_boundary
 
     @staticmethod
     def _default_intent(query: str) -> QueryIntent:

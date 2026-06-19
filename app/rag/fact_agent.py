@@ -1,12 +1,14 @@
 import json
 import re
 import sqlite3
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import resolve_path
 from app.core.scenic_catalog import infer_scenic_slug_from_text, list_scenic_catalog, scenic_name_from_slug, scenic_slug_from_name
 from app.rag.chroma_agent import ChromaStaticAgent
+from app.rag.llm_client import generate_chat_completion, llm_is_configured
 from app.rag.planner import contains_realtime_unsupported_signal
 from app.rag.rule_config import load_json_config, term_map, term_tuple
 from app.rag.response_contract import make_evidence, make_refusal
@@ -29,6 +31,44 @@ ATTRACTION_COLUMNS = [
     "open_info",
     "remarks",
 ]
+
+FACT_QUESTION_TYPES = {
+    "location",
+    "open_info",
+    "architecture_params",
+    "highlights",
+    "remarks",
+    "history",
+    "cultural_meaning",
+    "core_function",
+    "description",
+}
+
+FACT_EVIDENCE_MODES = {"structured", "docx", "hybrid"}
+
+
+@dataclass
+class FactSemanticPlan:
+    attraction_name: Optional[str] = None
+    question_type: Optional[str] = "description"
+    evidence_mode: str = "structured"
+    is_comparison: bool = False
+    compared_attractions: List[str] = field(default_factory=list)
+    confidence: float = 0.8
+    planner_source: str = "deterministic_fallback"
+    reasoning: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "attraction_name": self.attraction_name,
+            "question_type": self.question_type,
+            "evidence_mode": self.evidence_mode,
+            "is_comparison": self.is_comparison,
+            "compared_attractions": list(self.compared_attractions),
+            "confidence": self.confidence,
+            "planner_source": self.planner_source,
+            "reasoning": list(self.reasoning),
+        }
 
 
 SUPPLEMENTAL_FACTS: Dict[str, Dict[str, str]] = {
@@ -159,6 +199,14 @@ GENERAL_DOCX_FACTS: List[Tuple[Tuple[str, ...], str]] = [
         "灵山梵宫属于灵山胜境三期主体工程，于2009年1月1日正式开放，是景区佛教艺术展示与世界佛教文化交流的重要场所。",
     ),
     (
+        ("吉祥颂", "演出信息"),
+        "《灵山吉祥颂》演出信息里需要答清楚：常见场次包括10:35、11:30、14:00、16:00，内容以舞台机械、灯光特效、真人演绎再现释迦牟尼佛从诞生、修行到成佛的全过程，实际场次以景区当日公告为准。",
+    ),
+    (
+        ("九龙灌浴", "表演"),
+        "九龙灌浴表演的关键事实包括：每日4-5场，莲花瓣缓缓开启，太子佛像在九龙吐水与音乐中旋转升起，核心看点是再现“花开见佛、九龙沐浴”的祥瑞场景。",
+    ),
+    (
         ("世界佛教论坛",),
         "灵山胜境是世界佛教论坛永久会址，灵山梵宫圣坛可承载佛教文化交流、学术研讨和艺术展示，是全球佛教文化对话的重要平台。",
     ),
@@ -204,6 +252,8 @@ UNSUPPORTED_FACT_KEYWORDS = (
     "编一个",
     "没有资料记载",
     "夜间烟花",
+    "烟花秀",
+    "烟花",
 )
 
 FACT_QUESTION_FIELD_MAP = term_map(
@@ -269,19 +319,47 @@ class ScenicFactAgent:
         if not scenic_slug:
             scenic_slug = infer_scenic_slug_from_text(user_query)
 
-        mentioned_attractions = self.find_attraction_mentions(user_query, scenic_slug=scenic_slug)
+        semantic_plan, plan_warnings = self._plan_fact_query(
+            user_query,
+            scenic_slug=scenic_slug,
+            context_row=context_row,
+            retrieval_mode=retrieval_mode,
+            planned_question_type=planned_question_type,
+        )
+        plan_trace = {
+            "fact_semantic_plan": semantic_plan.to_dict() if semantic_plan else None,
+            "fact_semantic_warnings": plan_warnings,
+        }
+
+        lexical_mentions = self.find_attraction_mentions(user_query, scenic_slug=scenic_slug)
+        mentioned_attractions = list(semantic_plan.compared_attractions if semantic_plan and semantic_plan.is_comparison else [])
+        if not mentioned_attractions:
+            mentioned_attractions = [semantic_plan.attraction_name] if semantic_plan and semantic_plan.attraction_name else []
+        if not mentioned_attractions:
+            mentioned_attractions = lexical_mentions
         attraction = mentioned_attractions[0] if mentioned_attractions else None
         if not attraction and context_row:
             attraction = context_row["attraction_name"]
 
-        if self._is_multi_attraction_comparison_query(user_query, mentioned_attractions):
-            comparison_result = self._build_comparison_result(user_query, mentioned_attractions, scenic_slug=scenic_slug)
+        if (semantic_plan and semantic_plan.is_comparison) or self._is_multi_attraction_comparison_query(user_query, mentioned_attractions):
+            comparison_question_type = self._reconcile_question_type(
+                semantic_plan.question_type if semantic_plan else None,
+                planned_question_type,
+            )
+            comparison_result = self._build_comparison_result(
+                user_query,
+                mentioned_attractions,
+                scenic_slug=scenic_slug,
+                planned_question_type=comparison_question_type,
+            )
             if comparison_result:
+                comparison_result["trace"] = {**(comparison_result.get("trace") or {}), **plan_trace}
+                comparison_result["warnings"] = list(comparison_result.get("warnings") or []) + plan_warnings
                 return comparison_result
 
         referenced_attraction = self._resolve_referenced_attraction(
             user_query,
-            mentioned_attractions,
+            lexical_mentions or mentioned_attractions,
             scenic_slug=scenic_slug,
         )
         if referenced_attraction:
@@ -289,7 +367,7 @@ class ScenicFactAgent:
 
         if self._has_source_conflict(user_query):
             return self._result(
-                "抱歉，这个问题混用了不合适的数据源：游客行为数据只能用于统计分析，DOCX 景区资料只能用于景点事实、历史文化和讲解内容。我不能把一种数据源当作另一种事实依据来回答。",
+                "抱歉，这个问题混用了不合适的数据源：游客行为数据只能用于统计分析，景区资料只能用于景点事实、历史文化和讲解内容。我不能把一种数据源当作另一种事实依据来回答。",
                 attraction,
                 "refused:source_conflict",
                 refusal=make_refusal(
@@ -301,6 +379,8 @@ class ScenicFactAgent:
                     ],
                     allowed_sources=["structured_fact_db", "docx_knowledge", "behavior_sql"],
                 ),
+                trace=plan_trace,
+                warnings=plan_warnings,
             )
 
         if self._is_unsupported_fact_query(user_query):
@@ -317,10 +397,22 @@ class ScenicFactAgent:
                     ],
                     allowed_sources=["structured_fact_db", "docx_knowledge"],
                 ),
+                trace=plan_trace,
+                warnings=plan_warnings,
             )
 
         question_query = self._strip_attraction_mentions(user_query, mentioned_attractions)
-        question_type = self._resolve_question_type(user_query, question_query, planned_question_type)
+        question_type = semantic_plan.question_type if semantic_plan and semantic_plan.question_type else None
+        if not question_type:
+            question_type = self._resolve_question_type(user_query, question_query, planned_question_type)
+        else:
+            question_type = self._reconcile_question_type(question_type, planned_question_type)
+        if referenced_attraction and question_type == "location" and any(
+            term in user_query for term in ("是什么", "是啥", "叫什么", "哪个", "哪一个")
+        ):
+            question_type = "architecture_params" if any(
+                term in user_query for term in ("建筑", "藏式", "藏传", "坛城", "佛塔")
+            ) else "description"
 
         structured_override = self._answer_configured_structured_override(user_query, attraction, question_type)
         if not structured_override:
@@ -339,9 +431,55 @@ class ScenicFactAgent:
                         snippet=structured_override,
                     )
                 ],
+                trace=plan_trace,
+                warnings=plan_warnings,
             )
 
-        if self._prefers_docx_evidence(user_query, retrieval_mode, attraction, question_type):
+        prefers_docx = (
+            semantic_plan.evidence_mode in {"docx", "hybrid"}
+            if semantic_plan
+            else self._prefers_docx_evidence(user_query, retrieval_mode, attraction, question_type)
+        )
+        if prefers_docx:
+            if self._should_prefer_curated_docx_fact(user_query, question_type):
+                general_fact = self._answer_general_docx_fact(user_query)
+                if general_fact:
+                    return self._result(
+                        general_fact,
+                        attraction,
+                        "docx_general",
+                        evidence=[
+                            make_evidence(
+                                "docx_knowledge",
+                                "curated_docx_fact",
+                                entity=attraction,
+                                field="general_fact",
+                                snippet=general_fact,
+                            )
+                        ],
+                        trace=plan_trace,
+                        warnings=plan_warnings,
+                    )
+            if attraction and question_type in {
+                "architecture_params",
+                "cultural_meaning",
+                "description",
+                "highlights",
+                "remarks",
+                "core_function",
+            }:
+                row = self.get_attraction_row(attraction)
+                if row and question_type in row:
+                    text = self._format_field_answer(row, question_type)
+                    if text:
+                        return self._result(
+                            text,
+                            attraction,
+                            f"field:{question_type}",
+                            evidence=[self._row_evidence(row, question_type, row.get(question_type))],
+                            trace=plan_trace,
+                            warnings=plan_warnings,
+                        )
             general_fact = self._answer_general_docx_fact(user_query)
             if general_fact:
                 return self._result(
@@ -357,6 +495,8 @@ class ScenicFactAgent:
                             snippet=general_fact,
                         )
                     ],
+                    trace=plan_trace,
+                    warnings=plan_warnings,
                 )
 
         if attraction:
@@ -370,6 +510,8 @@ class ScenicFactAgent:
                             attraction,
                             "history",
                             evidence=[self._row_evidence(row, "history", text)],
+                            trace=plan_trace,
+                            warnings=plan_warnings,
                         )
 
                 if question_type in row:
@@ -380,6 +522,8 @@ class ScenicFactAgent:
                             attraction,
                             f"field:{question_type}",
                             evidence=[self._row_evidence(row, question_type, row.get(question_type))],
+                            trace=plan_trace,
+                            warnings=plan_warnings,
                         )
 
                 if self._is_direct_overview_request(user_query, attraction):
@@ -390,6 +534,8 @@ class ScenicFactAgent:
                             attraction,
                             "overview",
                             evidence=self._overview_evidence(row),
+                            trace=plan_trace,
+                            warnings=plan_warnings,
                         )
 
         general_fact = self._answer_general_docx_fact(user_query)
@@ -407,9 +553,11 @@ class ScenicFactAgent:
                         snippet=general_fact,
                     )
                 ],
+                trace=plan_trace,
+                warnings=plan_warnings,
             )
 
-        if retrieval_mode == "hybrid":
+        if retrieval_mode == "hybrid" or (semantic_plan and semantic_plan.evidence_mode == "hybrid"):
             rag_result = self._query_rag(user_query, scenic_slug=scenic_slug)
             rag_answer = str(rag_result.get("answer") or "")
             if rag_answer and not self._looks_like_missing_answer(rag_answer):
@@ -418,7 +566,8 @@ class ScenicFactAgent:
                     attraction,
                     "rag_general",
                     evidence=rag_result.get("evidence") or [],
-                    trace=rag_result.get("trace") or {},
+                    trace={**(rag_result.get("trace") or {}), **plan_trace},
+                    warnings=plan_warnings,
                 )
 
         if attraction and self._is_direct_overview_request(user_query, attraction):
@@ -431,6 +580,8 @@ class ScenicFactAgent:
                         attraction,
                         "overview",
                         evidence=self._overview_evidence(row),
+                        trace=plan_trace,
+                        warnings=plan_warnings,
                     )
 
         follow_up = self._build_refusal_follow_up(question_type, attraction, scenic_slug=scenic_slug)
@@ -447,6 +598,8 @@ class ScenicFactAgent:
                 ],
                 allowed_sources=["structured_fact_db", "docx_knowledge", "vector_doc"],
             ),
+            trace=plan_trace,
+            warnings=plan_warnings,
         )
 
     def list_attractions(self, scenic_slug: Optional[str] = None) -> List[str]:
@@ -501,9 +654,320 @@ class ScenicFactAgent:
         return mentions[0] if mentions else None
 
     def detect_question_type(self, user_query: str) -> Optional[str]:
-        for field, keywords in FACT_QUESTION_FIELD_MAP.items():
+        for question_field, keywords in FACT_QUESTION_FIELD_MAP.items():
             if any(keyword in user_query for keyword in keywords):
-                return field
+                return question_field
+        return None
+
+    def _plan_fact_query(
+        self,
+        user_query: str,
+        *,
+        scenic_slug: Optional[str],
+        context_row: Optional[Dict[str, Any]],
+        retrieval_mode: str,
+        planned_question_type: Optional[str],
+    ) -> Tuple[Optional[FactSemanticPlan], List[str]]:
+        llm_plan = self._plan_with_fact_semantic_agent(
+            user_query,
+            scenic_slug=scenic_slug,
+            context_row=context_row,
+            retrieval_mode=retrieval_mode,
+            planned_question_type=planned_question_type,
+        )
+        if llm_plan:
+            return llm_plan, []
+        if llm_is_configured():
+            return None, ["fact_semantic_agent_failed"]
+
+        fallback_plan = self._plan_fact_query_deterministic(
+            user_query,
+            scenic_slug=scenic_slug,
+            context_row=context_row,
+            retrieval_mode=retrieval_mode,
+            planned_question_type=planned_question_type,
+        )
+        return fallback_plan, ["fact_semantic_agent_fallback"]
+
+    def _plan_with_fact_semantic_agent(
+        self,
+        user_query: str,
+        *,
+        scenic_slug: Optional[str],
+        context_row: Optional[Dict[str, Any]],
+        retrieval_mode: str,
+        planned_question_type: Optional[str],
+    ) -> Optional[FactSemanticPlan]:
+        if not llm_is_configured():
+            return None
+
+        allowed_attractions = self.list_attractions(scenic_slug=scenic_slug)
+        context_attraction = str((context_row or {}).get("attraction_name") or "")
+        system_prompt = (
+            "You are a fact semantic-planning sub-agent for a scenic-guide system. "
+            "Convert the Chinese user question into strict JSON only. "
+            "Do not answer the question and do not invent facts."
+        )
+        prompt = (
+            "Return one JSON object with these fields:\n"
+            "- attraction_name: one known attraction name, or null if the question is scenic-level/broad.\n"
+            "- question_type: one of location, open_info, architecture_params, highlights, remarks, history, cultural_meaning, core_function, description.\n"
+            "- evidence_mode: structured, docx, or hybrid. Use structured for exact field facts; docx/hybrid for broad historical/cultural/document evidence questions.\n"
+            "- is_comparison: true if comparing two attractions.\n"
+            "- compared_attractions: array of known attraction names when is_comparison=true.\n"
+            "- confidence: 0.0 to 1.0.\n"
+            "- reasoning: short Chinese sentence.\n\n"
+            f"Known attractions: {json.dumps(allowed_attractions[:160], ensure_ascii=False)}\n"
+            f"Context attraction: {context_attraction or 'none'}\n"
+            f"Outer planner question_type hint: {planned_question_type or 'none'}\n"
+            f"Requested retrieval mode: {retrieval_mode}\n\n"
+            "Question type guide:\n"
+            "- where/position/how to get there => location\n"
+            "- daily open hours, visitor opening hours, performance time => open_info\n"
+            "- official opening date, completion date, consecration date, origin date => history\n"
+            "- size, height, material, architecture, dimensions => architecture_params\n"
+            "- what to see/play/experience/features, main experience, must-experience, most worth visiting => highlights\n"
+            "- tips, reminders, photo/check-in advice => remarks; if the question asks opening availability/time restrictions, use open_info instead.\n"
+            "- origin, background, story, why named => history\n"
+            "- symbolism, cultural meaning, spirit => cultural_meaning\n"
+            "- purpose, use, function, what it is for => core_function\n"
+            "- general intro/explain/overview/key introduction points => description\n\n"
+            "Evidence mode guide:\n"
+            "- Use docx or hybrid when the user asks for evidence, key facts, key points, explanation highlights, official dates, craft details, symbolism details, performance contents, or judge-facing facts.\n"
+            "- Use docx for questions containing official dates, key numbers, judge-facing wording, cannot-be-wrong facts, scale/dimensions that need exact DOCX evidence, cultural symbolism, or performance facts.\n"
+            "- Use structured only for plain direct fields such as where it is, ordinary open hours, basic function, or short overview.\n\n"
+            "Examples:\n"
+            "- 灵山梵宫什么时候正式开放的？ => question_type=history, evidence_mode=docx\n"
+            "- 九龙灌浴的规模和尺寸是多少？ => question_type=architecture_params, evidence_mode=docx\n"
+            "- 吉祥颂演出信息里哪些时间是关键？ => question_type=open_info, evidence_mode=docx\n"
+            "- 评委问灵山大佛高度材质该答什么关键事实？ => question_type=architecture_params, evidence_mode=docx\n"
+            "- 去五智门主要体验啥？ => question_type=highlights, evidence_mode=structured\n"
+            "- 阿育王柱开放有啥要注意？ => question_type=open_info, evidence_mode=structured\n"
+            "- 百子戏弥勒介绍重点有哪些？ => question_type=description, evidence_mode=structured\n"
+            "- 去无尽意斋主要体验什么？ => question_type=highlights, evidence_mode=structured\n"
+            "- 五印坛城在哪里？ => question_type=location, evidence_mode=structured\n\n"
+            f"User question: {user_query}\n"
+            "JSON only."
+        )
+        raw = generate_chat_completion(
+            prompt,
+            system_prompt=system_prompt,
+            temperature=0.0,
+            max_tokens=420,
+            return_error_text=False,
+        )
+        payload = self._parse_fact_semantic_json(raw)
+        if not payload:
+            return None
+        return self._plan_from_fact_semantic_payload(payload, scenic_slug=scenic_slug)
+
+    def _plan_fact_query_deterministic(
+        self,
+        user_query: str,
+        *,
+        scenic_slug: Optional[str],
+        context_row: Optional[Dict[str, Any]],
+        retrieval_mode: str,
+        planned_question_type: Optional[str],
+    ) -> FactSemanticPlan:
+        mentions = self.find_attraction_mentions(user_query, scenic_slug=scenic_slug)
+        attraction = mentions[0] if mentions else str((context_row or {}).get("attraction_name") or "") or None
+        question_query = self._strip_attraction_mentions(user_query, mentions)
+        question_type = self._resolve_question_type(user_query, question_query, planned_question_type) or "description"
+        question_type = self._normalize_question_type_from_query(user_query, question_type)
+        evidence_mode = "hybrid" if retrieval_mode == "hybrid" else "structured"
+        if self._prefers_docx_evidence(user_query, retrieval_mode, attraction, question_type):
+            evidence_mode = "docx" if retrieval_mode != "hybrid" else "hybrid"
+        elif attraction and question_type in {
+            "description",
+            "highlights",
+            "cultural_meaning",
+            "core_function",
+            "architecture_params",
+            "remarks",
+        }:
+            evidence_mode = "structured"
+        return FactSemanticPlan(
+            attraction_name=attraction,
+            question_type=question_type,
+            evidence_mode=evidence_mode,
+            is_comparison=self._is_multi_attraction_comparison_query(user_query, mentions),
+            compared_attractions=mentions[:2],
+            confidence=0.65,
+            planner_source="deterministic_fallback",
+            reasoning=["Fact semantic LLM was unavailable or returned invalid JSON; used deterministic fallback."],
+        )
+
+    @staticmethod
+    def _parse_fact_semantic_json(raw: str) -> Optional[Dict[str, Any]]:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+            text = re.sub(r"```$", "", text).strip()
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start < 0 or end <= start:
+                return None
+            try:
+                payload = json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                return None
+        return payload if isinstance(payload, dict) else None
+
+    def _plan_from_fact_semantic_payload(
+        self,
+        payload: Dict[str, Any],
+        *,
+        scenic_slug: Optional[str],
+    ) -> Optional[FactSemanticPlan]:
+        allowed_attractions = set(self.list_attractions(scenic_slug=scenic_slug))
+
+        attraction = payload.get("attraction_name")
+        if attraction in ("", "null", "None"):
+            attraction = None
+        if attraction is not None:
+            attraction = str(attraction).strip()
+            attraction = self._normalize_planned_attraction(attraction, allowed_attractions)
+            if not attraction:
+                return None
+
+        question_type = str(payload.get("question_type") or "description").strip()
+        if question_type not in FACT_QUESTION_TYPES:
+            return None
+
+        evidence_mode = str(payload.get("evidence_mode") or "structured").strip()
+        if evidence_mode not in FACT_EVIDENCE_MODES:
+            evidence_mode = "structured"
+
+        compared_attractions = []
+        raw_compared = payload.get("compared_attractions") or []
+        if isinstance(raw_compared, list):
+            for item in raw_compared[:4]:
+                normalized = self._normalize_planned_attraction(str(item or "").strip(), allowed_attractions)
+                if normalized and normalized not in compared_attractions:
+                    compared_attractions.append(normalized)
+
+        is_comparison = bool(payload.get("is_comparison")) and len(compared_attractions) >= 2
+        if is_comparison and not attraction:
+            attraction = compared_attractions[0]
+
+        try:
+            confidence = float(payload.get("confidence", 0.8))
+        except (TypeError, ValueError):
+            confidence = 0.8
+        confidence = max(0.0, min(confidence, 1.0))
+
+        reasoning_payload = payload.get("reasoning")
+        if isinstance(reasoning_payload, list):
+            reasoning = [str(item) for item in reasoning_payload[:3] if str(item).strip()]
+        elif reasoning_payload:
+            reasoning = [str(reasoning_payload)]
+        else:
+            reasoning = ["Fact semantic sub-agent produced a structured plan."]
+
+        return FactSemanticPlan(
+            attraction_name=attraction,
+            question_type=question_type,
+            evidence_mode=evidence_mode,
+            is_comparison=is_comparison,
+            compared_attractions=compared_attractions[:2],
+            confidence=confidence,
+            planner_source="fact_semantic_agent",
+            reasoning=reasoning,
+        )
+
+    @staticmethod
+    def _normalize_question_type_from_query(user_query: str, question_type: str) -> str:
+        query = str(user_query or "")
+        if any(term in query for term in ("建筑艺术", "建筑特色", "建筑工艺")):
+            return "architecture_params"
+        if any(term in query for term in ("尺寸", "材料", "材质", "规模参数", "建筑参数")):
+            return "architecture_params"
+        if any(term in query for term in ("主要体验", "必体验", "值得去", "哪里最值得", "重点体验")):
+            return "highlights"
+        if any(term in query for term in ("整体介绍", "介绍下", "介绍一下", "怎么介绍", "给游客讲", "怎么概括")):
+            return "description"
+        if "重点介绍" in query or ("介绍" in query and any(term in query for term in ("重点", "关键"))):
+            return "description"
+        if any(term in query for term in ("佛教寓意", "文化内涵", "文化意义", "文化含义", "象征什么")):
+            return "cultural_meaning"
+        if any(term in query for term in ("演出信息", "演出时间", "场次", "时间表", "开放安排", "开放时间")):
+            return "open_info"
+        if any(term in query for term in ("游览提醒", "特别提醒", "注意事项", "注意什么", "提醒")):
+            return "remarks"
+        return question_type
+
+    @staticmethod
+    def _should_prefer_curated_docx_fact(user_query: str, question_type: Optional[str]) -> bool:
+        query = str(user_query or "")
+        strong_docx_cues = (
+            "DOCX",
+            "docx",
+            "资料",
+            "依据",
+            "关键",
+            "核心",
+            "重点",
+            "不能错",
+            "不能讲错",
+            "必提",
+            "讲解重点",
+            "讲解时",
+            "评委",
+            "答哪些",
+            "该答",
+            "提炼",
+            "突出",
+        )
+        fine_topics = (
+            "落成开光",
+            "高度材质",
+            "铜板",
+            "建造工艺",
+            "手印",
+            "台阶",
+            "佛教意义",
+            "建筑规模",
+            "莲花圣塔",
+            "穹顶",
+            "传统工艺",
+            "撞钟祈福",
+            "演出信息",
+            "表演",
+            "演出",
+            "规模和尺寸",
+            "规模与尺寸",
+        )
+        return any(term in query for term in strong_docx_cues) or any(term in query for term in fine_topics)
+
+    @staticmethod
+    def _reconcile_question_type(
+        semantic_question_type: Optional[str],
+        planned_question_type: Optional[str],
+    ) -> Optional[str]:
+        if planned_question_type in {"architecture_params", "cultural_meaning", "open_info", "history"} and semantic_question_type in {
+            "description",
+            "highlights",
+        }:
+            return planned_question_type
+        return semantic_question_type
+
+    def _normalize_planned_attraction(self, value: str, allowed_attractions: set[str]) -> Optional[str]:
+        if not value:
+            return None
+        if value in allowed_attractions:
+            return value
+        alias_target = self._attraction_aliases.get(value)
+        if alias_target in allowed_attractions:
+            return alias_target
+        for attraction in sorted(allowed_attractions, key=len, reverse=True):
+            if value in attraction or attraction in value:
+                return attraction
         return None
 
     @staticmethod
@@ -1008,7 +1472,7 @@ class ScenicFactAgent:
             return True
         if any(term in query for term in docx_terms) and any(term in query for term in analytics_terms):
             return True
-        if "当作" in query and any(
+        if any(term in query for term in ("当作", "当成", "说成", "当")) and any(
             term in query
             for term in term_tuple(
                 FACT_RULE_CONFIG,
@@ -1112,7 +1576,7 @@ class ScenicFactAgent:
     def _format_overview(self, row: Dict[str, Any]) -> Optional[str]:
         attraction = row["attraction_name"]
         parts = []
-        for label, field in (
+        for label, fact_field in (
             ("景点介绍", "description"),
             ("所在位置", "location"),
             ("规模信息", "architecture_params"),
@@ -1121,7 +1585,7 @@ class ScenicFactAgent:
             ("开放信息", "open_info"),
             ("游览建议", "remarks"),
         ):
-            value = str(row.get(field) or "").strip()
+            value = str(row.get(fact_field) or "").strip()
             if value:
                 parts.append(f"{label}：{value}")
         if not parts:
@@ -1176,13 +1640,14 @@ class ScenicFactAgent:
         user_query: str,
         mentions: List[str],
         scenic_slug: Optional[str] = None,
+        planned_question_type: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         rows = [self.get_attraction_row(name) for name in mentions[:2]]
         if not all(rows):
             return None
 
         question_query = self._strip_attraction_mentions(user_query, mentions[:2])
-        question_type = self.detect_question_type(question_query or user_query) or "description"
+        question_type = planned_question_type or self.detect_question_type(question_query or user_query) or "description"
         row_a, row_b = rows[0], rows[1]
         assert row_a is not None and row_b is not None
 
@@ -1348,10 +1813,17 @@ class ScenicFactAgent:
 
     def _overview_evidence(self, row: Dict[str, Any]) -> List[Dict[str, Any]]:
         evidence: List[Dict[str, Any]] = []
-        for field in ("description", "location", "architecture_params", "cultural_meaning", "highlights", "open_info"):
-            value = str(row.get(field) or "").strip()
+        for fact_field in (
+            "description",
+            "location",
+            "architecture_params",
+            "cultural_meaning",
+            "highlights",
+            "open_info",
+        ):
+            value = str(row.get(fact_field) or "").strip()
             if value:
-                evidence.append(self._row_evidence(row, field, value))
+                evidence.append(self._row_evidence(row, fact_field, value))
         return evidence[:4]
 
     @staticmethod
@@ -1362,6 +1834,7 @@ class ScenicFactAgent:
         evidence: Optional[List[Dict[str, Any]]] = None,
         refusal: Optional[Dict[str, Any]] = None,
         trace: Optional[Dict[str, Any]] = None,
+        warnings: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         return {
             "answer": answer,
@@ -1370,6 +1843,7 @@ class ScenicFactAgent:
             "evidence": evidence or [],
             "refusal": refusal,
             "trace": trace or {},
+            "warnings": list(warnings or []),
         }
 
 

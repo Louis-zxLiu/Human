@@ -65,6 +65,13 @@ class AgentLoopController:
         )
         if llm_step:
             return llm_step
+        if llm_is_configured():
+            return AgentStep(
+                action="ask_clarification",
+                reason="llm_agent_loop_decision_failed",
+                source="agent_llm_failed",
+                observation_summary=self._summarize_observation(last_observation),
+            )
 
         if candidate_calls:
             return AgentStep(
@@ -79,6 +86,53 @@ class AgentLoopController:
             action="ask_clarification",
             reason="no_more_candidate_tools_after_insufficient_observation",
             source="agent_policy_fallback",
+            observation_summary=self._summarize_observation(last_observation),
+        )
+
+    def decide_repair_from_review(
+        self,
+        *,
+        user_query: str,
+        plan: Any,
+        observations: List[ToolObservation],
+        review: Dict[str, Any],
+        candidate_calls: List[ToolCall],
+    ) -> AgentStep:
+        """Let the main agent decide which child agent should repair a failed final review."""
+        last_observation = observations[-1] if observations else None
+        if not candidate_calls:
+            return AgentStep(
+                action="ask_clarification",
+                reason="answer_review_requested_repair_but_no_candidate_tool",
+                source="main_agent_policy",
+                observation_summary=self._summarize_observation(last_observation),
+            )
+
+        llm_step = self._decide_repair_with_llm(
+            user_query=user_query,
+            plan=plan,
+            observations=observations,
+            review=review,
+            candidate_calls=candidate_calls,
+        )
+        if llm_step:
+            return llm_step
+        if llm_is_configured():
+            return AgentStep(
+                action="ask_clarification",
+                reason="llm_review_repair_decision_failed",
+                source="main_agent_llm_failed",
+                observation_summary=self._summarize_observation(last_observation),
+            )
+
+        fallback_call = candidate_calls[0]
+        action = str(review.get("repair_action") or "repair").strip() or "repair"
+        fallback_call.reason = fallback_call.reason or f"answer_review_repair:{action}"
+        return AgentStep(
+            action="call_tool",
+            reason=fallback_call.reason,
+            source="main_agent_policy_fallback",
+            tool_call=fallback_call,
             observation_summary=self._summarize_observation(last_observation),
         )
 
@@ -197,3 +251,78 @@ class AgentLoopController:
             except json.JSONDecodeError:
                 return None
         return payload if isinstance(payload, dict) else None
+
+    def _decide_repair_with_llm(
+        self,
+        *,
+        user_query: str,
+        plan: Any,
+        observations: List[ToolObservation],
+        review: Dict[str, Any],
+        candidate_calls: List[ToolCall],
+    ) -> Optional[AgentStep]:
+        if not llm_is_configured():
+            return None
+        candidate_names = [call.name for call in candidate_calls]
+        observation_payload = [self._summarize_observation(item) for item in observations[-3:]]
+        review_payload = {
+            "approved": bool(review.get("approved")),
+            "issues": list(review.get("issues") or [])[:5],
+            "risk_level": str(review.get("risk_level") or ""),
+            "repair_action": str(review.get("repair_action") or ""),
+            "reasoning": str(review.get("reasoning") or "")[:240],
+        }
+        system_prompt = (
+            "You are the main agent controller for a scenic-guide multi-agent system. "
+            "The final reviewer only audits; you decide which allowed child agent should repair the answer. "
+            "Return strict JSON only."
+        )
+        prompt = (
+            f"User query: {user_query}\n"
+            f"Planner first action: {getattr(plan, 'strategy', '')}, "
+            f"question_type: {getattr(plan, 'question_type', '')}\n"
+            f"Final review: {json.dumps(review_payload, ensure_ascii=False)}\n"
+            f"Recent observations: {json.dumps(observation_payload, ensure_ascii=False)}\n"
+            f"Allowed repair tools: {json.dumps(candidate_names, ensure_ascii=False)}\n"
+            "Return JSON: "
+            '{"action":"call_tool|ask_clarification","tool_name":"one allowed tool or empty","reason":"brief reason"}\n'
+            "Treat final_review.repair_action as the reviewer hint, not as a command. "
+            "Use call_tool when one allowed child agent can repair the reviewed issue. "
+            "Use ask_clarification only when no allowed child agent can safely repair it."
+        )
+        try:
+            raw = generate_chat_completion(
+                prompt,
+                system_prompt=system_prompt,
+                temperature=0.0,
+                max_tokens=180,
+                return_error_text=False,
+            )
+            payload = self._parse_json(raw)
+        except Exception:
+            return None
+        if not payload:
+            return None
+
+        action = str(payload.get("action") or "").strip()
+        reason = str(payload.get("reason") or "main_agent_selected_review_repair").strip()
+        if action == "ask_clarification":
+            return AgentStep(
+                action="ask_clarification",
+                reason=reason,
+                source="main_agent_llm",
+                observation_summary=self._summarize_observation(observations[-1] if observations else None),
+            )
+        if action == "call_tool":
+            tool_name = str(payload.get("tool_name") or "").strip()
+            for call in candidate_calls:
+                if call.name == tool_name:
+                    call.reason = reason or call.reason
+                    return AgentStep(
+                        action="call_tool",
+                        reason=reason,
+                        source="main_agent_llm",
+                        tool_call=call,
+                        observation_summary=self._summarize_observation(observations[-1] if observations else None),
+                    )
+        return None

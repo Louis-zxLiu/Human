@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from app.core.runtime import merge_runtime_status, utc_timestamp
 from app.rag.agent_loop import AgentLoopController, AgentStep
+from app.rag.answer_review_agent import AnswerReviewAgent
 from app.rag.fact_agent import ScenicFactAgent, extract_interest_label
 from app.rag.llm_client import generate_chat_completion
 from app.rag.planner import QueryPlanner
@@ -251,6 +252,7 @@ class ScenicRAGPipeline:
             recommendation_agent=self.recommendation_agent,
         )
         self.agent_loop = AgentLoopController()
+        self.answer_review_agent = AnswerReviewAgent()
 
     def process_query(
         self,
@@ -408,6 +410,24 @@ class ScenicRAGPipeline:
             context_attraction=context_attraction,
             result=result,
         )
+        result, trace, final_observation = self._review_and_repair_tool_result(
+            user_query=user_query,
+            plan=plan,
+            observations=observations,
+            agent_steps=agent_steps,
+            final_observation=final_observation,
+            result=result,
+            trace=trace,
+            user_profile=user_profile,
+            context_attraction=context_attraction,
+            scenic_slug=scenic_slug,
+            attraction_id=attraction_id,
+            forced_recommendation_profile=forced_recommendation_profile,
+            forced_recommendation_title=forced_recommendation_title,
+            conversation_context=conversation_context,
+            session_memory=session_memory,
+        )
+        agent_type = self._agent_type_for_tool(final_observation.tool_name)
         return self._finalize_response(
             started_at,
             user_query,
@@ -679,6 +699,209 @@ class ScenicRAGPipeline:
             result["warnings"] = list(result.get("warnings") or []) + ["agent_synthesized_from_tool_observations"]
         return result
 
+    def _review_and_repair_tool_result(
+        self,
+        *,
+        user_query: str,
+        plan: Any,
+        observations: list[ToolObservation],
+        agent_steps: list[AgentStep],
+        final_observation: ToolObservation,
+        result: Dict[str, Any],
+        trace: Dict[str, Any],
+        user_profile: Optional[str],
+        context_attraction: Optional[str],
+        scenic_slug: Optional[str],
+        attraction_id: Optional[str],
+        forced_recommendation_profile: Optional[str],
+        forced_recommendation_title: Optional[str],
+        conversation_context: Optional[list[Dict[str, Any]]],
+        session_memory: Optional[Dict[str, Any]],
+    ) -> tuple[Dict[str, Any], Dict[str, Any], ToolObservation]:
+        repair_history: list[Dict[str, Any]] = []
+        max_repairs = 2
+
+        for attempt in range(max_repairs + 1):
+            agent_type = self._agent_type_for_tool(final_observation.tool_name)
+            audited = self.answer_review_agent.review(
+                user_query=user_query,
+                result={
+                    **result,
+                    "warnings": list(result.get("warnings") or []),
+                    "trace": trace,
+                },
+                agent_type=agent_type,
+                plan=plan,
+            )
+            result["warnings"] = list(audited.get("warnings") or [])
+            trace = audited.get("trace") if isinstance(audited.get("trace"), dict) else trace
+
+            review = trace.get("answer_review") if isinstance(trace.get("answer_review"), dict) else {}
+            if review and review.get("checked") is False:
+                if repair_history:
+                    trace["answer_review_repair"] = repair_history
+                return result, trace, final_observation
+            if not review or review.get("approved", True) or attempt >= max_repairs:
+                if repair_history:
+                    trace["answer_review_repair"] = repair_history
+                return result, trace, final_observation
+
+            action = str(review.get("repair_action") or "none")
+            candidate_calls = self._repair_tool_candidates_from_review(
+                action,
+                final_observation=final_observation,
+                user_query=user_query,
+                plan=plan,
+                user_profile=user_profile,
+                context_attraction=context_attraction,
+                scenic_slug=scenic_slug,
+                attraction_id=attraction_id,
+                forced_recommendation_profile=forced_recommendation_profile,
+                forced_recommendation_title=forced_recommendation_title,
+            )
+            repair_step = self.agent_loop.decide_repair_from_review(
+                user_query=user_query,
+                plan=plan,
+                observations=observations,
+                review=review,
+                candidate_calls=candidate_calls,
+            )
+            agent_steps.append(repair_step)
+            if repair_step.action != "call_tool" or not repair_step.tool_call:
+                repair_history.append(
+                    {
+                        "attempt": attempt + 1,
+                        "action": action,
+                        "status": "no_repair_tool",
+                        "agent_step": repair_step.to_trace(),
+                        "reasoning": review.get("reasoning"),
+                    }
+                )
+                trace["answer_review_repair"] = repair_history
+                return result, trace, final_observation
+
+            repair_call = repair_step.tool_call
+            repair_observation = self.tool_runner.run(repair_call)
+            observations.append(repair_observation)
+            repair_history.append(
+                {
+                    "attempt": attempt + 1,
+                    "action": action,
+                    "tool_name": repair_call.name,
+                    "agent_step_source": repair_step.source,
+                    "response_kind": repair_observation.response_kind,
+                    "status": repair_observation.status,
+                    "reasoning": review.get("reasoning"),
+                }
+            )
+
+            final_observation = repair_observation
+            result = self._synthesize_tool_result(user_query, plan, [repair_observation], final_observation)
+            trace = self._build_tool_trace(
+                observations,
+                agent_steps,
+                conversation_context=conversation_context,
+                session_memory=session_memory,
+                context_attraction=context_attraction,
+                result=result,
+            )
+
+        if repair_history:
+            trace["answer_review_repair"] = repair_history
+        return result, trace, final_observation
+
+    def _repair_tool_candidates_from_review(
+        self,
+        action: str,
+        *,
+        final_observation: ToolObservation,
+        user_query: str,
+        plan: Any,
+        user_profile: Optional[str],
+        context_attraction: Optional[str],
+        scenic_slug: Optional[str],
+        attraction_id: Optional[str],
+        forced_recommendation_profile: Optional[str],
+        forced_recommendation_title: Optional[str],
+    ) -> list[ToolCall]:
+        suggested_tool = (
+            final_observation.tool_name
+            if action == "retry_same_agent"
+            else {
+                "call_structured_fact": "structured_fact",
+                "call_hybrid_rag": "hybrid_rag",
+                "call_behavior_sql": "behavior_sql",
+                "call_route_planner": "route_planner",
+            }.get(action)
+        )
+        tool_names = [
+            "structured_fact",
+            "hybrid_rag",
+            "behavior_sql",
+            "route_planner",
+        ]
+        if suggested_tool in tool_names:
+            tool_names = [suggested_tool] + [tool_name for tool_name in tool_names if tool_name != suggested_tool]
+
+        calls: list[ToolCall] = []
+        for tool_name in tool_names:
+            call = self._build_repair_tool_call(
+                tool_name,
+                action=action,
+                user_query=user_query,
+                plan=plan,
+                user_profile=user_profile,
+                context_attraction=context_attraction,
+                scenic_slug=scenic_slug,
+                attraction_id=attraction_id,
+                forced_recommendation_profile=forced_recommendation_profile,
+                forced_recommendation_title=forced_recommendation_title,
+            )
+            if call:
+                calls.append(call)
+        return calls
+
+    def _build_repair_tool_call(
+        self,
+        tool_name: str,
+        *,
+        action: str,
+        user_query: str,
+        plan: Any,
+        user_profile: Optional[str],
+        context_attraction: Optional[str],
+        scenic_slug: Optional[str],
+        attraction_id: Optional[str],
+        forced_recommendation_profile: Optional[str],
+        forced_recommendation_title: Optional[str],
+    ) -> Optional[ToolCall]:
+        if tool_name == "behavior_sql":
+            return ToolCall("behavior_sql", {"user_query": user_query}, reason=f"answer_review_repair:{action}")
+        if tool_name == "route_planner":
+            return ToolCall(
+                "route_planner",
+                {
+                    "user_query": user_query,
+                    "start_attraction": context_attraction,
+                    "user_profile": user_profile,
+                    "scenic_slug": scenic_slug,
+                    "forced_profile_key": forced_recommendation_profile or getattr(plan, "route_profile", None),
+                    "forced_title": forced_recommendation_title,
+                },
+                reason=f"answer_review_repair:{action}",
+            )
+        if tool_name in {"structured_fact", "hybrid_rag"}:
+            return self._fact_tool_call(
+                tool_name,
+                user_query=user_query,
+                plan=plan,
+                context_attraction=context_attraction,
+                scenic_slug=scenic_slug,
+                attraction_id=attraction_id,
+                reason=f"answer_review_repair:{action}",
+            )
+        return None
+
     @staticmethod
     def _agent_type_for_tool(tool_name: str) -> str:
         return {
@@ -804,6 +1027,24 @@ class ScenicRAGPipeline:
         warnings: Optional[Any] = None,
         trace: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        trace = trace or {}
+        if not isinstance(trace.get("answer_review"), dict):
+            reviewed = self.answer_review_agent.review(
+                user_query=query,
+                result={
+                    "answer": answer,
+                    "response_kind": response_kind,
+                    "recommendation": recommendation,
+                    "evidence": evidence or [],
+                    "refusal": refusal,
+                    "warnings": list(warnings or []),
+                    "trace": trace,
+                },
+                agent_type=agent_type,
+                plan=plan,
+            )
+            warnings = list(reviewed.get("warnings") or [])
+            trace = reviewed.get("trace") if isinstance(reviewed.get("trace"), dict) else trace
         latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
         payload = {
             "query": query,

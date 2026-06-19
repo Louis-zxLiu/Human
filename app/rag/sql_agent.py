@@ -1,37 +1,18 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.config import resolve_path
-from app.rag.llm_client import generate_chat_completion
+from app.rag.llm_client import generate_chat_completion, llm_is_configured
 from app.rag.rule_config import load_json_config, term_tuple
 from app.rag.response_contract import compact_rows, make_evidence, make_refusal
 
-
-ANALYTICS_SCHEMA = """
-CREATE TABLE tourist_behavior (
-  tourist_id TEXT,
-  user_nickname TEXT,
-  age INTEGER,
-  gender TEXT,
-  attraction_name TEXT,
-  attraction_type TEXT,
-  visit_date TEXT,
-  stay_duration REAL,
-  ticket_cost REAL,
-  food_cost REAL,
-  shopping_cost REAL,
-  transport_cost REAL,
-  entertainment_cost REAL,
-  total_cost REAL,
-  group_size INTEGER,
-  satisfaction INTEGER
-);
-"""
 
 SOURCE_PREFIX = "基于游客行为数据分析，"
 
@@ -56,6 +37,9 @@ class SemanticQueryPlan:
     query_mode: str = "scalar"
     order: str = "desc"
     limit: Optional[int] = None
+    planner_source: str = "deterministic"
+    confidence: float = 0.8
+    reasoning: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         filters: List[Dict[str, Any]] = []
@@ -82,6 +66,9 @@ class SemanticQueryPlan:
             "query_mode": self.query_mode,
             "order": self.order,
             "limit": self.limit,
+            "planner_source": self.planner_source,
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
         }
 
 
@@ -102,7 +89,19 @@ class TouristAnalyticsAgent:
         "avg_stay": {"expr": "round(avg(cast(stay_duration as real)), 2)", "alias": "avg_stay", "label": "平均停留时长"},
         "avg_satisfaction": {"expr": "round(avg(cast(satisfaction as real)), 2)", "alias": "avg_satisfaction", "label": "平均满意度"},
         "avg_group_size": {"expr": "round(avg(cast(group_size as real)), 2)", "alias": "avg_group_size", "label": "平均同行人数"},
+        "avg_age": {"expr": "round(avg(cast(age as real)), 2)", "alias": "avg_age", "label": "平均年龄"},
         "min_age": {"expr": "min(cast(age as real))", "alias": "min_age", "label": "最小年龄"},
+        "max_age": {"expr": "max(cast(age as real))", "alias": "max_age", "label": "最大年龄"},
+        "distinct_attractions": {
+            "expr": "count(distinct attraction_name)",
+            "alias": "distinct_attractions",
+            "label": "景点数量",
+        },
+        "distinct_attraction_types": {
+            "expr": "count(distinct attraction_type)",
+            "alias": "distinct_attraction_types",
+            "label": "景点类型数量",
+        },
         "low_satisfaction_count": {"expr": "count(*)", "alias": "low_satisfaction_count", "label": "低满意度记录数"},
         "high_satisfaction_count": {"expr": "count(*)", "alias": "high_satisfaction_count", "label": "高满意度记录数"},
     }
@@ -126,7 +125,7 @@ class TouristAnalyticsAgent:
         if self._has_source_conflict(user_query):
             answer = (
                 "抱歉，这个问题要求混用错误的数据源。游客行为数据只能用于统计分析，"
-                "景区 DOCX 资料只能用于景点事实、历史文化和讲解内容，我不能把一种数据源当作另一种事实依据。"
+                "景区资料只能用于景点事实、历史文化和讲解内容，我不能把一种数据源当作另一种事实依据。"
             )
             return {
                 "answer": answer,
@@ -176,7 +175,7 @@ class TouristAnalyticsAgent:
                 "trace": {"fallback_used": False, "special_case": True},
             }
 
-        plan = self._plan_semantic_query(user_query)
+        plan, plan_warnings = self._plan_analytics_query(user_query)
         if plan:
             sql, params = self._build_sql(plan)
             rows = self.execute_sql(sql, params)
@@ -188,9 +187,9 @@ class TouristAnalyticsAgent:
                     "sql": sql,
                     "rows_preview": [],
                     "evidence": [],
-                    "warnings": [],
+                    "warnings": plan_warnings,
                     "refusal": None,
-                    "trace": {"fallback_used": False, "params": list(params)},
+                    "trace": {"fallback_used": bool(plan_warnings), "params": list(params)},
                 }
             if "error" in rows[0]:
                 return {
@@ -200,14 +199,14 @@ class TouristAnalyticsAgent:
                     "sql": sql,
                     "rows_preview": compact_rows(rows, limit=1),
                     "evidence": [],
-                    "warnings": [],
+                    "warnings": plan_warnings,
                     "refusal": None,
-                    "trace": {"fallback_used": False, "params": list(params)},
+                    "trace": {"fallback_used": bool(plan_warnings), "params": list(params)},
                 }
             rendered = self._render_semantic_result(plan, rows)
             if rendered:
                 sample_count = self._estimate_sample_size(plan)
-                warnings = []
+                warnings = list(plan_warnings)
                 if sample_count is not None and sample_count < 30:
                     warnings.append(f"low_sample_size:{sample_count}")
                 return {
@@ -231,66 +230,19 @@ class TouristAnalyticsAgent:
                     ],
                     "warnings": warnings,
                     "refusal": None,
-                    "trace": {"fallback_used": False, "params": list(params)},
+                    "trace": {"fallback_used": bool(plan_warnings), "params": list(params)},
                 }
 
-        sql_query = self._generate_sql(user_query)
-        if not sql_query:
-            return {
-                "answer": "抱歉，我暂时无法从游客行为数据中整理出这个问题的分析结果。",
-                "response_kind": "analytics:unresolved",
-                "semantic_plan": None,
-                "sql": None,
-                "rows_preview": [],
-                "evidence": [],
-                "warnings": ["semantic_parse_failed"],
-                "refusal": None,
-                "trace": {"fallback_used": False},
-            }
-
-        result_data = self.execute_sql(sql_query)
-        if not result_data:
-            return {
-                "answer": f"{SOURCE_PREFIX}暂时没有检索到相关记录。",
-                "response_kind": "analytics:empty",
-                "semantic_plan": None,
-                "sql": sql_query,
-                "rows_preview": [],
-                "evidence": [],
-                "warnings": ["llm_sql_fallback"],
-                "refusal": None,
-                "trace": {"fallback_used": True},
-            }
-        if "error" in result_data[0]:
-            return {
-                "answer": "抱歉，游客行为数据分析暂时失败，请稍后再试。",
-                "response_kind": "analytics:error",
-                "semantic_plan": None,
-                "sql": sql_query,
-                "rows_preview": compact_rows(result_data, limit=1),
-                "evidence": [],
-                "warnings": ["llm_sql_fallback"],
-                "refusal": None,
-                "trace": {"fallback_used": True},
-            }
-        rendered = self._render_rows_fallback(result_data)
         return {
-            "answer": rendered,
-            "response_kind": "analytics:fallback",
+            "answer": "抱歉，我暂时无法从游客行为数据中整理出这个问题的分析结果。",
+            "response_kind": "analytics:unresolved",
             "semantic_plan": None,
-            "sql": sql_query,
-            "rows_preview": compact_rows(result_data),
-            "evidence": [
-                make_evidence(
-                    "behavior_sql",
-                    "tourist_behavior",
-                    snippet=rendered,
-                    metadata={"sql": sql_query},
-                )
-            ],
-            "warnings": ["llm_sql_fallback"],
+            "sql": None,
+            "rows_preview": [],
+            "evidence": [],
+            "warnings": plan_warnings or ["semantic_parse_failed"],
             "refusal": None,
-            "trace": {"fallback_used": True},
+            "trace": {"fallback_used": bool(plan_warnings)},
         }
 
     def get_preference_hint(self, attraction_types: List[str]) -> Optional[str]:
@@ -436,6 +388,267 @@ class TouristAnalyticsAgent:
 
         return None
 
+    def _plan_analytics_query(self, user_query: str) -> Tuple[Optional[SemanticQueryPlan], List[str]]:
+        semantic_agent_plan = self._plan_with_semantic_agent(user_query)
+        if semantic_agent_plan:
+            return semantic_agent_plan, []
+        if llm_is_configured():
+            return None, ["analytics_semantic_agent_failed"]
+
+        deterministic_plan = self._plan_semantic_query(user_query)
+        if deterministic_plan:
+            deterministic_plan.planner_source = "deterministic_fallback"
+            deterministic_plan.reasoning = deterministic_plan.reasoning or [
+                "Analytics semantic agent was unavailable or returned an invalid plan; used deterministic fallback."
+            ]
+            return deterministic_plan, ["analytics_semantic_agent_fallback"]
+
+        return None, ["semantic_parse_failed"]
+
+    def _plan_with_semantic_agent(self, user_query: str) -> Optional[SemanticQueryPlan]:
+        if not llm_is_configured():
+            return None
+
+        metrics = {
+            key: {
+                "label": spec["label"],
+                "unit": self._metric_unit(key),
+            }
+            for key, spec in self.METRICS.items()
+        }
+        dimensions = {
+            key: spec["label"]
+            for key, spec in self.DIMENSIONS.items()
+        }
+        system_prompt = (
+            "You are an analytics semantic-planning sub-agent. "
+            "Convert a Chinese tourist-behavior analytics question into strict JSON only. "
+            "Do not write SQL and do not answer the question."
+        )
+        prompt = (
+            "Return one JSON object with these fields:\n"
+            "- metric_key: one allowed metric key.\n"
+            "- dimension_key: attraction_name, attraction_type, gender, month, or null.\n"
+            "- query_mode: scalar, grouped, ranking, or time_series.\n"
+            "- order: desc or asc.\n"
+            "- limit: integer or null.\n"
+            "- filters: array of objects. Allowed filters: "
+            '{"key":"gender","value":"男|女"}, '
+            '{"key":"attraction_type","value":"..."}, '
+            '{"key":"attraction_name","value":"..."}, '
+            '{"key":"date_range","start":"YYYY-MM-DD","end":"YYYY-MM-DD"}, '
+            '{"key":"age_between","lower":20,"upper":30}, '
+            '{"key":"age_gte","lower":46}, '
+            '{"key":"age_lte","upper":30}.\n'
+            "- confidence: 0.0 to 1.0.\n"
+            "- reasoning: short Chinese sentence.\n\n"
+            f"Allowed metrics: {json.dumps(metrics, ensure_ascii=False)}\n"
+            f"Allowed dimensions: {json.dumps(dimensions, ensure_ascii=False)}\n"
+            f"Known attraction types: {json.dumps(self._domain_cache.get('attraction_types', [])[:80], ensure_ascii=False)}\n"
+            f"Known attraction names: {json.dumps(self._domain_cache.get('attraction_names', [])[:120], ensure_ascii=False)}\n\n"
+            "Examples:\n"
+            '游客平均在景区花多少钱？ => {"metric_key":"avg_total_cost","dimension_key":null,"query_mode":"scalar","order":"desc","limit":null,"filters":[],"confidence":0.94,"reasoning":"询问样本游客平均总消费。"}\n'
+            '哪5种景点去的人最多？ => {"metric_key":"visits","dimension_key":"attraction_type","query_mode":"ranking","order":"desc","limit":5,"filters":[],"confidence":0.92,"reasoning":"按景点类型统计访问量排行。"}\n'
+            '女性游客平均餐饮消费是多少？ => {"metric_key":"avg_food_cost","dimension_key":null,"query_mode":"scalar","order":"desc","limit":null,"filters":[{"key":"gender","value":"女"}],"confidence":0.9,"reasoning":"筛选女性游客并计算餐饮均值。"}\n'
+            '女游客玩平均花多少？ => {"metric_key":"avg_entertainment_cost","dimension_key":null,"query_mode":"scalar","order":"desc","limit":null,"filters":[{"key":"gender","value":"女"}],"confidence":0.9,"reasoning":"筛选女性游客并计算娱乐/游玩花费均值。"}\n'
+            '2025年4月玩的花费平均多少？ => {"metric_key":"avg_entertainment_cost","dimension_key":null,"query_mode":"scalar","order":"desc","limit":null,"filters":[{"key":"date_range","start":"2025-04-01","end":"2025-05-01"}],"confidence":0.9,"reasoning":"询问2025年4月娱乐/游玩花费均值，date_range 采用左闭右开区间。"}\n\n'
+            '样本游客平均年龄是多少？ => {"metric_key":"avg_age","dimension_key":null,"query_mode":"scalar","order":"desc","limit":null,"filters":[],"confidence":0.9,"reasoning":"询问平均年龄。"}\n'
+            '游客最大年龄是多少？ => {"metric_key":"max_age","dimension_key":null,"query_mode":"scalar","order":"desc","limit":null,"filters":[],"confidence":0.9,"reasoning":"询问最大年龄。"}\n'
+            '一共涵盖了多少个景点？ => {"metric_key":"distinct_attractions","dimension_key":null,"query_mode":"scalar","order":"desc","limit":null,"filters":[],"confidence":0.9,"reasoning":"询问去重景点数量。"}\n\n'
+            f"User question: {user_query}\n"
+            "JSON only."
+        )
+        raw = generate_chat_completion(
+            prompt,
+            system_prompt=system_prompt,
+            temperature=0.0,
+            max_tokens=420,
+            return_error_text=False,
+        )
+        payload = self._parse_semantic_agent_json(raw)
+        if not payload:
+            return None
+        return self._plan_from_semantic_agent_payload(payload)
+
+    @staticmethod
+    def _parse_semantic_agent_json(raw: str) -> Optional[Dict[str, Any]]:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+            text = re.sub(r"```$", "", text).strip()
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start < 0 or end <= start:
+                return None
+            try:
+                payload = json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                return None
+        return payload if isinstance(payload, dict) else None
+
+    def _plan_from_semantic_agent_payload(
+        self,
+        payload: Dict[str, Any],
+    ) -> Optional[SemanticQueryPlan]:
+        metric_key = str(payload.get("metric_key") or "").strip()
+        if metric_key not in self.METRICS:
+            return None
+
+        dimension_key = payload.get("dimension_key")
+        if dimension_key in ("", "null", "None"):
+            dimension_key = None
+        if dimension_key is not None:
+            dimension_key = str(dimension_key).strip()
+            if dimension_key not in self.DIMENSIONS:
+                return None
+
+        query_mode = str(payload.get("query_mode") or "scalar").strip()
+        if query_mode not in {"scalar", "grouped", "ranking", "time_series"}:
+            query_mode = "ranking" if dimension_key else "scalar"
+        if not dimension_key:
+            query_mode = "scalar"
+
+        order = str(payload.get("order") or "desc").strip().lower()
+        if order not in {"asc", "desc"}:
+            order = "desc"
+
+        limit = self._coerce_limit(payload.get("limit"))
+        if not dimension_key:
+            limit = None
+        elif query_mode == "ranking" and limit is None:
+            limit = 3
+        elif query_mode == "grouped" and limit is None:
+            limit = 8
+
+        filters = self._coerce_semantic_agent_filters(payload.get("filters"))
+        if filters is None:
+            return None
+
+        try:
+            confidence = float(payload.get("confidence", 0.8))
+        except (TypeError, ValueError):
+            confidence = 0.8
+        confidence = max(0.0, min(confidence, 1.0))
+
+        reasoning_payload = payload.get("reasoning")
+        if isinstance(reasoning_payload, list):
+            reasoning = [str(item) for item in reasoning_payload[:3] if str(item).strip()]
+        elif reasoning_payload:
+            reasoning = [str(reasoning_payload)]
+        else:
+            reasoning = ["Analytics semantic sub-agent produced a structured plan."]
+
+        return SemanticQueryPlan(
+            metric_key=metric_key,
+            metric_label=self.METRICS[metric_key]["label"],
+            answer_unit=self._metric_unit(metric_key),
+            dimension_key=dimension_key,
+            dimension_label=self.DIMENSIONS[dimension_key]["label"] if dimension_key else "",
+            filters=filters,
+            query_mode=query_mode,
+            order=order,
+            limit=limit,
+            planner_source="analytics_semantic_agent",
+            confidence=confidence,
+            reasoning=reasoning,
+        )
+
+    @staticmethod
+    def _coerce_limit(value: Any) -> Optional[int]:
+        if value in (None, "", "null", "None"):
+            return None
+        try:
+            limit = int(value)
+        except (TypeError, ValueError):
+            return None
+        if limit <= 0:
+            return None
+        return min(limit, 20)
+
+    def _coerce_semantic_agent_filters(self, raw_filters: Any) -> Optional[List[Tuple[str, Any]]]:
+        if raw_filters in (None, "", "null"):
+            return []
+        if not isinstance(raw_filters, list):
+            return None
+
+        filters: List[Tuple[str, Any]] = []
+        for item in raw_filters:
+            if not isinstance(item, dict):
+                return None
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+
+            if key == "gender":
+                value = self._normalize_gender_filter(item.get("value"))
+                if not value:
+                    return None
+                filters.append(("gender", value))
+            elif key == "attraction_type":
+                value = self._match_known_value(str(item.get("value") or ""), self._domain_cache["attraction_types"])
+                if not value:
+                    return None
+                filters.append(("attraction_type", value))
+            elif key == "attraction_name":
+                value = self._match_known_value(str(item.get("value") or ""), self._domain_cache["attraction_names"])
+                if not value:
+                    return None
+                filters.append(("attraction_name", value))
+            elif key == "date_range":
+                start = str(item.get("start") or "").strip()
+                end = str(item.get("end") or "").strip()
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end):
+                    return None
+                end = self._normalize_exclusive_date_end(start, end)
+                filters.append(("date_range", (start, end)))
+            elif key == "age_between":
+                try:
+                    lower = float(item.get("lower"))
+                    upper = float(item.get("upper"))
+                except (TypeError, ValueError):
+                    return None
+                filters.append(("age_between", AgeFilter("between", lower, upper)))
+            elif key in {"age_gte", "age_gt"}:
+                try:
+                    lower = float(item.get("lower"))
+                except (TypeError, ValueError):
+                    return None
+                filters.append((key, AgeFilter(">=" if key == "age_gte" else ">", lower=lower)))
+            elif key in {"age_lte", "age_lt"}:
+                try:
+                    upper = float(item.get("upper"))
+                except (TypeError, ValueError):
+                    return None
+                filters.append((key, AgeFilter("<=" if key == "age_lte" else "<", upper=upper)))
+            else:
+                return None
+        return filters
+
+    @staticmethod
+    def _normalize_exclusive_date_end(start: str, end: str) -> str:
+        try:
+            start_date = datetime.strptime(start, "%Y-%m-%d").date()
+            end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        except ValueError:
+            return end
+        if end_date <= start_date or end_date.day == 1:
+            return end
+        return (end_date + timedelta(days=1)).isoformat()
+
+    @staticmethod
+    def _normalize_gender_filter(value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        if text in {"女", "女性", "女生", "female", "Female"}:
+            return "女"
+        if text in {"男", "男性", "男生", "male", "Male"}:
+            return "男"
+        return None
+
     def _plan_semantic_query(self, user_query: str) -> Optional[SemanticQueryPlan]:
         query = str(user_query or "")
         lowered = query.lower()
@@ -443,6 +656,8 @@ class TouristAnalyticsAgent:
 
         if any(term in query for term in ("一共有多少条", "多少条记录", "总记录")):
             metric_key = "record_count"
+        elif any(term in query for term in ("多少个景点", "涵盖了多少个景点", "景点数量")):
+            metric_key = "distinct_attractions"
         elif any(term in query for term in ("一共接待", "总共接待", "接待了多少", "多少游客", "多少人去过", "有多少人", "游客有多少人", "游客一共有多少")):
             metric_key = "visits"
         elif any(term in query for term in ("平均同行人数", "同行人数", "平均团体人数", "几个人一起来", "几个人一起玩", "几人一起")):
@@ -556,10 +771,16 @@ class TouristAnalyticsAgent:
             return "high_satisfaction_count"
         if "满意度" in query:
             return "avg_satisfaction"
+        if any(term in query for term in ("平均年龄", "年龄平均", "平均多大", "平均多大年纪", "平均年纪", "一般多大年纪", "一般多大")):
+            return "avg_age"
+        if any(term in query for term in ("最大年龄", "年龄最大", "最大年纪", "最高年龄", "最年长", "年纪最大")):
+            return "max_age"
         if any(term in query for term in ("最小", "最年轻", "最小孩子")) and any(term in query for term in ("几岁", "年龄", "孩子")):
             return "min_age"
         if any(term in query for term in ("停留", "待多长", "待多久", "逛多久", "一般逛多久")):
             return "avg_stay"
+        if any(term in query for term in ("多少种景点类型", "多少类景点", "几种景点类型", "景点类型多少", "包含了多少种景点类型")):
+            return "distinct_attraction_types"
         if any(term in query for term in ("同行", "团体人数", "几个人一起来", "几个人一起玩", "几人一起")):
             return "avg_group_size"
         if "餐饮" in query or "吃饭" in query or "food_cost" in query:
@@ -572,7 +793,7 @@ class TouristAnalyticsAgent:
             return "avg_entertainment_cost"
         if any(term in query for term in ("门票", "票价", "票费", "票价消费")):
             return "avg_ticket_cost"
-        if any(term in query for term in ("消费", "花费", "总消费")):
+        if any(term in query for term in ("消费", "花费", "花多少", "花多少钱", "多少钱", "开销", "总消费")):
             return "avg_total_cost"
         if any(term in query for term in ("访问量", "访问记录", "热门", "偏好", "喜欢", "最受欢迎", "最火", "最多")):
             return "visits"
@@ -582,7 +803,9 @@ class TouristAnalyticsAgent:
     def _metric_unit(metric_key: str) -> str:
         if metric_key in {"record_count", "visits", "low_satisfaction_count", "high_satisfaction_count"}:
             return "条"
-        if metric_key == "min_age":
+        if metric_key == "distinct_attraction_types":
+            return "种"
+        if metric_key in {"avg_age", "min_age", "max_age"}:
             return "岁"
         if metric_key == "avg_group_size":
             return "人"
@@ -774,73 +997,39 @@ class TouristAnalyticsAgent:
 
         if plan.query_mode == "scalar":
             value = rows[0].get(metric_alias)
-            return f"{SOURCE_PREFIX}{plan.metric_label}约为{value}{unit}。"
+            return f"{SOURCE_PREFIX}{plan.metric_label}约为{self._format_metric_value(value)}{unit}。"
 
         if plan.query_mode == "time_series":
-            parts = [f"{row['month']}：{row[metric_alias]}{unit}" for row in rows]
+            parts = [f"{row['month']}：{self._format_metric_value(row[metric_alias])}{unit}" for row in rows]
             return f"{SOURCE_PREFIX}{plan.metric_label}按月变化为：" + "；".join(parts) + "。"
 
         name_key = self.DIMENSIONS[plan.dimension_key]["alias"] if plan.dimension_key else "name"
         if plan.dimension_key == "gender":
-            parts = [f"{row[name_key]}：{row[metric_alias]}{unit}" for row in rows]
+            parts = [f"{row[name_key]}：{self._format_metric_value(row[metric_alias])}{unit}" for row in rows]
             return f"{SOURCE_PREFIX}{plan.metric_label}按性别分布为：" + "；".join(parts) + "。"
 
         parts = []
         for index, row in enumerate(rows[: plan.limit or len(rows)], start=1):
-            parts.append(f"{index}. {row[name_key]}（{plan.metric_label}{row[metric_alias]}{unit}）")
+            parts.append(f"{index}. {row[name_key]}（{plan.metric_label}{self._format_metric_value(row[metric_alias])}{unit}）")
         if not parts:
             return None
         if plan.query_mode == "grouped" and (plan.limit or 0) >= 8:
             return f"{SOURCE_PREFIX}" + "；".join(parts) + "。"
         return f"{SOURCE_PREFIX}" + "；".join(parts) + "。"
 
-    def _render_rows_fallback(self, rows: List[Dict[str, Any]]) -> str:
-        row = rows[0]
-        if len(row) == 1:
-            key, value = next(iter(row.items()))
-            return f"{SOURCE_PREFIX}{key}为{value}。"
-
-        display_limit = 5 if len(rows) >= 5 else len(rows)
-        parts = []
-        for index, item in enumerate(rows[:display_limit], start=1):
-            rendered = "，".join(f"{key}={value}" for key, value in item.items())
-            parts.append(f"{index}. {rendered}")
-        return f"{SOURCE_PREFIX}" + "；".join(parts) + "。"
-
-    def _generate_sql(self, user_query: str) -> Optional[str]:
-        system_prompt = (
-            "You are a SQLite analytics assistant. Use only tourist_behavior. "
-            "Never infer scenic facts such as opening hours, location or attraction history. "
-            "Return one SQLite SELECT statement only."
-        )
-        prompt = f"""
-Schema:
-{ANALYTICS_SCHEMA}
-
-User question: {user_query}
-
-Rules:
-- Use only tourist_behavior.
-- Use LIKE '%keyword%' for fuzzy matching when needed.
-- Use visit_date for date filters.
-- Use satisfaction for satisfaction-related analysis.
-- Use total_cost and related cost fields for spending analysis.
-- attraction_type and attraction_name are behavior labels, not scenic facts.
-- Output a single SELECT statement.
-"""
-        sql_query = generate_chat_completion(
-            prompt,
-            system_prompt,
-            temperature=0.1,
-            max_tokens=220,
-            return_error_text=False,
-        )
-        if not sql_query:
-            return None
-        cleaned = sql_query.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
-        return cleaned if self._is_safe_select(cleaned) else None
+    @staticmethod
+    def _format_metric_value(value: Any) -> str:
+        if isinstance(value, int):
+            return str(value)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        return f"{number:.2f}".rstrip("0").rstrip(".")
 
     def _has_source_conflict(self, query: str) -> bool:
+        if any(term in query for term in ("手机号", "真实姓名", "家庭住址", "住址", "家住", "地址")):
+            return True
         docx_terms = ("docx", "DOCX", "景区介绍文档", "介绍文档", "景区文档", "资料文档")
         behavior_terms = ("行为数据", "游客消费数据", "游客行为 Excel", "游客行为数据")
         behavior_metric_terms = (
@@ -869,7 +1058,9 @@ Rules:
             return True
         if any(term in query for term in behavior_terms) and any(term in query for term in fact_metric_terms) and not has_behavior_metric:
             return True
-        if "当作" in query and any(term in query for term in ("门票", "票价", "开放时间", "文化内涵")):
+        if any(term in query for term in ("当作", "当成", "说成", "当")) and any(
+            term in query for term in ("门票", "票价", "开放时间", "文化内涵")
+        ):
             return True
         return False
 
@@ -884,9 +1075,6 @@ Rules:
         if " attractions" in normalized:
             return False
         return True
-
-    def _contains_known_type(self, query: str) -> bool:
-        return bool(self._match_attraction_type(query))
 
     def _gender_comparison_response(self, user_query: str) -> Optional[str]:
         query = str(user_query or "")
@@ -981,8 +1169,14 @@ Rules:
 
     @staticmethod
     def _match_known_value(query: str, candidates: Sequence[str]) -> Optional[str]:
+        normalized_query = TouristAnalyticsAgent._normalize_type_text(query)
         for value in sorted(candidates, key=len, reverse=True):
             if value and value in query:
+                return value
+            normalized_value = TouristAnalyticsAgent._normalize_type_text(value)
+            if normalized_value and normalized_value in normalized_query:
+                return value
+            if normalized_query and len(normalized_query) >= 3 and normalized_query in normalized_value:
                 return value
         return None
 
