@@ -231,7 +231,7 @@ class LogService:
   "focus_point": "..."
 }}
 """
-        raw = generate_chat_completion(prompt, system_prompt, temperature=0.1)
+        raw = generate_chat_completion(prompt, system_prompt, temperature=0.1, json_mode=True)
         cleaned = raw.replace("```json", "").replace("```", "").strip()
         return json.loads(cleaned)
 

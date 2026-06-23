@@ -32,6 +32,7 @@ def generate_chat_completion(
     temperature: float = 0.3,
     max_tokens: int = 1024,
     return_error_text: bool = True,
+    json_mode: bool = False,
 ) -> str:
     """
     统一的 LLM 生成接口。
@@ -43,15 +44,19 @@ def generate_chat_completion(
         return "LLM 调用失败: 未配置可用的 LLM 客户端。" if return_error_text else ""
 
     try:
-        response = get_llm_client().chat.completions.create(
-            model=settings.LLM_MODEL_NAME,
-            messages=[
+        request_payload = {
+            "model": settings.LLM_MODEL_NAME,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if json_mode:
+            request_payload["response_format"] = {"type": "json_object"}
+
+        response = get_llm_client().chat.completions.create(**request_payload)
         message = response.choices[0].message.content
         return message.strip() if isinstance(message, str) else ""
     except Exception as exc:

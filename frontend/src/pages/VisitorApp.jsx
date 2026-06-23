@@ -200,26 +200,6 @@ function base64ToBlobUrl(base64, mimeType) {
   return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
 }
 
-function buildConversationContext(messages = []) {
-  return messages
-    .filter((message) => message?.content && message.role)
-    .slice(-6)
-    .map((message) => ({
-      role: message.role,
-      content: String(message.content).slice(0, 220),
-      meta: message.meta
-        ? {
-            intent: message.meta.intent,
-            response_kind: message.meta.response_kind,
-            matched_attraction: message.meta.matched_attraction,
-            recommendation_label: message.meta.recommendation_label,
-            scenic_slug: message.meta.scenic_slug,
-            attraction_id: message.meta.attraction_id,
-          }
-        : null,
-    }));
-}
-
 export function VisitorApp({ guideContext = {}, embedded = false, productTone = false }) {
   const username = localStorage.getItem("username") || "游客";
   const role = localStorage.getItem("user_role") || "user";
@@ -258,6 +238,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   const [videoUrl, setVideoUrl] = useState("");
   const [streamFrameUrl, setStreamFrameUrl] = useState("");
   const [streamNotice, setStreamNotice] = useState("");
+  const [avatarImageVersion, setAvatarImageVersion] = useState(() => Date.now());
   const [isRecording, setIsRecording] = useState(false);
   const [archives, setArchives] = useState([]);
   const [selectedArchiveId, setSelectedArchiveId] = useState(null);
@@ -294,6 +275,13 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       window.clearInterval(streamFrameTimerRef.current);
     }
     streamAudioUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setAvatarImageVersion(Date.now());
+    }, 5000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const selectedArchive = archives.find((item) => item.id === selectedArchiveId) || null;
@@ -486,7 +474,6 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       attractionId: activeGuideContext.attractionId,
       routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
       presetRouteKey: options.presetRouteKey || "",
-      conversationContext: buildConversationContext(messagesRef.current),
     });
     const result = await sendTextMessage(formData);
 
@@ -556,7 +543,6 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           attractionId: activeGuideContext.attractionId,
           routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
           presetRouteKey: options.presetRouteKey || "",
-          conversation_context: buildConversationContext(workingMessages),
         }));
         setStreamNotice("实时链路已连接，正在分段生成文本、语音和数字人画面。");
       };
@@ -743,7 +729,6 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
               scenicSlug: activeGuideContext.scenicSlug,
               attractionId: activeGuideContext.attractionId,
               routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
-              conversationContext: buildConversationContext(messagesRef.current),
             });
             const result = await sendAudioMessage(formData);
             setActiveQuestion(result.user_text || "语音提问");
@@ -768,7 +753,6 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             scenicSlug: activeGuideContext.scenicSlug,
             attractionId: activeGuideContext.attractionId,
             routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
-            conversationContext: buildConversationContext(messagesRef.current),
           });
           const result = await sendAudioMessage(formData);
           setActiveQuestion(result.user_text || "语音提问");
@@ -921,79 +905,251 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     setPendingDelete(null);
   }
 
+
   const guideShell = (
-    <div className={`visitor-layout ${isHistoryOpen ? "visitor-layout--history-open" : ""} ${productTone ? "visitor-layout--product" : ""}`}>
-        <HistoryRail
-          isOpen={isHistoryOpen}
-          archives={archives}
-          currentTitle={currentDisplay.title}
-          currentPreview={currentDisplay.preview}
-          isCurrentSelected={!isArchiveView}
-          selectedArchiveId={selectedArchiveId}
-          onToggle={() => {
-            setIsSessionMenuOpen(false);
-            setIsHistoryOpen((value) => !value);
-          }}
-          onShowCurrent={() => {
-            setIsSessionMenuOpen(false);
-            setSelectedArchiveId(null);
-          }}
-          onSelectArchive={(id) => {
-            setSelectedArchiveId(id);
-            setEditingSessionId(null);
-            setDraftTitle("");
-          }}
-        />
+    <div className={`vis-shell ${isHistoryOpen ? "vis-shell--history-open" : ""} ${productTone ? "vis-shell--product" : ""}`}>
 
-        <section className="panel chat-panel">
-            <div className="panel-header">
-              <div className="panel-header__copy">
-              <div className="eyebrow">{isArchiveView ? "只读历史" : "导览会话"}</div>
-              <h1 className="panel-title">{isArchiveView ? selectedArchive.title : currentDisplay.title}</h1>
-              <p className="panel-copy">
-                {isArchiveView
-                  ? "当前查看的是已经归档的旧会话。返回实时会话后，输入框和语音按钮才会恢复可用。"
-                  : "每次进入页面都会开启一轮新会话，旧会话会自动按用户名收进左侧历史栏。"}
-              </p>
-            </div>
+      {/* ===== TOP NAV ===== */}
+      <nav className="vis-nav">
+        <div className="vis-nav__inner">
+          <div className="vis-nav__logo">
+            <div className="vis-nav__logo-icon"><i className="fas fa-mountain-sun" /></div>
+            <span className="vis-nav__logo-text">{activeGuideContext.scenicName}</span>
+          </div>
 
-            <div className="panel-toolbar">
+          <div className="vis-nav__links">
+            <a className="vis-nav__link" href={buildScenicHref(activeGuideContext.scenicSlug)}>
+              <i className="fas fa-home" style={{ fontSize: 12 }} /> 返回首页
+            </a>
+            <a className="vis-nav__link" href={buildScenicHref(activeGuideContext.scenicSlug)}>
+              <i className="fas fa-map-marked-alt" style={{ fontSize: 12 }} /> 景区详情
+            </a>
+            <a className="vis-nav__link" href={buildPlannerHref(activeGuideContext.scenicSlug)}>
+              <i className="fas fa-route" style={{ fontSize: 12 }} /> 路线规划
+            </a>
+            <span className="vis-nav__link vis-nav__link--active">
+              <i className="fas fa-headset" style={{ fontSize: 12 }} /> 导游对话
+            </span>
+          </div>
+
+          <div className="vis-nav__right">
+            <button type="button" className="vis-nav__icon-btn" onClick={() => {
+              setIsSessionMenuOpen(false);
+              setIsHistoryOpen((value) => !value);
+            }}>
+              <i className="fas fa-clock-rotate-left" />
+            </button>
+            {role === "admin" ? (
+              <a className="vis-nav__icon-btn" href="/admin" style={{ textDecoration: "none" }}>
+                <i className="fas fa-gear" />
+              </a>
+            ) : null}
+            <button type="button" className="vis-nav__icon-btn" onClick={handleLogout} title="退出登录">
+              <i className="fas fa-right-from-bracket" />
+            </button>
+            <div className="vis-nav__avatar">{username.charAt(0)}</div>
+          </div>
+        </div>
+      </nav>
+
+      {/* ===== MAIN 3-COLUMN LAYOUT ===== */}
+      <div className="vis-main">
+
+        {/* ===== LEFT SIDEBAR (replaces HistoryRail) ===== */}
+        <aside className="vis-left-sidebar">
+          <div className="vis-left-sidebar__label">会话管理</div>
+          <nav className="vis-left-sidebar__nav">
+            <button
+              type="button"
+              className={`vis-sidebar-item ${!isArchiveView ? "vis-sidebar-item--active" : ""}`}
+              onClick={() => {
+                setIsSessionMenuOpen(false);
+                setSelectedArchiveId(null);
+              }}
+            >
+              {!isArchiveView ? <div className="vis-sidebar-active-dot" /> : null}
+              <i className="vis-sidebar-item__icon fas fa-comments" style={{ color: !isArchiveView ? "#f59e0b" : "#94a3b8" }} />
+              <span>{currentDisplay.title}</span>
+            </button>
+            {archives.map((archive) => (
               <button
                 type="button"
-                className="button-ghost"
+                key={archive.id}
+                className={`vis-sidebar-item ${selectedArchiveId === archive.id ? "vis-sidebar-item--active" : ""}`}
                 onClick={() => {
-                  setIsSessionMenuOpen(false);
-                  setIsHistoryOpen((value) => !value);
+                  setSelectedArchiveId(archive.id);
+                  setEditingSessionId(null);
+                  setDraftTitle("");
                 }}
               >
-                {isHistoryOpen ? "收起历史" : "展开历史"}
+                {selectedArchiveId === archive.id ? <div className="vis-sidebar-active-dot" /> : null}
+                <i className="vis-sidebar-item__icon fas fa-clock" style={{ color: selectedArchiveId === archive.id ? "#f59e0b" : "#94a3b8" }} />
+                <span>{archive.title}</span>
               </button>
+            ))}
+          </nav>
 
-              <div className="menu-shell">
+          <div className="vis-sidebar-bottom">
+            <div className="vis-sidebar-vip-card">
+              <div className="vis-sidebar-vip-card__header">
+                <i className="vis-sidebar-vip-card__icon fas fa-crown" />
+                <span className="vis-sidebar-vip-card__title">游客信息</span>
+              </div>
+              <p className="vis-sidebar-vip-card__text">{username} ({role})</p>
+            </div>
+          </div>
+        </aside>
+
+        {/* ===== CENTER PANEL (Digital Human) ===== */}
+        <section className="vis-center">
+          <div className="vis-digital-human">
+            <div className="vis-digital-human__ring" />
+
+            {/* Media stage overlays the image when active */}
+            {(streamFrameUrl || videoUrl) ? (
+              <div className="vis-media-stage">
+                {streamFrameUrl ? (
+                  <img src={streamFrameUrl} alt="实时数字人画面" className="vis-media-stage__frame" />
+                ) : videoUrl ? (
+                  <video key={videoUrl} src={videoUrl} controls autoPlay className="vis-media-stage__video" />
+                ) : null}
+              </div>
+            ) : (
+              <img
+                src={`/api/v1/interact/avatar/default?v=${avatarImageVersion}`}
+                alt="数字人待机形象"
+                loading="lazy"
+                className="vis-digital-human__img"
+              />
+            )}
+
+            <div className="vis-digital-human__overlay-top" />
+            <div className="vis-digital-human__overlay-right" />
+
+            {/* Top-left badge */}
+            <div className="vis-digital-human__badge">
+              <div className="vis-gradient-border">
+                <div className="vis-gradient-border-inner">
+                  <i className="vis-gradient-border-inner__icon fas fa-broadcast-tower" />
+                  <span className="vis-gradient-border-inner__text">
+                    {isRealtimeMode ? "实时直播" : "稳定模式"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Top-right controls */}
+            <div className="vis-digital-human__controls">
+              <StatusBadge state={isGpsWeak ? "warning" : "success"}>
+                {isGpsWeak ? "弱 GPS" : "正常定位"}
+              </StatusBadge>
+            </div>
+
+            {/* Bottom overlay bar */}
+            <div className="vis-digital-human__bottom-bar">
+              <div className="vis-digital-human__bottom-inner">
+                <div className="vis-digital-human__info">
+                  <div className="vis-digital-human__avatar">
+                    <i className="fas fa-robot" />
+                  </div>
+                  <div>
+                    <h2 className="vis-digital-human__name">{activeGuideContext.scenicName} AI 导游</h2>
+                    <div className="vis-digital-human__status">
+                      <span className="vis-digital-human__status-dot" />
+                      <span className="vis-digital-human__status-text">
+                        {loading ? "处理中" : "在线"}
+                      </span>
+                      <span className="vis-digital-human__status-sub">
+                        {isArchiveView ? " · 正在回看历史" : " · 当前会话实时保存"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            {/* Stream notice */}
+            {streamNotice ? <div className="vis-stream-notice">{streamNotice}</div> : null}
+          </div>
+
+          {/* Process stages strip */}
+          <div className="vis-process-strip">
+            <div className="vis-process-strip__header">
+              <span>{loading ? "当前生成进度" : "当前交互状态"}</span>
+              <span className="vis-process-strip__question">{activeQuestion || "等待游客提问"}</span>
+            </div>
+            <div className="vis-process-steps">
+              {PROCESS_STAGES.map((stage) => {
+                const currentIndex = PROCESS_STAGE_ORDER.indexOf(processStage);
+                const stageIndex = PROCESS_STAGE_ORDER.indexOf(stage.key);
+                const isActive = processStage === stage.key;
+                const isDone = currentIndex > stageIndex || processStage === "done";
+                return (
+                  <div
+                    key={stage.key}
+                    className={`vis-process-step ${isActive ? "vis-process-step--active" : ""} ${isDone ? "vis-process-step--done" : ""}`}
+                  >
+                    <span className="vis-process-step__dot" />
+                    <div>
+                      <strong>{stage.title}</strong>
+                      <small>{stage.detail}</small>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+        </section>
+
+        {/* ===== RIGHT PANEL: CHAT ===== */}
+        <section className="vis-chat-panel">
+
+          {/* Chat Header */}
+          <div className="vis-chat-header">
+            <div className="vis-chat-header__top">
+              <div className="vis-chat-header__info">
+                <div className="vis-chat-header__icon">
+                  <i className="fas fa-comments" />
+                </div>
+                <div>
+                  <h3 className="vis-chat-header__title">
+                    {isArchiveView ? selectedArchive.title : currentDisplay.title}
+                  </h3>
+                  <p className="vis-chat-header__subtitle">
+                    {isArchiveView
+                      ? "只读历史会话"
+                      : `${activeGuideContext.scenicName} AI 导游 · ${guideModeLabel}`}
+                  </p>
+                </div>
+              </div>
+
+              <div className="vis-menu-shell">
                 <button
                   type="button"
-                  className="button-secondary"
+                  className="vis-chat-header__menu-btn"
                   onClick={() => setIsSessionMenuOpen((value) => !value)}
                 >
-                  更多
+                  <i className="fas fa-ellipsis-vertical" />
                 </button>
 
                 {isSessionMenuOpen ? (
-                  <div className="menu-popover">
+                  <div className="vis-menu-popover">
                     {isArchiveView ? (
                       <>
-                        <button type="button" className="menu-item" onClick={() => setSelectedArchiveId(null)}>
+                        <button type="button" className="vis-menu-item" onClick={() => setSelectedArchiveId(null)}>
                           返回当前会话
                         </button>
                         <button
                           type="button"
-                          className="menu-item"
+                          className="vis-menu-item"
                           onClick={() => beginRenameSession(selectedArchive, selectedArchive.title)}
                           disabled={loading}
                         >
                           重命名历史会话
                         </button>
-                        <button type="button" className="menu-item menu-item--danger" onClick={requestDeleteArchivedSession}>
+                        <button type="button" className="vis-menu-item vis-menu-item--danger" onClick={requestDeleteArchivedSession}>
                           删除历史会话
                         </button>
                       </>
@@ -1001,7 +1157,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
                       <>
                         <button
                           type="button"
-                          className="menu-item"
+                          className="vis-menu-item"
                           onClick={() => beginRenameSession(currentSession, currentDisplay.title)}
                           disabled={loading}
                         >
@@ -1009,7 +1165,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
                         </button>
                         <button
                           type="button"
-                          className="menu-item menu-item--danger"
+                          className="vis-menu-item vis-menu-item--danger"
                           onClick={requestDeleteCurrentSession}
                           disabled={loading}
                         >
@@ -1021,17 +1177,36 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
                 ) : null}
               </div>
             </div>
+
+            {/* Mode Tabs */}
+            <div className="vis-mode-tabs">
+              <button
+                type="button"
+                className="vis-mode-tab vis-mode-tab--active"
+              >
+                全部
+              </button>
+              <button
+                type="button"
+                className="vis-mode-tab"
+                onClick={toggleRealtimeMode}
+                disabled={loading || isArchiveView}
+              >
+                {isRealtimeMode ? "实时生成" : "稳定生成"}
+              </button>
+            </div>
           </div>
 
+          {/* Context Bar */}
           {!isArchiveView ? (
-            <div className="guide-context-bar">
-              <div className="guide-context-bar__meta">
+            <div className="vis-context-bar">
+              <div className="vis-context-bar__meta">
                 <StatusBadge state="info">{activeGuideContext.scenicName}</StatusBadge>
                 <StatusBadge state="warning">{guideModeLabel}</StatusBadge>
                 {activeGuideContext.attractionName ? <StatusBadge state="success">{activeGuideContext.attractionName}</StatusBadge> : null}
                 {activeGuideContext.routeTitle ? <StatusBadge state="neutral">{activeGuideContext.routeTitle}</StatusBadge> : null}
               </div>
-              <div className="guide-context-bar__copy">
+              <div className="vis-context-bar__copy">
                 <span>
                   当前导览语境来自
                   {activeGuideContext.attractionName
@@ -1040,22 +1215,22 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
                       ? `路线「${activeGuideContext.routeTitle}」`
                       : `园区「${activeGuideContext.scenicName}」`}。
                 </span>
-                <div className="guide-context-bar__links">
+                <div className="vis-context-bar__links">
                   <a href={buildScenicHref(activeGuideContext.scenicSlug)}>返回园区页</a>
                   <a href={buildPlannerHref(activeGuideContext.scenicSlug)}>重新规划路线</a>
                 </div>
               </div>
-              <div className="guide-context-bar__actions">
+              <div className="vis-context-bar__actions">
                 {activeGuideContext.attractionName ? (
-                  <button type="button" className="prompt-chip" onClick={() => submitTextMessage(`${activeGuideContext.attractionName}为什么值得重点讲解？`)}>
+                  <button type="button" className="vis-context-chip" onClick={() => submitTextMessage(`${activeGuideContext.attractionName}为什么值得重点讲解？`)}>
                     讲讲这个景点
                   </button>
                 ) : null}
-                <button type="button" className="prompt-chip" onClick={() => submitTextMessage("如果我继续按照当前语境游览，下一站建议去哪里？")}>
+                <button type="button" className="vis-context-chip" onClick={() => submitTextMessage("如果我继续按照当前语境游览，下一站建议去哪里？")}>
                   下一站怎么走
                 </button>
                 {activeGuideContext.routeTitle ? (
-                  <button type="button" className="prompt-chip" onClick={() => submitTextMessage(`请继续讲解这条${activeGuideContext.routeTitle}路线的每个节点。`)}>
+                  <button type="button" className="vis-context-chip" onClick={() => submitTextMessage(`请继续讲解这条${activeGuideContext.routeTitle}路线的每个节点。`)}>
                     继续这条路线
                   </button>
                 ) : null}
@@ -1063,101 +1238,146 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             </div>
           ) : null}
 
+          {/* Inline Editor */}
           {editingSessionId === managedSession?.id ? (
-            <div className="inline-editor">
+            <div className="vis-inline-editor">
               <input
-                className="input-field inline-editor__input"
+                className="vis-inline-editor__input"
                 value={draftTitle}
                 onChange={(event) => setDraftTitle(event.target.value)}
                 placeholder="输入会话标题"
                 maxLength={32}
               />
-              <button type="button" className="button-primary" onClick={saveRenamedTitle}>
+              <button type="button" className="vis-btn-primary" onClick={saveRenamedTitle}>
                 保存标题
               </button>
-              <button type="button" className="button-secondary" onClick={cancelRenaming}>
+              <button type="button" className="vis-btn-secondary" onClick={cancelRenaming}>
                 取消
               </button>
             </div>
           ) : null}
 
-          <div className="chat-shell">
-            <div ref={chatRef} className="chat-scroll">
-              {transcriptMessages.map((message, index) => (
-                <ChatMessage key={`${message.role}-${index}`} message={message} />
-              ))}
-              {loading && !isArchiveView ? <div className="loading-row">正在生成回复...</div> : null}
-            </div>
-
-            <div className="composer-shell">
-              {isArchiveView ? (
-                <div className="readonly-banner">
-                  <strong>当前是历史会话</strong>
-                  <span>这里仅用于回看；继续提问请返回右侧正在进行的实时会话。</span>
+          {/* Messages Area */}
+          <div ref={chatRef} className="vis-messages">
+            {transcriptMessages.map((message, index) => (
+              <ChatMessage key={`${message.role}-${index}`} message={message} />
+            ))}
+            {loading && !isArchiveView ? (
+              <div className="vis-typing-indicator">
+                <div className="vis-typing-avatar">
+                  <span className="vis-typing-avatar__text">AI</span>
                 </div>
-              ) : (
-                <>
-                  <div className={`preset-tray ${isPresetOpen ? "is-open" : ""}`}>
-                    <button
-                      type="button"
-                      className="preset-tray__toggle"
-                      onClick={() => setIsPresetOpen((value) => !value)}
-                      aria-expanded={isPresetOpen}
-                    >
-                      <span>
-                        <strong>精选问题与推荐路线</strong>
-                        <small>{demoRoutes.length} 条路线 · {quickPrompts.length} 个快速入口</small>
-                      </span>
-                      <b>{isPresetOpen ? "收起" : "展开"}</b>
-                    </button>
-
-                    {isPresetOpen ? (
-                      <div className="preset-tray__content">
-                        <div className="prompt-row prompt-row--routes">
-                          {demoRoutes.map((route) => (
-                            <button
-                              type="button"
-                              key={route.label}
-                              className="demo-route-card"
-                              onClick={() => {
-                                setIsPresetOpen(false);
-                                submitTextMessage(route.prompt, {
-                                  presetRouteKey: findPresetRouteMatch(route.prompt, activeGuideContext.scenicSlug)?.presetRouteKey || "",
-                                });
-                              }}
-                              disabled={loading}
-                            >
-                              <span className="demo-route-card__label">{route.label}</span>
-                              <strong>{route.title}</strong>
-                              <span>{route.duration}</span>
-                              <small>{route.focus}</small>
-                              <em>{route.behavior}</em>
-                            </button>
-                          ))}
-                        </div>
-
-                        <div className="prompt-row">
-                          {quickPrompts.map((prompt) => (
-                            <button
-                              type="button"
-                              key={prompt}
-                              className="prompt-chip"
-                              onClick={() => {
-                                setInputText(prompt);
-                                setIsPresetOpen(false);
-                              }}
-                            >
-                              {prompt}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
+                <div className="vis-typing-bubble">
+                  <div className="vis-typing-wave">
+                    <span /><span /><span />
                   </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
 
-                  <div className="composer-row">
-                    <textarea
-                      className="input-field composer-input"
+          {/* Composer Area */}
+          <div className="vis-composer-shell">
+            {isArchiveView ? (
+              <div className="vis-readonly-banner">
+                <strong>当前是历史会话</strong>
+                <span>这里仅用于回看；继续提问请返回当前正在进行的实时会话。</span>
+              </div>
+            ) : (
+              <>
+                {/* Preset Tray */}
+                <div className="vis-preset-tray">
+                  <button
+                    type="button"
+                    className="vis-preset-tray__toggle"
+                    onClick={() => setIsPresetOpen((value) => !value)}
+                    aria-expanded={isPresetOpen}
+                  >
+                    <span>
+                      <strong>精选问题与推荐路线</strong>
+                      <small>{demoRoutes.length} 条路线 · {quickPrompts.length} 个快速入口</small>
+                    </span>
+                    <b>{isPresetOpen ? "收起" : "展开"}</b>
+                  </button>
+
+                  {isPresetOpen ? (
+                    <div className="vis-preset-tray__content">
+                      <div className="vis-preset-routes">
+                        {demoRoutes.map((route) => (
+                          <button
+                            type="button"
+                            key={route.label}
+                            className="vis-route-card"
+                            onClick={() => {
+                              setIsPresetOpen(false);
+                              submitTextMessage(route.prompt, {
+                                presetRouteKey: findPresetRouteMatch(route.prompt, activeGuideContext.scenicSlug)?.presetRouteKey || "",
+                              });
+                            }}
+                            disabled={loading}
+                          >
+                            <span className="vis-route-card__label">{route.label}</span>
+                            <strong>{route.title}</strong>
+                            <span>{route.duration}</span>
+                            <small>{route.focus}</small>
+                            <em>{route.behavior}</em>
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="vis-preset-prompts">
+                        {quickPrompts.map((prompt) => (
+                          <button
+                            type="button"
+                            key={prompt}
+                            className="vis-quick-chip"
+                            onClick={() => {
+                              setInputText(prompt);
+                              setIsPresetOpen(false);
+                            }}
+                          >
+                            {prompt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Input Row */}
+                <div className="vis-input-area">
+                  <button
+                    type="button"
+                    className={`vis-voice-btn ${isRecording ? "vis-voice-btn--recording" : ""}`}
+                    onMouseDown={startRecording}
+                    onMouseUp={stopRecording}
+                    onMouseLeave={stopRecording}
+                    onTouchStart={(event) => {
+                      event.preventDefault();
+                      startRecording();
+                    }}
+                    onTouchEnd={(event) => {
+                      event.preventDefault();
+                      stopRecording();
+                    }}
+                    disabled={loading || isArchiveView}
+                  >
+                    <i className={`fas ${isRecording ? "fa-stop" : "fa-microphone"}`} />
+                  </button>
+
+                  {isRecording ? (
+                    <div className="vis-audio-bars">
+                      <div className="vis-audio-bar" />
+                      <div className="vis-audio-bar" />
+                      <div className="vis-audio-bar" />
+                      <div className="vis-audio-bar" />
+                      <div className="vis-audio-bar" />
+                    </div>
+                  ) : null}
+
+                  <div className="vis-input-wrap">
+                    <input
+                      className="vis-input-field"
                       value={inputText}
                       onChange={(event) => setInputText(event.target.value)}
                       onKeyDown={(event) => {
@@ -1168,151 +1388,71 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
                       }}
                       placeholder={activeGuideContext.attractionName
                         ? `围绕${activeGuideContext.attractionName}继续提问`
-                        : `输入问题，例如：帮我规划一条${activeGuideContext.scenicName}路线`}
-                      rows={1}
+                        : `输入您的问题...`}
                     />
                     <button
                       type="button"
-                      className="button-primary composer-send"
+                      className="vis-send-btn"
                       onClick={handleSendText}
-                      disabled={loading}
+                      disabled={loading || !inputText.trim()}
                     >
-                      发送
+                      <i className="fas fa-paper-plane" />
                     </button>
                   </div>
-                </>
-              )}
-            </div>
-          </div>
-        </section>
-
-        <section className="media-stack">
-          <div className="panel panel-dark media-panel">
-            <div className="panel-header panel-header--tight media-panel__header">
-              <div>
-                <div className="eyebrow">数字人舞台</div>
-                <h2 className="panel-title">数字人窗口</h2>
-              </div>
-              <div className="panel-toolbar">
-                {role === "admin" ? <a className="button-secondary compact-link" href="/admin">进入后台</a> : null}
-                <button type="button" className="text-button danger-text" onClick={handleLogout}>
-                  退出登录
-                </button>
-              </div>
-            </div>
-
-            <div className="media-status-strip">
-              <StatusBadge state="info">{username}</StatusBadge>
-              <StatusBadge state={isArchiveView ? "neutral" : "warning"}>
-                {isArchiveView ? "正在回看历史" : "当前会话实时保存"}
-              </StatusBadge>
-              <StatusBadge state={isGpsWeak ? "warning" : "success"}>
-                {isGpsWeak ? "弱 GPS 模式" : "正常定位"}
-              </StatusBadge>
-              <StatusBadge state={isRealtimeMode ? "success" : "neutral"}>
-                {isRealtimeMode ? "实时生成" : "稳定生成"}
-              </StatusBadge>
-              <StatusBadge state="info">{activeGuideContext.scenicName}</StatusBadge>
-            </div>
-
-            <div className="process-panel">
-              <div className="process-panel__header">
-                <span>{loading ? "当前生成进度" : "当前交互状态"}</span>
-                <strong>{activeQuestion || "等待游客提问"}</strong>
-              </div>
-              <div className="process-steps">
-                {PROCESS_STAGES.map((stage) => {
-                  const currentIndex = PROCESS_STAGE_ORDER.indexOf(processStage);
-                  const stageIndex = PROCESS_STAGE_ORDER.indexOf(stage.key);
-                  const isActive = processStage === stage.key;
-                  const isDone = currentIndex > stageIndex || processStage === "done";
-                  return (
-                    <div
-                      key={stage.key}
-                      className={`process-step ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""}`}
-                    >
-                      <span className="process-step__dot" />
-                      <div>
-                        <strong>{stage.title}</strong>
-                        <small>{stage.detail}</small>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="media-stage">
-              {streamFrameUrl ? (
-                <img src={streamFrameUrl} alt="实时数字人画面" className="media-stage__stream-frame" />
-              ) : videoUrl ? (
-                <video key={videoUrl} src={videoUrl} controls autoPlay className="media-stage__video" />
-              ) : (
-                <div className="media-stage__placeholder">
-                  <strong>等待互动开始</strong>
-                  <span>音视频生成后会稳定展示在这里，聊天滚动不会再把舞台挤压变形。</span>
                 </div>
-              )}
-            </div>
 
-            {streamNotice ? <div className="stream-notice">{streamNotice}</div> : null}
-
-            <div className="media-actions">
-              <button
-                type="button"
-                className={`button-primary button-block ${isRecording ? "is-recording" : ""}`}
-                onMouseDown={startRecording}
-                onMouseUp={stopRecording}
-                onMouseLeave={stopRecording}
-                onTouchStart={(event) => {
-                  event.preventDefault();
-                  startRecording();
-                }}
-                onTouchEnd={(event) => {
-                  event.preventDefault();
-                  stopRecording();
-                }}
-                disabled={loading || isArchiveView}
-              >
-                {isRecording ? "松开发送语音" : "按住进行语音提问"}
-              </button>
-
-              <button
-                type="button"
-                className="button-secondary button-block"
-                onClick={toggleRealtimeMode}
-                disabled={loading || isArchiveView}
-              >
-                {isRealtimeMode ? "切换稳定生成模式" : "切换实时生成模式"}
-              </button>
-
-              <button
-                type="button"
-                className="button-secondary button-block"
-                onClick={toggleGps}
-                disabled={isArchiveView}
-              >
-                {isGpsWeak ? "关闭弱 GPS" : "开启弱 GPS"}
-              </button>
-            </div>
-
-            <div className="media-footnote">
-              本地历史按用户名隔离保存，当前导览保持园区与路线语境，刷新或重新进入导览页时会开启新一轮会话。
-            </div>
+                {/* Recording state bar */}
+                {isRecording ? (
+                  <div className="vis-recording-bar">
+                    <span className="vis-recording-bar__dot" />
+                    <span className="vis-recording-bar__text">录音中</span>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
         </section>
+      </div>
+
+      {/* ===== BOTTOM STATS BAR ===== */}
+      <footer className="vis-stats-bar">
+        <div className="vis-stats-bar__inner">
+          <div className="vis-stat-card">
+            <i className="vis-stat-card__icon fas fa-comments" />
+            <span className="vis-stat-card__value">{transcriptMessages.length}</span>
+            <span className="vis-stat-card__label">条消息</span>
+          </div>
+          <div className="vis-stat-card">
+            <i className="vis-stat-card__icon fas fa-star" />
+            <span className="vis-stat-card__value">{demoRoutes.length}</span>
+            <span className="vis-stat-card__label">条路线</span>
+          </div>
+          <div className="vis-stat-card">
+            <i className="vis-stat-card__icon fas fa-clock" />
+            <span className="vis-stat-card__value">{activeGuideContext.scenicName}</span>
+            <span className="vis-stat-card__label">当前景区</span>
+          </div>
+          <div className="vis-stat-card">
+            <i className="vis-stat-card__icon fas fa-face-smile" />
+            <span className="vis-stat-card__value">{username}</span>
+            <span className="vis-stat-card__label">当前游客</span>
+          </div>
+        </div>
+      </footer>
+
+      {/* ===== DELETE CONFIRMATION DIALOG ===== */}
       {pendingDelete ? (
-        <div className="dialog-scrim" role="presentation" onClick={() => setPendingDelete(null)}>
-          <div className="dialog-card" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <div className="eyebrow">删除确认</div>
-            <h2 className="panel-title">{pendingDelete.kind === "current" ? "删除当前会话" : "删除历史会话"}</h2>
-            <p className="panel-copy">{pendingDelete.description}</p>
-            <div className="dialog-session-title">{pendingDelete.title}</div>
-            <div className="dialog-actions">
-              <button type="button" className="button-secondary" onClick={() => setPendingDelete(null)}>
+        <div className="vis-dialog-scrim" role="presentation" onClick={() => setPendingDelete(null)}>
+          <div className="vis-dialog-card" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="vis-dialog-card__eyebrow">删除确认</div>
+            <h2 className="vis-dialog-card__title">{pendingDelete.kind === "current" ? "删除当前会话" : "删除历史会话"}</h2>
+            <p className="vis-dialog-card__copy">{pendingDelete.description}</p>
+            <div className="vis-dialog-card__session-title">{pendingDelete.title}</div>
+            <div className="vis-dialog-card__actions">
+              <button type="button" className="vis-btn-secondary" onClick={() => setPendingDelete(null)}>
                 取消
               </button>
-              <button type="button" className="button-danger" onClick={confirmDeleteSession}>
+              <button type="button" className="vis-btn-danger" onClick={confirmDeleteSession}>
                 确认删除
               </button>
             </div>
@@ -1327,10 +1467,8 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   }
 
   return (
-    <div className="page-shell">
-      <div className="page-container">
-        {guideShell}
-      </div>
+    <div className="vis-shell">
+      {guideShell}
     </div>
   );
 }

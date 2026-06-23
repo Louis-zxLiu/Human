@@ -1,7 +1,5 @@
 import React, { useEffect } from "react";
 
-import { ProductFooter } from "../components/ProductFooter";
-import { ProductHeader } from "../components/ProductHeader";
 import { VisitorApp } from "./VisitorApp";
 import { buildLoginHref, currentGuidePath, readGuideContext } from "../lib/routes";
 
@@ -18,13 +16,5 @@ export function GuideApp() {
     return null;
   }
 
-  return (
-    <div className="product-page guide-product-page">
-      <div className="page-container">
-        <ProductHeader active="guide" />
-        <VisitorApp guideContext={guideContext} embedded productTone />
-        <ProductFooter />
-      </div>
-    </div>
-  );
+  return <VisitorApp guideContext={guideContext} embedded productTone />;
 }

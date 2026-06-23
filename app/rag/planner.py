@@ -119,6 +119,34 @@ FACT_TERMS = (
     "介绍",
 )
 
+ROUTE_REQUEST_TERMS = (
+    "推荐",
+    "路线",
+    "行程",
+    "安排",
+    "规划",
+    "怎么走",
+    "咋走",
+    "怎么逛",
+    "咋逛",
+    "怎么游览",
+    "如何游览",
+    "每站",
+    "下一步",
+    "核心节点",
+    "核心景点",
+    "经典首游",
+    "带我走",
+)
+
+ROUTE_PROFILE_TERMS = {
+    "history": ("历史", "文化", "人文", "佛教", "禅意", "古刹", "礼佛", "梵宫"),
+    "nature": ("自然", "风光", "湖景", "拍照", "打卡", "花海"),
+    "family": ("亲子", "孩子", "儿童", "家庭", "老人", "长辈"),
+    "architecture": ("建筑", "艺术", "空间", "坛城", "工艺"),
+    "relaxed": ("轻松", "慢游", "慢慢", "休闲", "夜游", "放松", "不赶路"),
+}
+
 @dataclass
 class QueryPlan:
     intent: QueryIntent
@@ -156,6 +184,10 @@ class QueryPlanner:
         )
         if llm_plan:
             return llm_plan
+        semantic_fallback = self._semantic_fallback_plan(user_query, scenic_slug=scenic_slug)
+        if semantic_fallback:
+            semantic_fallback.planner_source = "llm_planner_failed_semantic_fallback" if llm_is_configured() else "heuristic_fallback"
+            return semantic_fallback
         if llm_is_configured():
             return QueryPlan(
                 intent="CHAT",
@@ -217,6 +249,10 @@ class QueryPlanner:
                 chat_reply="你好，我在。",
                 planner_source="heuristic_fallback",
             )
+
+        semantic_plan = self._semantic_fallback_plan(query, scenic_slug=resolved_scenic_slug)
+        if semantic_plan:
+            return semantic_plan
 
         return QueryPlan(
             intent="CHAT",
@@ -331,6 +367,7 @@ class QueryPlanner:
             temperature=0.0,
             max_tokens=500,
             return_error_text=False,
+            json_mode=True,
         )
         payload = self._parse_json(raw)
         if not payload:
@@ -484,6 +521,9 @@ class QueryPlanner:
             strategy = "refuse_realtime"
             intent = "ANALYTICS"
             requires_realtime_data = True
+        if strategy in {"general_chat", "ask_clarification"} and QueryPlanner._is_route_request(query):
+            strategy = "route_planner"
+            intent = "RECOMMEND"
         if strategy == "general_chat" and QueryPlanner._has_hard_boundary_signal(query):
             return None
         if strategy == "ask_clarification" and (
@@ -627,6 +667,38 @@ class QueryPlanner:
                 flags=re.IGNORECASE,
             )
         )
+
+    @staticmethod
+    def _is_route_request(query: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(query or ""))
+        if not normalized:
+            return False
+        return any(term in normalized for term in ROUTE_REQUEST_TERMS)
+
+    @staticmethod
+    def _detect_route_profile(query: str) -> str:
+        normalized = str(query or "")
+        for profile, terms in ROUTE_PROFILE_TERMS.items():
+            if any(term in normalized for term in terms):
+                return profile
+        return "general"
+
+    @staticmethod
+    def _semantic_fallback_plan(user_query: str, scenic_slug: Optional[str] = None) -> Optional[QueryPlan]:
+        query = str(user_query or "").strip()
+        resolved_scenic_slug = scenic_slug or infer_scenic_slug_from_text(query)
+        if QueryPlanner._is_route_request(query):
+            return QueryPlan(
+                intent="RECOMMEND",
+                strategy="route_planner",
+                scenic_slug=resolved_scenic_slug,
+                question_type="description",
+                route_profile=QueryPlanner._detect_route_profile(query),
+                confidence=0.82,
+                reasoning=["Detected an explicit route-planning request with deterministic semantic fallback."],
+                planner_source="heuristic_fallback",
+            )
+        return None
 
     @staticmethod
     def _requires_realtime_data(query: str) -> bool:

@@ -1,7 +1,6 @@
 import React from "react";
 
 import { normalizePathname } from "./lib/routes";
-import { ProductHeader } from "./components/ProductHeader";
 import { AdminApp } from "./pages/AdminApp";
 import { GuideApp } from "./pages/GuideApp";
 import { HomeApp } from "./pages/HomeApp";
@@ -9,20 +8,7 @@ import { LoginApp } from "./pages/LoginApp";
 import { PlannerApp } from "./pages/PlannerApp";
 import { ScenicAreaApp } from "./pages/ScenicAreaApp";
 import { ScenicAttractionApp } from "./pages/ScenicAttractionApp";
-
-function NotFoundApp() {
-  return (
-    <div className="product-page">
-      <div className="page-container">
-        <ProductHeader />
-        <div className="empty-state">
-          <strong>页面不存在</strong>
-          <span>这个路径没有对应的公开产品页。</span>
-        </div>
-      </div>
-    </div>
-  );
-}
+import { NotFoundApp } from "./pages/NotFoundApp";
 
 export function AppRouter() {
   const pathname = normalizePathname(window.location.pathname);

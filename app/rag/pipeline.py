@@ -218,6 +218,7 @@ def detect_general_chat_reply(user_query: str) -> Optional[str]:
             temperature=0.0,
             max_tokens=160,
             return_error_text=False,
+            json_mode=True,
         )
         cleaned = str(raw or "").replace("```json", "").replace("```", "").strip()
         if cleaned:

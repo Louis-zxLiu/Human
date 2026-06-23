@@ -464,6 +464,7 @@ class TouristAnalyticsAgent:
             temperature=0.0,
             max_tokens=420,
             return_error_text=False,
+            json_mode=True,
         )
         payload = self._parse_semantic_agent_json(raw)
         if not payload:

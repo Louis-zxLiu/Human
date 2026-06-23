@@ -30,6 +30,7 @@ data/processed/unique_attractions.json
 
 # Large local model assets
 /models/
+node_modules/
 frontend/node_modules/
 app/static/dist/
 .runtime/

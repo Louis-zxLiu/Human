@@ -80,5 +80,96 @@
     "pageSlot": "attraction",
     "sourceUrl": "https://www.nianhuawan.com/scenery-introduction/",
     "localPath": "/media/scenic/nianhuawan/nianhuawan-deer-valley.jpg"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "attractionId": "NH-001",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1362784681.html",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-nianhua-square.jpg"
+  },
+  {
+    "scenicSlug": "nianhuawan",
+    "attractionId": "NH-004",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1562054330.html",
+    "localPath": "/media/scenic/nianhuawan/nianhuawan-nianhua-hall.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-001",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1387156400.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-dazhaobi.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-003",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1499604550.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-fozutan.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-004",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1387469440.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-wuzhimen.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-007",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1523368563.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-jiangmo-relief.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-008",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1635003058.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-ashoka-pillar.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-009",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1532307151.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-baizi-mile.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-012",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1629741848.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-buddhist-museum.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-015",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.vcg.com/creative/1387158673.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-manfeilong-tower.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-002",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://k.sina.cn/article_5840118030_15c19210e00100h5bs.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-wuming-bridge.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-005",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://k.sina.cn/article_5840118030_15c19210e00100h5bs.html",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-bodhi-avenue.jpg"
+  },
+  {
+    "scenicSlug": "lingshan-shengjing",
+    "attractionId": "LS-016",
+    "pageSlot": "attraction",
+    "sourceUrl": "https://www.mj.org.cn/wzt/2020mjqghsgzh/zypc/202008/t20200818_230754.htm",
+    "localPath": "/media/scenic/lingshan-shengjing/lingshan-wujinyi-zhai.jpg"
   }
 ]

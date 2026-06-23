@@ -146,13 +146,13 @@ class RouterCacheAndPlannerTests(unittest.TestCase):
             self.assertIn("灵山大佛", captured["prompt"])
             self.assertEqual(planner.cache_stats()["hits"], 0)
 
-    def test_code_guards_only_hard_boundaries_when_llm_unavailable(self):
+    def test_code_guards_hard_boundaries_and_route_requests_when_llm_unavailable(self):
         planner = QueryPlanner(cache=RouterPlanCache(enabled=False))
 
         with patch("app.rag.planner.llm_is_configured", return_value=False):
             fallback_plan = planner.plan("灵山胜境推荐一条路线，每站介绍下。")
-        self.assertEqual(fallback_plan.intent, "CHAT")
-        self.assertEqual(fallback_plan.strategy, "ask_clarification")
+        self.assertEqual(fallback_plan.intent, "RECOMMEND")
+        self.assertEqual(fallback_plan.strategy, "route_planner")
 
         with patch("app.rag.planner.llm_is_configured", return_value=False):
             realtime_plan = planner.plan("灵山胜境今天实时有多少人？")

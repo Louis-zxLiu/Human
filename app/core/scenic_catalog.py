@@ -267,12 +267,84 @@ SCENIC_ROUTE_PROFILES: Dict[str, Dict[str, Dict[str, Any]]] = {
 
 
 ATTRACTION_MEDIA: Dict[str, Dict[str, list[Dict[str, str]]]] = {
+    "LS-001": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-dazhaobi.jpg",
+                "alt": "灵山大照壁图片",
+                "source_url": "https://www.vcg.com/creative/1387156400.html",
+            }
+        ]
+    },
+    "LS-002": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-wuming-bridge.jpg",
+                "alt": "五明桥图片",
+                "source_url": "https://k.sina.cn/article_5840118030_15c19210e00100h5bs.html",
+            }
+        ]
+    },
+    "LS-003": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-fozutan.jpg",
+                "alt": "佛足坛图片",
+                "source_url": "https://www.vcg.com/creative/1499604550.html",
+            }
+        ]
+    },
+    "LS-004": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-wuzhimen.jpg",
+                "alt": "五智门图片",
+                "source_url": "https://www.vcg.com/creative/1387469440.html",
+            }
+        ]
+    },
+    "LS-005": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-bodhi-avenue.jpg",
+                "alt": "菩提大道图片",
+                "source_url": "https://k.sina.cn/article_5840118030_15c19210e00100h5bs.html",
+            }
+        ]
+    },
     "LS-006": {
         "gallery": [
             {
                 "path": "/media/scenic/lingshan-shengjing/lingshan-hero-2.png",
                 "alt": "灵山胜境官方景区图",
                 "source_url": "https://www.chinalingshan.com/member/scenic/1",
+            }
+        ]
+    },
+    "LS-007": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-jiangmo-relief.jpg",
+                "alt": "降魔浮雕图片",
+                "source_url": "https://www.vcg.com/creative/1523368563.html",
+            }
+        ]
+    },
+    "LS-008": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-ashoka-pillar.jpg",
+                "alt": "阿育王柱图片",
+                "source_url": "https://www.vcg.com/creative/1635003058.html",
+            }
+        ]
+    },
+    "LS-009": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-baizi-mile.jpg",
+                "alt": "百子戏弥勒图片",
+                "source_url": "https://www.vcg.com/creative/1532307151.html",
             }
         ]
     },
@@ -294,6 +366,15 @@ ATTRACTION_MEDIA: Dict[str, Dict[str, list[Dict[str, str]]]] = {
             }
         ]
     },
+    "LS-012": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-buddhist-museum.jpg",
+                "alt": "佛教文化博览馆图片",
+                "source_url": "https://www.vcg.com/creative/1629741848.html",
+            }
+        ]
+    },
     "LS-013": {
         "gallery": [
             {
@@ -309,6 +390,33 @@ ATTRACTION_MEDIA: Dict[str, Dict[str, list[Dict[str, str]]]] = {
                 "path": "/media/scenic/lingshan-shengjing/lingshan-card.png",
                 "alt": "灵山胜境官方景区图",
                 "source_url": "https://www.chinalingshan.com/member/scenic",
+            }
+        ]
+    },
+    "LS-015": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-manfeilong-tower.jpg",
+                "alt": "曼飞龙塔图片",
+                "source_url": "https://www.vcg.com/creative/1387158673.html",
+            }
+        ]
+    },
+    "LS-016": {
+        "gallery": [
+            {
+                "path": "/media/scenic/lingshan-shengjing/lingshan-wujinyi-zhai.jpg",
+                "alt": "无尽意斋图片",
+                "source_url": "https://www.mj.org.cn/wzt/2020mjqghsgzh/zypc/202008/t20200818_230754.htm",
+            }
+        ]
+    },
+    "NH-001": {
+        "gallery": [
+            {
+                "path": "/media/scenic/nianhuawan/nianhuawan-nianhua-square.jpg",
+                "alt": "拈花广场图片",
+                "source_url": "https://www.vcg.com/creative/1362784681.html",
             }
         ]
     },
@@ -333,9 +441,9 @@ ATTRACTION_MEDIA: Dict[str, Dict[str, list[Dict[str, str]]]] = {
     "NH-004": {
         "gallery": [
             {
-                "path": "/media/scenic/nianhuawan/nianhuawan-hero-1.jpg",
-                "alt": "拈花湾官方图",
-                "source_url": "https://www.nianhuawan.com/scenery-introduction/",
+                "path": "/media/scenic/nianhuawan/nianhuawan-nianhua-hall.jpg",
+                "alt": "拈花堂图片",
+                "source_url": "https://www.vcg.com/creative/1562054330.html",
             }
         ]
     },

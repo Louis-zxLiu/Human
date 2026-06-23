@@ -103,6 +103,7 @@ def detect_landmark_follow_up_need(user_query: str, intent: str) -> bool:
             temperature=0.0,
             max_tokens=120,
             return_error_text=False,
+            json_mode=True,
         )
         cleaned = str(raw or "").replace("```json", "").replace("```", "").strip()
         if cleaned:

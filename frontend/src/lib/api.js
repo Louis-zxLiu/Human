@@ -5,10 +5,22 @@ async function request(url, options = {}) {
 
   if (!response.ok) {
     const message = typeof payload === "string" ? payload : payload.detail || payload.message || "Request failed";
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
 
   return payload;
+}
+
+export function isAuthError(error) {
+  const message = String(error?.message || "");
+  return (
+    error?.status === 401 ||
+    message === "Invalid authentication token" ||
+    message === "Not authenticated"
+  );
 }
 
 function formDataWithContext({
@@ -19,7 +31,6 @@ function formDataWithContext({
   attractionId = "",
   routeLabel = "",
   presetRouteKey = "",
-  conversationContext = [],
 } = {}) {
   const formData = new FormData();
   if (text) formData.append("text", text);
@@ -29,7 +40,6 @@ function formDataWithContext({
   if (attractionId) formData.append("attractionId", attractionId);
   if (routeLabel) formData.append("routeLabel", routeLabel);
   if (presetRouteKey) formData.append("presetRouteKey", presetRouteKey);
-  if (conversationContext.length) formData.append("conversation_context", JSON.stringify(conversationContext));
   return formData;
 }
 
@@ -98,7 +108,6 @@ export function buildAudioMessageForm({
   attractionId = "",
   routeLabel = "",
   presetRouteKey = "",
-  conversationContext = [],
 } = {}) {
   const formData = new FormData();
   formData.append("audio", audioFile);
@@ -108,7 +117,6 @@ export function buildAudioMessageForm({
   if (attractionId) formData.append("attractionId", attractionId);
   if (routeLabel) formData.append("routeLabel", routeLabel);
   if (presetRouteKey) formData.append("presetRouteKey", presetRouteKey);
-  if (conversationContext.length) formData.append("conversation_context", JSON.stringify(conversationContext));
   return formData;
 }
 
@@ -186,32 +194,5 @@ export function uploadAvatar(file) {
     method: "POST",
     headers: authHeaders(),
     body: formData,
-  });
-}
-
-export function createSpatialScene({ files = [], context = {} } = {}) {
-  const formData = new FormData();
-  files.forEach((file) => formData.append("files", file));
-  formData.append("scenic_slug", context.scenicSlug || "");
-  formData.append("scenic_name", context.scenicName || "");
-  formData.append("attraction_id", context.attractionId || "");
-  formData.append("attraction_name", context.attractionName || "");
-  formData.append("route_label", context.routeTitle || context.routeLabel || "");
-  return request("/api/v1/spatial/scenes", {
-    method: "POST",
-    headers: authHeaders(),
-    body: formData,
-  });
-}
-
-export function fetchSpatialSceneJob(jobId) {
-  return request(`/api/v1/spatial/jobs/${encodeURIComponent(jobId)}`, {
-    headers: authHeaders(),
-  });
-}
-
-export function fetchSpatialScene(sceneId) {
-  return request(`/api/v1/spatial/scenes/${encodeURIComponent(sceneId)}`, {
-    headers: authHeaders(),
   });
 }

@@ -9,13 +9,13 @@ import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user, get_current_user_optional
 from app.api.stream_utils import build_stream_tts_segments, split_sentences
-from app.core.config import resolve_path
+from app.core.config import resolve_path, settings
 from app.rag.location_agent import ScenicLocationAgent, detect_landmark_follow_up_need
 from app.rag.pipeline import ScenicRAGPipeline
 from app.rag.router import get_query_intent
@@ -34,6 +34,22 @@ _location_agent_cache: Optional[ScenicLocationAgent] = None
 INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
 WEAK_GPS_SESSIONS: Dict[str, Dict[str, Any]] = {}
 CONVERSATION_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+
+@router.get("/v1/interact/avatar/default")
+async def get_default_avatar_image():
+    avatar_path = resolve_path(settings.AVATAR_DEFAULT_IMAGE_PATH)
+    if not os.path.exists(avatar_path):
+        raise HTTPException(status_code=404, detail="Default avatar image not found")
+    stat = os.stat(avatar_path)
+    return FileResponse(
+        avatar_path,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "ETag": f'W/"{int(stat.st_mtime)}-{stat.st_size}"',
+        },
+    )
 
 
 class TextInteractRequest(BaseModel):

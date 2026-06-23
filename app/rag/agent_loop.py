@@ -65,19 +65,14 @@ class AgentLoopController:
         )
         if llm_step:
             return llm_step
-        if llm_is_configured():
-            return AgentStep(
-                action="ask_clarification",
-                reason="llm_agent_loop_decision_failed",
-                source="agent_llm_failed",
-                observation_summary=self._summarize_observation(last_observation),
-            )
 
         if candidate_calls:
             return AgentStep(
                 action="call_tool",
-                reason="fallback_selected_next_candidate_tool",
-                source="agent_policy_fallback",
+                reason="llm_agent_loop_decision_failed_selected_candidate_tool"
+                if llm_is_configured()
+                else "fallback_selected_next_candidate_tool",
+                source="agent_llm_failed_fallback" if llm_is_configured() else "agent_policy_fallback",
                 tool_call=candidate_calls[0],
                 observation_summary=self._summarize_observation(last_observation),
             )
@@ -117,21 +112,18 @@ class AgentLoopController:
         )
         if llm_step:
             return llm_step
-        if llm_is_configured():
-            return AgentStep(
-                action="ask_clarification",
-                reason="llm_review_repair_decision_failed",
-                source="main_agent_llm_failed",
-                observation_summary=self._summarize_observation(last_observation),
-            )
 
         fallback_call = candidate_calls[0]
         action = str(review.get("repair_action") or "repair").strip() or "repair"
-        fallback_call.reason = fallback_call.reason or f"answer_review_repair:{action}"
+        fallback_call.reason = fallback_call.reason or (
+            "llm_review_repair_decision_failed_selected_candidate_tool"
+            if llm_is_configured()
+            else f"answer_review_repair:{action}"
+        )
         return AgentStep(
             action="call_tool",
             reason=fallback_call.reason,
-            source="main_agent_policy_fallback",
+            source="main_agent_llm_failed_fallback" if llm_is_configured() else "main_agent_policy_fallback",
             tool_call=fallback_call,
             observation_summary=self._summarize_observation(last_observation),
         )
@@ -172,6 +164,7 @@ class AgentLoopController:
                 temperature=0.0,
                 max_tokens=180,
                 return_error_text=False,
+                json_mode=True,
             )
             payload = self._parse_json(raw)
         except Exception:
@@ -297,6 +290,7 @@ class AgentLoopController:
                 temperature=0.0,
                 max_tokens=180,
                 return_error_text=False,
+                json_mode=True,
             )
             payload = self._parse_json(raw)
         except Exception:

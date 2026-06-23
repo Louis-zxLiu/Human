@@ -160,6 +160,7 @@ class AnswerReviewAgent:
             temperature=0.0,
             max_tokens=520,
             return_error_text=False,
+            json_mode=True,
         )
         return self._parse_json(raw)
 

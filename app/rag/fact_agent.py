@@ -755,6 +755,7 @@ class ScenicFactAgent:
             temperature=0.0,
             max_tokens=420,
             return_error_text=False,
+            json_mode=True,
         )
         payload = self._parse_fact_semantic_json(raw)
         if not payload:

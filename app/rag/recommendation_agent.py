@@ -87,7 +87,7 @@ def classify_interest_label(user_query: str) -> str:
 }}
 """
     try:
-        raw = generate_chat_completion(prompt, system_prompt, temperature=0.1)
+        raw = generate_chat_completion(prompt, system_prompt, temperature=0.1, json_mode=True)
         cleaned = raw.replace("```json", "").replace("```", "").strip()
         import json
 
