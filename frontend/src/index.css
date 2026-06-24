@@ -10236,11 +10236,17 @@ select.input-field option:disabled {
   padding: 24px 18px 32px;
 }
 
+.mem3d-page .page-container {
+  width: min(2120px, calc(100vw - 48px));
+  margin-inline: auto;
+}
+
 .mem3d-shell {
   display: grid;
-  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
   gap: 18px;
   min-height: calc(100vh - 128px);
+  margin-inline: auto;
 }
 
 .mem3d-sidebar,

@@ -322,7 +322,7 @@ function Memory3DViewer({ item }) {
       {!item ? (
         <div className="mem3d-viewer__empty">
           <i className="fas fa-cube" />
-          <strong>选择一个 3D 记忆</strong>
+          <strong>选择一个 3D 景区记忆</strong>
           <span>上传照片生成模型后，可在这里在线预览高斯溅射场景。</span>
         </div>
       ) : null}
@@ -592,7 +592,7 @@ export function Memory3DApp() {
   }, [uploadFiles]);
 
   const handleDelete = useCallback(async (itemId) => {
-    if (!window.confirm("删除这个 3D 记忆吗？")) return;
+    if (!window.confirm("删除这个 3D 景区记忆吗？")) return;
     try {
       await deleteMemory3DModel(itemId);
       if (selectedId === itemId) setSelectedId("");
@@ -629,7 +629,7 @@ export function Memory3DApp() {
           <ProductHeader active="memory3d" />
           <main className="mem3d-login panel">
             <i className="fas fa-lock" />
-            <h1>登录后创建 3D 记忆</h1>
+            <h1>登录后创建 3D 景区记忆</h1>
             <p>上传照片、生成高斯溅射模型和在线预览需要登录，以便保护游客影像和生成结果。</p>
             <a className="button-primary" href={buildLoginHref("/memory-3d")}>去登录</a>
           </main>
@@ -647,8 +647,8 @@ export function Memory3DApp() {
             <section className="mem3d-intro">
               <span className={`mem3d-status-dot ${status?.engine_ready ? "is-ready" : "is-offline"}`} />
               <div>
-                <p className="eyebrow">3D MEMORY</p>
-                <h1>3D记忆</h1>
+                <p className="eyebrow">SCENIC 3D MEMORY</p>
+                <h1>3D景区记忆</h1>
                 <span>{status?.message || "正在检查生成引擎..."}</span>
               </div>
             </section>

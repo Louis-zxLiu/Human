@@ -161,7 +161,7 @@ class Memory3DServiceTests(unittest.TestCase):
         self.assertIsNone(gallery[0]["spz_url"])
 
     def test_model_name_can_be_updated_and_deleted_with_metadata(self):
-        task = self.service.enqueue_upload("front gate.jpg", jpeg_bytes())
+        task = self.service.enqueue_upload("灵山正门.jpg", jpeg_bytes())
         item_id = task["item_id"]
         (self.paths.outputs / f"{item_id}.ply").write_text(
             "ply\nformat ascii 1.0\nelement vertex 0\nend_header\n",
@@ -169,7 +169,8 @@ class Memory3DServiceTests(unittest.TestCase):
         )
 
         gallery = self.service.gallery()
-        self.assertEqual(gallery[0]["name"], "front gate")
+        self.assertEqual(task["name"], "灵山正门")
+        self.assertEqual(gallery[0]["name"], "灵山正门")
 
         updated = self.service.set_model_name(item_id, "入口记忆")
         self.assertEqual(updated["name"], "入口记忆")
