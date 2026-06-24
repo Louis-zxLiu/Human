@@ -127,6 +127,32 @@ class TTSService:
         
     def get_current_voice(self):
         return self.voice
+
+    def _prepend_leading_silence(self, audio_path: str) -> None:
+        silence_ms = max(0, int(settings.TTS_LEADING_SILENCE_MS or 0))
+        if silence_ms <= 0:
+            return
+
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        temp_output_path = f"{audio_path}.lead.mp3"
+        delay = f"{silence_ms}|{silence_ms}"
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-i",
+            audio_path,
+            "-af",
+            f"adelay={delay}",
+            "-codec:a",
+            "libmp3lame",
+            "-q:a",
+            "3",
+            temp_output_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to prepend TTS leading silence: {result.stderr}")
+        os.replace(temp_output_path, audio_path)
         
     def synthesize(self, text: str, output_path: str, voice_id: str = None) -> str:
         """
@@ -155,6 +181,8 @@ class TTSService:
             
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             raise FileNotFoundError(f"Edge-TTS failed to create file: {output_path}")
+
+        self._prepend_leading_silence(output_path)
             
         return output_path
 

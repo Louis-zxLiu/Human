@@ -258,6 +258,9 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   const streamFrameQueueRef = useRef([]);
   const streamFrameTimerRef = useRef(null);
   const streamAudioUrlsRef = useRef([]);
+  const streamAudioQueueRef = useRef([]);
+  const streamAudioCurrentRef = useRef(null);
+  const streamAudioPlayingRef = useRef(false);
   const messagesRef = useRef(messages);
   const recordingStartedAtRef = useRef(0);
 
@@ -273,6 +276,10 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     stageTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     if (streamFrameTimerRef.current) {
       window.clearInterval(streamFrameTimerRef.current);
+    }
+    if (streamAudioCurrentRef.current) {
+      streamAudioCurrentRef.current.pause();
+      streamAudioCurrentRef.current = null;
     }
     streamAudioUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
@@ -369,6 +376,14 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       streamFrameTimerRef.current = null;
     }
     streamFrameQueueRef.current = [];
+    if (streamAudioCurrentRef.current) {
+      streamAudioCurrentRef.current.onended = null;
+      streamAudioCurrentRef.current.onerror = null;
+      streamAudioCurrentRef.current.pause();
+      streamAudioCurrentRef.current = null;
+    }
+    streamAudioQueueRef.current = [];
+    streamAudioPlayingRef.current = false;
     streamAudioUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     streamAudioUrlsRef.current = [];
     setStreamFrameUrl("");
@@ -395,20 +410,50 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     pumpStreamingFrames();
   }
 
+  function revokeStreamingAudioUrl(audioUrl) {
+    URL.revokeObjectURL(audioUrl);
+    streamAudioUrlsRef.current = streamAudioUrlsRef.current.filter((url) => url !== audioUrl);
+  }
+
+  async function drainStreamingAudioQueue() {
+    if (streamAudioPlayingRef.current) return;
+    const audioUrl = streamAudioQueueRef.current.shift();
+    if (!audioUrl) return;
+
+    streamAudioPlayingRef.current = true;
+    const audio = new Audio(audioUrl);
+    audio.preload = "auto";
+    streamAudioCurrentRef.current = audio;
+
+    try {
+      await new Promise((resolve, reject) => {
+        audio.onended = resolve;
+        audio.onerror = reject;
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(reject);
+        }
+      });
+    } catch {
+      setStreamNotice("浏览器拦截了自动播放，点击数字人舞台上的音频控件可继续听取。");
+    } finally {
+      audio.onended = null;
+      audio.onerror = null;
+      if (streamAudioCurrentRef.current === audio) {
+        streamAudioCurrentRef.current = null;
+      }
+      revokeStreamingAudioUrl(audioUrl);
+      streamAudioPlayingRef.current = false;
+      drainStreamingAudioQueue();
+    }
+  }
+
   async function playStreamingAudio(audioBase64) {
     if (!audioBase64) return;
     const audioUrl = base64ToBlobUrl(audioBase64, "audio/mpeg");
     streamAudioUrlsRef.current.push(audioUrl);
-    const audio = new Audio(audioUrl);
-    audio.onended = () => {
-      URL.revokeObjectURL(audioUrl);
-      streamAudioUrlsRef.current = streamAudioUrlsRef.current.filter((url) => url !== audioUrl);
-    };
-    try {
-      await audio.play();
-    } catch {
-      setStreamNotice("浏览器拦截了自动播放，点击数字人舞台上的音频控件可继续听取。");
-    }
+    streamAudioQueueRef.current.push(audioUrl);
+    drainStreamingAudioQueue();
   }
 
   function clearStageTimers() {
@@ -1040,9 +1085,19 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
 
             {/* Top-right controls */}
             <div className="vis-digital-human__controls">
-              <StatusBadge state={isGpsWeak ? "warning" : "success"}>
-                {isGpsWeak ? "弱 GPS" : "正常定位"}
-              </StatusBadge>
+              <button
+                type="button"
+                className={`vis-digital-human__ctrl-btn vis-digital-human__gps-toggle ${isGpsWeak ? "is-weak" : "is-normal"}`}
+                onClick={toggleGps}
+                disabled={isArchiveView}
+                title={isGpsWeak ? "切换到正常定位" : "切换到弱 GPS"}
+                aria-label={isGpsWeak ? "切换到正常定位" : "切换到弱 GPS"}
+              >
+                <i className={`fas ${isGpsWeak ? "fa-satellite-dish" : "fa-location-crosshairs"}`} />
+                <span className="vis-digital-human__gps-toggle-text">
+                  {isGpsWeak ? "弱 GPS" : "正常定位"}
+                </span>
+              </button>
             </div>
 
             {/* Bottom overlay bar */}

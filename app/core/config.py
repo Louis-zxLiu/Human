@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     ASR_NO_SPEECH_THRESHOLD: float = 0.6
     ASR_LOGPROB_THRESHOLD: float = -1.0
     MODEL_TTS_NAME: str = "Edge-TTS"
+    TTS_LEADING_SILENCE_MS: int = 320
 
     HOST: str = "0.0.0.0"
     PORT: int = 8000

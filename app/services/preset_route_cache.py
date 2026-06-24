@@ -181,6 +181,7 @@ class PresetRouteCacheManager:
             "voice_id": voice_id,
             "torch_dtype": str(settings.AVATAR_TORCH_DTYPE).lower(),
             "warmup_seconds": str(settings.AVATAR_WARMUP_SECONDS),
+            "tts_leading_silence_ms": str(settings.TTS_LEADING_SILENCE_MS),
             "response_format_version": "compact-v1",
         }
 
@@ -219,6 +220,7 @@ class PresetRouteCacheManager:
                 context["voice_id"],
                 context["torch_dtype"],
                 context["warmup_seconds"],
+                context["tts_leading_silence_ms"],
                 context["response_format_version"],
             ]
         )

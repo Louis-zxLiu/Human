@@ -8855,7 +8855,7 @@ select.input-field option:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  z-index: 6;
+  z-index: 12;
 }
 
 .vis-digital-human__ctrl-btn {
@@ -8878,6 +8878,36 @@ select.input-field option:disabled {
 .vis-digital-human__ctrl-btn:hover {
   color: #fff;
   background: rgba(0, 0, 0, 0.6);
+}
+
+.vis-digital-human__gps-toggle {
+  width: auto;
+  min-width: 108px;
+  padding: 0 14px;
+  gap: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  justify-content: center;
+}
+
+.vis-digital-human__gps-toggle.is-normal {
+  background: rgba(20, 184, 166, 0.16);
+  color: #d1fae5;
+}
+
+.vis-digital-human__gps-toggle.is-weak {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+}
+
+.vis-digital-human__gps-toggle:hover {
+  transform: translateY(-1px);
+}
+
+.vis-digital-human__gps-toggle-text {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 /* Bottom overlay bar */
@@ -9511,6 +9541,7 @@ select.input-field option:disabled {
   -webkit-backdrop-filter: blur(18px);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   overflow: hidden;
+  pointer-events: none;
 }
 
 .vis-center > .vis-process-strip::before {
