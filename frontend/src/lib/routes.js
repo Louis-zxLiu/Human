@@ -45,6 +45,10 @@ export function buildGuideHref({
   return search ? `/guide?${search}` : "/guide";
 }
 
+export function buildMemory3DHref() {
+  return "/memory-3d";
+}
+
 export function buildLoginHref(nextPath) {
   const params = new URLSearchParams();
   params.set("next", safeInternalPath(nextPath, "/guide"));

@@ -1,6 +1,6 @@
 import React from "react";
 
-import { buildGuideHref, buildPlannerHref } from "../lib/routes";
+import { buildGuideHref, buildMemory3DHref, buildPlannerHref } from "../lib/routes";
 
 export function ProductHeader({ active = "home" }) {
   const token = localStorage.getItem("auth_token");
@@ -20,8 +20,9 @@ export function ProductHeader({ active = "home" }) {
 
       <nav className="product-header__nav">
         <a href="/" className={active === "home" ? "is-active" : ""}>首页</a>
-        <a href={buildPlannerHref()} className={active === "planner" ? "is-active" : ""}>路线规划</a>
+        <a href={buildPlannerHref()} className={active === "planner" ? "is-active" : ""}>路线推荐</a>
         <a href={scenicGuideHref} className={active === "guide" ? "is-active" : ""}>数字人导览</a>
+        <a href={buildMemory3DHref()} className={active === "memory3d" ? "is-active" : ""}>3D记忆</a>
         {role === "admin" ? <a href="/admin" className={active === "admin" ? "is-active" : ""}>后台</a> : null}
       </nav>
 

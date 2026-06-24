@@ -129,6 +129,15 @@ def cmd_bootstrap(_: argparse.Namespace) -> int:
     if not ensure_runtime_health(profile="full"):
         return 1
 
+    from app.tasks.memory3d_runtime import ensure_memory3d_runtime
+    from app.core.runtime import merge_runtime_status
+
+    memory3d_runtime = ensure_memory3d_runtime()
+    merge_runtime_status({"memory3d_runtime_ready": memory3d_runtime["ok"]})
+    print_json({"memory3d_runtime": memory3d_runtime})
+    if not memory3d_runtime["ok"]:
+        return 1
+
     code = run_subprocess([sys.executable, "-m", "app.cli", "_download-models"])
     if code != 0:
         return code
@@ -144,6 +153,17 @@ def cmd_download_models(_: argparse.Namespace) -> int:
     payload = download_required_models()
     print_json(payload)
     collect_doctor_report()
+    return 0 if payload["ok"] else 1
+
+
+def cmd_memory3d_runtime(_: argparse.Namespace) -> int:
+    ensure_runtime_env()
+    from app.core.runtime import merge_runtime_status
+    from app.tasks.memory3d_runtime import ensure_memory3d_runtime
+
+    payload = ensure_memory3d_runtime()
+    merge_runtime_status({"memory3d_runtime_ready": payload["ok"]})
+    print_json(payload)
     return 0 if payload["ok"] else 1
 
 
@@ -415,6 +435,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     build_frontend = subparsers.add_parser("build-frontend")
     build_frontend.set_defaults(func=cmd_build_frontend)
+
+    memory3d_runtime = subparsers.add_parser("memory3d-runtime")
+    memory3d_runtime.set_defaults(func=cmd_memory3d_runtime)
 
     start = subparsers.add_parser("start")
     start.add_argument("--host", default="0.0.0.0")

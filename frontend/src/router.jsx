@@ -5,6 +5,7 @@ import { AdminApp } from "./pages/AdminApp";
 import { GuideApp } from "./pages/GuideApp";
 import { HomeApp } from "./pages/HomeApp";
 import { LoginApp } from "./pages/LoginApp";
+import { Memory3DApp } from "./pages/Memory3DApp";
 import { PlannerApp } from "./pages/PlannerApp";
 import { ScenicAreaApp } from "./pages/ScenicAreaApp";
 import { ScenicAttractionApp } from "./pages/ScenicAttractionApp";
@@ -25,6 +26,9 @@ export function AppRouter() {
   }
   if (pathname === "/planner") {
     return <PlannerApp />;
+  }
+  if (pathname === "/memory-3d") {
+    return <Memory3DApp />;
   }
   if (segments[0] === "scenic" && segments.length === 2) {
     return <ScenicAreaApp scenicSlug={decodeURIComponent(segments[1])} />;

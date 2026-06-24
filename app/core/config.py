@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     AVATAR_EMPTY_CACHE_AFTER_INFER: bool = True
     AVATAR_DEFAULT_IMAGE_PATH: str = "data/processed/default_avatar.jpg"
 
+    MEMORY3D_ENABLED: bool = True
+    MEMORY3D_WORKSPACE_DIR: str = "data/3d_memory"
+    MEMORY3D_MODEL_DIR: str = "models/apple-sharp"
+    MEMORY3D_SHARP_SOURCE_DIR: str = "models/apple-ml-sharp"
+    MEMORY3D_DEVICE: str = "auto"
+    MEMORY3D_SHARP_COMMAND: str = "sharp"
+    MEMORY3D_MAX_IMAGE_MB: int = 20
+    MEMORY3D_ALLOWED_EXTENSIONS: str = ".jpg,.jpeg,.png,.webp"
+
     MODEL_ASR_NAME: str = "Whisper"
     MODEL_ASR_PATH: str = "large-v3"
     WHISPER_DOWNLOAD_DIR: str = "./models/whisper-cache"

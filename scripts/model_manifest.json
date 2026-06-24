@@ -44,6 +44,23 @@
       ]
     },
     {
+      "name": "Apple Sharp 3D memory checkpoint",
+      "type": "direct_file",
+      "repo_id": "apple/Sharp",
+      "filename": "sharp_2572gikvuh.pt",
+      "target_dir": "models/apple-sharp",
+      "sha256": "94211a75198c47f61fca7d739ba08a215418d8d398d48fddf023baccc24f073d",
+      "required_files": [
+        "sharp_2572gikvuh.pt"
+      ],
+      "alias_files": [
+        "hub/checkpoints/sharp_2572gikvuh.pt"
+      ],
+      "fallback_urls": [
+        "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
+      ]
+    },
+    {
       "name": "whisper-base-runtime",
       "type": "openai_whisper",
       "model_name": "base",

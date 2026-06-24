@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from app.api import admin, auth, chat, interact, kb, scenic
+from app.api import admin, auth, chat, interact, kb, memory3d, scenic
 from app.core.chroma_telemetry import disable_chroma_telemetry
 from app.core.config import resolve_path, settings
 from app.core.runtime import FRONTEND_DIST_ASSETS, FRONTEND_DIST_INDEX, frontend_build_ready
@@ -91,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router, tags=["Scenic Chat API"])
     app.include_router(interact.router, prefix="/api", tags=["Multimodal Interaction"])
     app.include_router(scenic.router, prefix="/api/v1/scenic", tags=["Scenic Product APIs"])
+    app.include_router(memory3d.router, prefix="/api/v1/memory3d", tags=["3D Memory"])
     app.include_router(kb.router, prefix="/api/v1/kb", tags=["Knowledge Base Management"])
     app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin Dashboard"])
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])

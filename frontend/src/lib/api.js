@@ -196,3 +196,58 @@ export function uploadAvatar(file) {
     body: formData,
   });
 }
+
+export function fetchMemory3DStatus() {
+  return request("/api/v1/memory3d/status", { headers: authHeaders() });
+}
+
+export function fetchMemory3DGallery() {
+  return request("/api/v1/memory3d/gallery", { headers: authHeaders() });
+}
+
+export function fetchMemory3DTasks() {
+  return request("/api/v1/memory3d/tasks", { headers: authHeaders() });
+}
+
+export function generateMemory3D(files) {
+  const formData = new FormData();
+  Array.from(files || []).forEach((file) => {
+    formData.append("file", file);
+  });
+  return request("/api/v1/memory3d/generate", {
+    method: "POST",
+    headers: authHeaders(),
+    body: formData,
+  });
+}
+
+export function cancelMemory3DTask(taskId) {
+  return request(`/api/v1/memory3d/tasks/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+}
+
+export function deleteMemory3DModel(itemId) {
+  return request(`/api/v1/memory3d/models/${encodeURIComponent(itemId)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+}
+
+export function updateMemory3DModelName(itemId, name) {
+  return request(`/api/v1/memory3d/models/${encodeURIComponent(itemId)}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function fetchMemory3DBlob(url) {
+  const response = await fetch(url, { headers: authHeaders() });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Failed to load 3D memory asset");
+  }
+  return response.blob();
+}

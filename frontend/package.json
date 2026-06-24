@@ -10,8 +10,11 @@
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "^7.2.0",
+    "@sparkjsdev/spark": "^2.1.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "three": "^0.184.0",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",

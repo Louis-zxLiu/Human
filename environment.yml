@@ -52,6 +52,7 @@ dependencies:
       - imageio-ffmpeg
       - opencc-python-reimplemented
       - scikit-image
+      - plyfile
       - decord
       - loguru
       - easydict

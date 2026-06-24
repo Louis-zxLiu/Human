@@ -201,3 +201,30 @@ conda run -p "D:/Human/env" python -m app.cli eval-unified --report reports/unif
 - [docs/submission/01_部署和使用手册.md](/D:/Human/docs/submission/01_部署和使用手册.md)
 - [docs/submission/02_产品总体设计文档.md](/D:/Human/docs/submission/02_产品总体设计文档.md)
 - [docs/submission/05_测试评测报告.md](/D:/Human/docs/submission/05_测试评测报告.md)
+
+## 3D记忆部署说明
+
+`bootstrap_windows.bat` 会通过 `app.cli bootstrap` 自动配置 3D 记忆运行时：安装 Apple ML-Sharp CLI，并进入统一模型下载流程，使用 `HF_ENDPOINT`（默认 `https://hf-mirror.com`）下载 3D 记忆所需的 Apple Sharp checkpoint。
+
+- 模型保存位置：`models/apple-sharp/sharp_2572gikvuh.pt`
+- Torch Hub 兼容副本：`models/apple-sharp/hub/checkpoints/sharp_2572gikvuh.pt`
+- Apple ML-Sharp 源码位置：`models/apple-ml-sharp`
+- 生成结果工作区：`data/3d_memory`
+
+如需调整，可在 `.env` 中配置：
+
+```env
+MEMORY3D_WORKSPACE_DIR=data/3d_memory
+MEMORY3D_MODEL_DIR=models/apple-sharp
+MEMORY3D_SHARP_SOURCE_DIR=models/apple-ml-sharp
+MEMORY3D_SHARP_COMMAND=sharp
+MEMORY3D_DEVICE=auto
+```
+
+页面入口为 `/memory-3d`。上传和预览接口需要登录，未登录访问会引导到登录页。
+
+如果页面提示未找到 Sharp CLI，可单独运行：
+
+```bat
+conda run -p "D:/Human/env" python -m app.cli memory3d-runtime
+```

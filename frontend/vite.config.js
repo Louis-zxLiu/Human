@@ -7,6 +7,14 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "../app/static/dist"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "three-vendor": ["three"],
+          "spark-vendor": ["@sparkjsdev/spark"],
+        },
+      },
+    },
   },
   server: {
     host: "0.0.0.0",

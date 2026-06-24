@@ -22,6 +22,8 @@ def default_runtime_status() -> Dict[str, Any]:
         "updated_at": None,
         "conda_env_ready": False,
         "models_ready": False,
+        "memory3d_models_ready": False,
+        "memory3d_runtime_ready": False,
         "behavior_db_ready": False,
         "knowledge_base_ready": False,
         "frontend_built": False,

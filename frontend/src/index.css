@@ -10230,3 +10230,469 @@ select.input-field option:disabled {
     animation: none !important;
   }
 }
+
+.mem3d-page {
+  min-height: 100vh;
+  padding: 24px 18px 32px;
+}
+
+.mem3d-shell {
+  display: grid;
+  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  gap: 18px;
+  min-height: calc(100vh - 128px);
+}
+
+.mem3d-sidebar,
+.mem3d-stage,
+.mem3d-login {
+  border-radius: 26px;
+}
+
+.mem3d-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mem3d-intro {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.mem3d-intro h1,
+.mem3d-stage__header h2,
+.mem3d-login h1 {
+  margin: 4px 0 0;
+}
+
+.mem3d-intro span:not(.mem3d-status-dot),
+.mem3d-login p,
+.mem3d-empty-copy {
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.mem3d-status-dot {
+  width: 12px;
+  height: 12px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: #ff7a59;
+  box-shadow: 0 0 0 6px rgba(255, 122, 89, 0.12);
+}
+
+.mem3d-status-dot.is-ready {
+  background: #2fd6a4;
+  box-shadow: 0 0 0 6px rgba(47, 214, 164, 0.12);
+}
+
+.mem3d-upload {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  padding: 22px;
+  border-radius: 22px;
+  border: 1px dashed rgba(85, 198, 255, 0.38);
+  background:
+    radial-gradient(circle at top left, rgba(85, 198, 255, 0.14), transparent 36%),
+    rgba(255, 255, 255, 0.045);
+}
+
+.mem3d-upload.is-dragging {
+  border-color: rgba(47, 214, 164, 0.7);
+  background: rgba(47, 214, 164, 0.09);
+}
+
+.mem3d-upload.is-disabled {
+  opacity: 0.68;
+}
+
+.mem3d-upload > i {
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 16px;
+  color: #b9ebff;
+  background: rgba(85, 198, 255, 0.13);
+}
+
+.mem3d-upload strong,
+.mem3d-section__title strong,
+.mem3d-model strong,
+.mem3d-task strong {
+  color: var(--text);
+}
+
+.mem3d-upload span {
+  color: var(--text-muted);
+  line-height: 1.55;
+  font-size: 14px;
+}
+
+.mem3d-section {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+}
+
+.mem3d-section--models {
+  flex: 0 0 auto;
+}
+
+.mem3d-section__title,
+.mem3d-stage__header,
+.mem3d-stage__meta,
+.mem3d-task__top,
+.mem3d-task__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mem3d-section__title span,
+.mem3d-stage__meta span,
+.mem3d-task__top span {
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: #b9ebff;
+  background: rgba(85, 198, 255, 0.1);
+  border: 1px solid rgba(85, 198, 255, 0.18);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mem3d-task-list,
+.mem3d-model-list {
+  display: grid;
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.mem3d-task-list {
+  max-height: 250px;
+}
+
+.mem3d-model-list {
+  min-height: 0;
+  max-height: 260px;
+  align-content: start;
+}
+
+.mem3d-task {
+  display: grid;
+  gap: 9px;
+  padding: 13px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mem3d-task__top strong,
+.mem3d-model strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mem3d-task__bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mem3d-task__bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #55c6ff, #2fd6a4);
+  transition: width 220ms ease;
+}
+
+.mem3d-task__meta small {
+  color: var(--text-faint);
+}
+
+.mem3d-task__meta button {
+  padding: 0;
+  color: #ffb09c;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mem3d-task p {
+  margin: 0;
+  color: #ffc6bb;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mem3d-model {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 18px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  text-align: left;
+}
+
+.mem3d-model:hover,
+.mem3d-model.is-active {
+  border-color: rgba(85, 198, 255, 0.42);
+  background: rgba(85, 198, 255, 0.08);
+}
+
+.mem3d-model__thumb,
+.mem3d-thumb-placeholder {
+  width: 62px;
+  height: 62px;
+  border-radius: 14px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mem3d-thumb-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+}
+
+.mem3d-model__body {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mem3d-model__name-input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border-radius: 10px;
+  border: 1px solid rgba(85, 198, 255, 0.42);
+  color: var(--text);
+  background: rgba(4, 14, 28, 0.72);
+  padding: 0 9px;
+  outline: none;
+  font-weight: 700;
+}
+
+.mem3d-model small {
+  color: var(--text-muted);
+}
+
+.mem3d-model__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mem3d-model__icon,
+.mem3d-model__delete {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--text-faint);
+}
+
+.mem3d-model__icon:hover {
+  color: #b9ebff;
+  background: rgba(85, 198, 255, 0.1);
+}
+
+.mem3d-model__delete:hover {
+  color: #ffb09c;
+  background: rgba(255, 122, 89, 0.1);
+}
+
+.mem3d-stage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 620px;
+  overflow: hidden;
+}
+
+.mem3d-stage__header {
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mem3d-stage__meta {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mem3d-viewer {
+  position: relative;
+  min-height: 0;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(85, 198, 255, 0.12), transparent 34%),
+    radial-gradient(circle at 70% 70%, rgba(47, 214, 164, 0.1), transparent 30%),
+    rgba(5, 12, 22, 0.58);
+}
+
+.mem3d-viewer__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.mem3d-viewer__canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.mem3d-viewer__empty,
+.mem3d-viewer__overlay,
+.mem3d-viewer__error {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+}
+
+.mem3d-viewer__empty {
+  width: min(420px, calc(100% - 40px));
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.mem3d-viewer__empty i {
+  font-size: 42px;
+  color: #55c6ff;
+}
+
+.mem3d-viewer__empty strong {
+  color: var(--text);
+  font-size: 22px;
+}
+
+.mem3d-viewer__overlay,
+.mem3d-viewer__error {
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgba(8, 16, 26, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  backdrop-filter: blur(16px);
+}
+
+.mem3d-viewer__error {
+  color: #ffc6bb;
+  border-color: rgba(255, 122, 89, 0.24);
+}
+
+.mem3d-viewer__toolbar {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 18px;
+  background: rgba(8, 16, 26, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(16px);
+}
+
+.mem3d-viewer__toolbar button {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.mem3d-viewer__toolbar button:hover,
+.mem3d-viewer__toolbar button.is-active {
+  color: #061323;
+  background: #55c6ff;
+}
+
+.mem3d-viewer__toolbar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mem3d-login {
+  display: grid;
+  gap: 16px;
+  justify-items: start;
+  max-width: 760px;
+  margin: 42px auto 0;
+  padding: 34px;
+}
+
+.mem3d-login > i {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  color: #b9ebff;
+  background: rgba(85, 198, 255, 0.12);
+}
+
+@media (max-width: 1080px) {
+  .mem3d-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .mem3d-stage {
+    min-height: 58vh;
+  }
+}
+
+@media (max-width: 720px) {
+  .mem3d-page {
+    padding: 14px 10px 24px;
+  }
+
+  .mem3d-sidebar,
+  .mem3d-stage,
+  .mem3d-login {
+    border-radius: 20px;
+  }
+
+  .mem3d-stage__header {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 18px;
+  }
+
+  .mem3d-model {
+    grid-template-columns: 54px minmax(0, 1fr) 32px;
+  }
+
+  .mem3d-model__thumb,
+  .mem3d-thumb-placeholder {
+    width: 54px;
+    height: 54px;
+  }
+}
