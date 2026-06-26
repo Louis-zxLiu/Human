@@ -41,12 +41,13 @@ function useReveal(deps = []) {
 }
 
 /* ─── small hook: tilt-card mouse tracking ─── */
-function useTilt() {
+function useTilt(deps = []) {
   const ref = useRef(null);
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
     const cards = root.querySelectorAll(".sat-tilt-card");
+    const listeners = [];
     cards.forEach((card) => {
       const onMove = (e) => {
         const r = card.getBoundingClientRect();
@@ -64,18 +65,26 @@ function useTilt() {
       };
       card.addEventListener("mousemove", onMove);
       card.addEventListener("mouseleave", onLeave);
+      listeners.push([card, onMove, onLeave]);
     });
-  }, []);
+    return () => {
+      listeners.forEach(([card, onMove, onLeave]) => {
+        card.removeEventListener("mousemove", onMove);
+        card.removeEventListener("mouseleave", onLeave);
+      });
+    };
+  }, deps);
   return ref;
 }
 
 /* ─── small hook: magnetic button ─── */
-function useMagnetic() {
+function useMagnetic(deps = []) {
   const ref = useRef(null);
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
     const btns = root.querySelectorAll(".sat-magnetic-btn");
+    const listeners = [];
     btns.forEach((btn) => {
       const onMove = (e) => {
         const r = btn.getBoundingClientRect();
@@ -88,13 +97,20 @@ function useMagnetic() {
       };
       btn.addEventListener("mousemove", onMove);
       btn.addEventListener("mouseleave", onLeave);
+      listeners.push([btn, onMove, onLeave]);
     });
-  }, []);
+    return () => {
+      listeners.forEach(([btn, onMove, onLeave]) => {
+        btn.removeEventListener("mousemove", onMove);
+        btn.removeEventListener("mouseleave", onLeave);
+      });
+    };
+  }, deps);
   return ref;
 }
 
 /* ─── small hook: gallery parallax ─── */
-function useGalleryParallax() {
+function useGalleryParallax(deps = []) {
   const ref = useRef(null);
   useEffect(() => {
     const root = ref.current;
@@ -123,12 +139,12 @@ function useGalleryParallax() {
         item.removeEventListener("mouseleave", onLeave);
       });
     };
-  }, []);
+  }, deps);
   return ref;
 }
 
 /* ─── small hook: hero parallax on scroll ─── */
-function useHeroParallax() {
+function useHeroParallax(deps = []) {
   const imgRef = useRef(null);
   useEffect(() => {
     const img = imgRef.current;
@@ -149,12 +165,12 @@ function useHeroParallax() {
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, []);
+  }, deps);
   return imgRef;
 }
 
 /* ─── small hook: cursor glow ─── */
-function useCursorGlow() {
+function useCursorGlow(deps = []) {
   const glowRef = useRef(null);
   useEffect(() => {
     const glow = glowRef.current;
@@ -166,6 +182,10 @@ function useCursorGlow() {
     const onMove = (e) => {
       mx = e.clientX;
       my = e.clientY;
+      glow.style.opacity = "1";
+    };
+    const onLeave = () => {
+      glow.style.opacity = "0";
     };
     let raf;
     const tick = () => {
@@ -176,17 +196,19 @@ function useCursorGlow() {
       raf = requestAnimationFrame(tick);
     };
     document.addEventListener("mousemove", onMove, { passive: true });
+    document.addEventListener("mouseleave", onLeave);
     tick();
     return () => {
       document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseleave", onLeave);
       cancelAnimationFrame(raf);
     };
-  }, []);
+  }, deps);
   return glowRef;
 }
 
 /* ─── small hook: particle canvas ─── */
-function useParticleCanvas() {
+function useParticleCanvas(deps = []) {
   const canvasRef = useRef(null);
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -234,7 +256,7 @@ function useParticleCanvas() {
       window.removeEventListener("resize", resize);
       cancelAnimationFrame(raf);
     };
-  }, []);
+  }, deps);
   return canvasRef;
 }
 
@@ -271,12 +293,13 @@ export function ScenicAttractionApp({ attractionId }) {
 
   /* animation hooks */
   const revealRef = useReveal([loading, attraction?.attractionId]);
-  const tiltRef = useTilt();
-  const magneticRef = useMagnetic();
-  const galleryParallaxRef = useGalleryParallax();
-  const heroImgRef = useHeroParallax();
-  const glowRef = useCursorGlow();
-  const particleRef = useParticleCanvas();
+  const animationDeps = [loading, attraction?.attractionId];
+  const tiltRef = useTilt(animationDeps);
+  const magneticRef = useMagnetic(animationDeps);
+  const galleryParallaxRef = useGalleryParallax(animationDeps);
+  const heroImgRef = useHeroParallax(animationDeps);
+  const glowRef = useCursorGlow(animationDeps);
+  const particleRef = useParticleCanvas(animationDeps);
 
   const guideHref = useCallback(
     (prompt) => {
@@ -295,7 +318,9 @@ export function ScenicAttractionApp({ attractionId }) {
   /* ─── loading state ─── */
   if (loading) {
     return (
-      <div className="product-page">
+      <div className="sat-page product-page">
+        <canvas ref={particleRef} className="sat-particle-canvas" />
+        <div ref={glowRef} className="sat-cursor-glow" />
         <div className="page-container">
           <ProductHeader />
           <div className="loading-row">正在加载景点详情...</div>
@@ -307,7 +332,9 @@ export function ScenicAttractionApp({ attractionId }) {
   /* ─── error / empty state ─── */
   if (!attraction) {
     return (
-      <div className="product-page">
+      <div className="sat-page product-page">
+        <canvas ref={particleRef} className="sat-particle-canvas" />
+        <div ref={glowRef} className="sat-cursor-glow" />
         <div className="page-container">
           <ProductHeader />
           <div className="feedback feedback-danger">
@@ -376,7 +403,7 @@ export function ScenicAttractionApp({ attractionId }) {
   const galleryItems = Array.isArray(attraction.gallery) ? attraction.gallery : [];
 
   return (
-    <div className="sat-page">
+    <div className="sat-page product-page">
       {/* Particle Canvas */}
       <canvas ref={particleRef} className="sat-particle-canvas" />
       {/* Cursor Glow */}

@@ -3303,11 +3303,11 @@ select.input-field option:disabled {
 
 /* ── Right Panel ── */
 .lp-right {
-  width: 520px;
+  width: clamp(560px, 36vw, 680px);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 48px 64px;
+  padding: 48px clamp(64px, 5vw, 88px);
   background: #0c2340;
   position: relative;
 }
@@ -3567,7 +3567,7 @@ select.input-field option:disabled {
   border: none;
   color: #f59e0b;
   font-weight: 500;
-  font-size: 14px;
+  font-size: 15px;
   font-family: inherit;
   cursor: pointer;
   padding: 0;
@@ -5463,7 +5463,7 @@ select.input-field option:disabled {
   padding: 80px 0;
 }
 .sa-section__inner {
-  max-width: 1152px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 0 24px;
 }
@@ -5510,15 +5510,15 @@ select.input-field option:disabled {
   margin-bottom: 48px;
 }
 .sa-section-title {
-  font-size: 1.75rem;
+  font-size: 2rem;
   font-weight: 700;
   color: white;
   margin-bottom: 0.5rem;
 }
 .sa-section-subtitle {
-  font-size: 0.9rem;
+  font-size: 1rem;
   color: var(--sa-text-secondary);
-  max-width: 560px;
+  max-width: 680px;
   margin: 0 auto;
 }
 .sa-section-bar {
@@ -5695,7 +5695,7 @@ select.input-field option:disabled {
   align-items: center;
 }
 .sa-overview-text__body {
-  font-size: 0.875rem;
+  font-size: 1rem;
   line-height: 1.9;
   color: var(--sa-text-secondary);
 }
@@ -5854,57 +5854,75 @@ select.input-field option:disabled {
 
 /* ── Attractions List ── */
 .sa-attractions-list {
-  max-width: 896px;
+  max-width: 1320px;
   margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 22px;
 }
 .sa-attraction-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(168px, 0.42fr) minmax(0, 1fr);
   gap: 20px;
-  padding: 20px 0;
-  border-bottom: 1px solid var(--sa-border);
+  min-height: 190px;
+  padding: 18px;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius);
+  background:
+    linear-gradient(135deg, rgba(19, 46, 91, 0.72), rgba(15, 35, 68, 0.52)),
+    rgba(255, 255, 255, 0.025);
   text-decoration: none;
   color: inherit;
-  transition: all 0.2s ease;
-  align-items: center;
+  transition:
+    transform 0.24s ease,
+    border-color 0.24s ease,
+    box-shadow 0.24s ease,
+    background 0.24s ease;
+  align-items: stretch;
   position: relative;
+  overflow: hidden;
 }
 .sa-attraction-row:last-child {
-  border-bottom: none;
+  border-bottom: 1px solid var(--sa-border);
 }
 .sa-attraction-row:hover {
-  background: rgba(19, 46, 91, 0.5);
-  padding-left: 12px;
-  padding-right: 12px;
-  margin-left: -12px;
-  margin-right: -12px;
-  border-radius: var(--sa-radius);
+  transform: translateY(-4px);
+  border-color: rgba(245, 158, 11, 0.36);
+  background:
+    linear-gradient(135deg, rgba(19, 46, 91, 0.86), rgba(21, 60, 80, 0.56)),
+    rgba(245, 158, 11, 0.045);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
 }
 .sa-attraction-thumb {
-  width: 120px;
-  height: 80px;
-  border-radius: 8px;
+  width: 100%;
+  height: 100%;
+  min-height: 154px;
+  border-radius: 12px;
   object-fit: cover;
-  flex-shrink: 0;
 }
 .sa-attraction-row__body {
-  flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 .sa-attraction-row__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 .sa-attraction-row__name {
-  font-size: 1rem;
+  font-size: 1.15rem;
   font-weight: 700;
   color: white;
+  line-height: 1.35;
 }
 .sa-attraction-row__desc {
-  font-size: 0.875rem;
+  font-size: 0.98rem;
   color: var(--sa-text-secondary);
-  margin-bottom: 8px;
+  line-height: 1.75;
+  margin-bottom: 14px;
 }
 .sa-id-badge {
   display: inline-block;
@@ -5915,6 +5933,8 @@ select.input-field option:disabled {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.5px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .sa-detail-link {
   color: var(--sa-amber);
@@ -5922,6 +5942,7 @@ select.input-field option:disabled {
   font-weight: 600;
   text-decoration: none;
   transition: all 0.2s ease;
+  margin-top: auto;
 }
 .sa-detail-link:hover {
   color: var(--sa-coral);
@@ -6098,6 +6119,9 @@ select.input-field option:disabled {
   .sa-exp-grid {
     grid-template-columns: 1fr 1fr;
   }
+  .sa-attractions-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .sa-gallery-item {
     flex-basis: clamp(240px, 24vw, 380px);
   }
@@ -6130,12 +6154,13 @@ select.input-field option:disabled {
     font-size: 2.25rem;
   }
   .sa-attraction-row {
-    flex-direction: column;
-    align-items: flex-start;
+    grid-template-columns: 1fr;
+    min-height: 0;
   }
   .sa-attraction-thumb {
     width: 100%;
     height: 180px;
+    min-height: 180px;
   }
   .sa-exp-card {
     height: 220px;
@@ -7780,7 +7805,35 @@ select.input-field option:disabled {
 /* ─── Page wrapper ─── */
 .sat-page {
   position: relative;
+  min-height: 100vh;
   overflow: hidden;
+  isolation: isolate;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at 14% 10%, rgba(245, 158, 11, 0.14), transparent 30%),
+    radial-gradient(circle at 78% 18%, rgba(20, 184, 166, 0.16), transparent 34%),
+    radial-gradient(circle at 50% 78%, rgba(56, 189, 248, 0.1), transparent 36%),
+    linear-gradient(180deg, #0c2340 0%, #0f2747 44%, #0c2340 100%);
+}
+
+.sat-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(120deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 72px),
+    linear-gradient(30deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 96px);
+  background-size: 144px 144px, 192px 192px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.65), transparent 72%);
+  opacity: 0.55;
+  animation: sat-bg-drift 22s linear infinite alternate;
+}
+
+.sat-page > :not(.sat-particle-canvas):not(.sat-cursor-glow) {
+  position: relative;
+  z-index: 2;
 }
 
 /* ─── Particle Canvas ─── */
@@ -7797,14 +7850,25 @@ select.input-field option:disabled {
 /* ─── Cursor Glow ─── */
 .sat-cursor-glow {
   position: fixed;
-  width: 350px;
-  height: 350px;
+  width: 400px;
+  height: 400px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(245, 158, 11, 0.05) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.06) 0%, transparent 70%);
   pointer-events: none;
   z-index: 1;
   transform: translate(-50%, -50%);
+  transition: opacity 0.3s ease;
+  opacity: 0;
   will-change: transform;
+}
+
+@keyframes sat-bg-drift {
+  from {
+    background-position: 0 0, 0 0;
+  }
+  to {
+    background-position: 96px 64px, -80px 112px;
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -7878,7 +7942,27 @@ select.input-field option:disabled {
   gap: 40px;
   padding: 48px 32px;
   max-width: 1200px;
-  margin: 0 auto;
+  margin: 24px auto 16px;
+  background:
+    radial-gradient(circle at 82% 16%, rgba(56, 189, 248, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(19, 46, 91, 0.68), rgba(12, 35, 64, 0.42)),
+    rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(85, 198, 255, 0.14);
+  border-radius: 18px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.sat-highlights,
+.sat-questions,
+.sat-actions {
+  background: transparent;
+}
+
+.sat-cultural,
+.sat-gallery {
+  margin-block: 12px;
 }
 .sat-info-text h2 {
   font-size: 1.5rem;
@@ -7898,13 +7982,15 @@ select.input-field option:disabled {
   gap: 16px;
 }
 .sat-fact-card {
-  background: #132e5b;
+  background:
+    linear-gradient(135deg, rgba(19, 46, 91, 0.78), rgba(20, 184, 166, 0.1)),
+    rgba(255, 255, 255, 0.045);
   border-radius: 12px;
   padding: 20px;
   display: flex;
   align-items: center;
   gap: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(85, 198, 255, 0.14);
   transition: transform 0.2s, box-shadow 0.2s;
   position: relative;
   overflow: hidden;
@@ -7954,12 +8040,18 @@ select.input-field option:disabled {
    Cultural Section
    ═══════════════════════════════════════════ */
 .sat-cultural {
-  background: rgba(20, 184, 166, 0.06);
-  border-top: 1px solid rgba(20, 184, 166, 0.12);
-  border-bottom: 1px solid rgba(20, 184, 166, 0.12);
+  background:
+    radial-gradient(circle at 82% 20%, rgba(20, 184, 166, 0.16), transparent 38%),
+    linear-gradient(135deg, rgba(19, 46, 91, 0.72), rgba(12, 35, 64, 0.42)),
+    rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(20, 184, 166, 0.16);
+  border-radius: 18px;
   padding: 56px 32px;
   max-width: 1200px;
-  margin: 0 auto;
+  margin: 16px auto;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 .sat-cultural h2 {
   font-size: 1.5rem;
@@ -8018,10 +8110,12 @@ select.input-field option:disabled {
   gap: 20px;
 }
 .sat-highlight-card {
-  background: #132e5b;
+  background:
+    linear-gradient(135deg, rgba(19, 46, 91, 0.76), rgba(245, 158, 11, 0.06)),
+    rgba(255, 255, 255, 0.04);
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(85, 198, 255, 0.14);
   transition: transform 0.2s, box-shadow 0.2s;
   position: relative;
 }
@@ -8064,12 +8158,18 @@ select.input-field option:disabled {
    Gallery
    ═══════════════════════════════════════════ */
 .sat-gallery {
-  background: rgba(249, 115, 22, 0.06);
-  border-top: 1px solid rgba(249, 115, 22, 0.12);
-  border-bottom: 1px solid rgba(249, 115, 22, 0.12);
+  background:
+    radial-gradient(circle at 16% 20%, rgba(245, 158, 11, 0.14), transparent 36%),
+    linear-gradient(135deg, rgba(19, 46, 91, 0.7), rgba(12, 35, 64, 0.44)),
+    rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(249, 115, 22, 0.16);
+  border-radius: 18px;
   padding: 56px 32px;
   max-width: 1200px;
-  margin: 0 auto;
+  margin: 16px auto;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 .sat-gallery h2 {
   font-size: 1.5rem;
@@ -8525,7 +8625,7 @@ select.input-field option:disabled {
 }
 
 .vis-nav__link {
-  font-size: 14px;
+  font-size: 15px;
   color: #94a3b8;
   transition: color 0.2s ease;
   text-decoration: none;
@@ -8554,8 +8654,8 @@ select.input-field option:disabled {
 }
 
 .vis-nav__icon-btn {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border-radius: 8px;
   background: #1e293b;
   display: flex;
@@ -8573,8 +8673,8 @@ select.input-field option:disabled {
 }
 
 .vis-nav__avatar {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   background: #f59e0b;
   display: flex;
@@ -8603,7 +8703,7 @@ select.input-field option:disabled {
 /* --- Left Sidebar --- */
 .vis-left-sidebar {
   order: 1;
-  width: clamp(240px, 15vw, 300px);
+  width: clamp(250px, 16vw, 320px);
   background: rgba(30, 41, 59, 0.6);
   border-right: 1px solid rgba(51, 65, 85, 0.5);
   display: flex;
@@ -8615,7 +8715,7 @@ select.input-field option:disabled {
 .vis-left-sidebar__label {
   padding: 0 16px;
   margin-bottom: 16px;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   font-weight: 600;
   text-transform: uppercase;
@@ -8641,7 +8741,7 @@ select.input-field option:disabled {
   border: none;
   background: transparent;
   color: #94a3b8;
-  font-size: 14px;
+  font-size: 15px;
   font-family: inherit;
   position: relative;
   overflow: hidden;
@@ -8670,7 +8770,7 @@ select.input-field option:disabled {
 }
 
 .vis-sidebar-item__icon {
-  font-size: 16px;
+  font-size: 17px;
   width: 20px;
   text-align: center;
   flex-shrink: 0;
@@ -8716,17 +8816,17 @@ select.input-field option:disabled {
 
 .vis-sidebar-vip-card__icon {
   color: #f59e0b;
-  font-size: 12px;
+  font-size: 15px;
 }
 
 .vis-sidebar-vip-card__title {
-  font-size: 12px;
+  font-size: 14px;
   color: #f59e0b;
   font-weight: 600;
 }
 
 .vis-sidebar-vip-card__text {
-  font-size: 11px;
+  font-size: 13px;
   color: #94a3b8;
   line-height: 1.6;
 }
@@ -8746,14 +8846,14 @@ select.input-field option:disabled {
 .vis-digital-human {
   flex: 1;
   position: relative;
-  --vis-avatar-stage-size: min(calc(80vh - 168px), 69.6vh, 816px, calc(80vw - 608px));
+  --vis-avatar-stage-size: min(calc(91vh - 130px), 82vh, 980px, calc(92vw - 584px));
   overflow: hidden;
   min-height: 300px;
   display: flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  padding: clamp(132px, 16vh, 176px) clamp(18px, 3vw, 40px) clamp(70px, 9vh, 96px);
+  padding: clamp(104px, 12vh, 136px) clamp(16px, 2.4vw, 34px) clamp(44px, 6vh, 68px);
   isolation: isolate;
   animation: vis-subtlePulse 4s ease-in-out infinite;
 }
@@ -8789,7 +8889,7 @@ select.input-field option:disabled {
   display: block;
   border-radius: 14px;
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.32);
-  z-index: 1;
+  z-index: 4;
 }
 
 .vis-digital-human__overlay-top {
@@ -8830,7 +8930,7 @@ select.input-field option:disabled {
 .vis-gradient-border-inner {
   background: #0c2340;
   border-radius: 11px;
-  padding: 6px 12px;
+  padding: 8px 14px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -8838,11 +8938,11 @@ select.input-field option:disabled {
 
 .vis-gradient-border-inner__icon {
   color: #14b8a6;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .vis-gradient-border-inner__text {
-  font-size: 12px;
+  font-size: 13px;
   color: #14b8a6;
   font-weight: 500;
 }
@@ -8859,8 +8959,8 @@ select.input-field option:disabled {
 }
 
 .vis-digital-human__ctrl-btn {
-  width: 36px;
-  height: 36px;
+  width: 42px;
+  height: 42px;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(4px);
@@ -8871,7 +8971,7 @@ select.input-field option:disabled {
   color: rgba(255, 255, 255, 0.7);
   border: none;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
   transition: all 0.2s ease;
 }
 
@@ -8882,12 +8982,16 @@ select.input-field option:disabled {
 
 .vis-digital-human__gps-toggle {
   width: auto;
-  min-width: 108px;
-  padding: 0 14px;
-  gap: 8px;
-  border-radius: 10px;
+  min-width: 158px;
+  height: 50px;
+  padding: 0 22px;
+  gap: 10px;
+  border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
 }
 
 .vis-digital-human__gps-toggle.is-normal {
@@ -8905,7 +9009,7 @@ select.input-field option:disabled {
 }
 
 .vis-digital-human__gps-toggle-text {
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -8919,8 +9023,8 @@ select.input-field option:disabled {
   background: linear-gradient(to top, rgba(12, 35, 64, 0.92), rgba(12, 35, 64, 0.52));
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  padding: 16px 24px;
-  z-index: 6;
+  padding: 18px 26px;
+  z-index: 8;
 }
 
 .vis-digital-human__bottom-inner {
@@ -8939,8 +9043,8 @@ select.input-field option:disabled {
 }
 
 .vis-digital-human__avatar {
-  width: 40px;
-  height: 40px;
+  width: 46px;
+  height: 46px;
   border-radius: 50%;
   background: linear-gradient(135deg, #f59e0b, #f97316);
   display: flex;
@@ -8954,7 +9058,8 @@ select.input-field option:disabled {
 .vis-digital-human__name {
   color: #fff;
   font-weight: 700;
-  font-size: 16px;
+  font-size: 18px;
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8970,8 +9075,8 @@ select.input-field option:disabled {
 }
 
 .vis-digital-human__status-dot {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: #34d399;
   animation: vis-pulseDot 2s ease-in-out infinite;
@@ -8984,13 +9089,13 @@ select.input-field option:disabled {
 
 .vis-digital-human__status-text {
   color: #34d399;
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 500;
 }
 
 .vis-digital-human__status-sub {
   color: #64748b;
-  font-size: 12px;
+  font-size: 13px;
   margin-left: 4px;
 }
 
@@ -9007,7 +9112,7 @@ select.input-field option:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
+  padding: 10px 18px;
   border-radius: 8px;
   background: rgba(245, 158, 11, 0.1);
   border: 1px solid rgba(245, 158, 11, 0.3);
@@ -9087,8 +9192,8 @@ select.input-field option:disabled {
 /* --- Right Panel: Chat --- */
 .vis-chat-panel {
   order: 2;
-  width: clamp(420px, 28vw, 560px);
-  min-width: 400px;
+  width: clamp(440px, 30vw, 600px);
+  min-width: 420px;
   display: flex;
   flex-direction: column;
   border-left: none;
@@ -9099,7 +9204,7 @@ select.input-field option:disabled {
 
 /* Chat Header */
 .vis-chat-header {
-  padding: 16px 20px;
+  padding: 18px 22px;
   border-bottom: 1px solid #1e293b;
   flex-shrink: 0;
 }
@@ -9118,8 +9223,8 @@ select.input-field option:disabled {
 }
 
 .vis-chat-header__icon {
-  width: 36px;
-  height: 36px;
+  width: 42px;
+  height: 42px;
   border-radius: 12px;
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(249, 115, 22, 0.2));
   border: 1px solid rgba(245, 158, 11, 0.3);
@@ -9127,23 +9232,25 @@ select.input-field option:disabled {
   align-items: center;
   justify-content: center;
   color: #f59e0b;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .vis-chat-header__title {
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 700;
   color: #fff;
+  line-height: 1.35;
 }
 
 .vis-chat-header__subtitle {
-  font-size: 11px;
+  font-size: 13px;
   color: #94a3b8;
+  margin-top: 2px;
 }
 
 .vis-chat-header__menu-btn {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -9153,7 +9260,7 @@ select.input-field option:disabled {
   background: transparent;
   cursor: pointer;
   transition: all 0.2s ease;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .vis-chat-header__menu-btn:hover {
@@ -9171,7 +9278,8 @@ select.input-field option:disabled {
 .vis-mode-tab {
   position: relative;
   padding-bottom: 8px;
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 700;
   cursor: pointer;
   background: transparent;
   border: none;
@@ -9204,15 +9312,31 @@ select.input-field option:disabled {
 .vis-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: 18px 22px;
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
+.vis-chat-panel .message-bubble {
+  gap: 13px;
+  padding: 20px;
+  border-radius: 22px;
+}
+
+.vis-chat-panel .message-role {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.vis-chat-panel .message-content {
+  font-size: 15px;
+  line-height: 1.82;
+}
+
 /* Quick Questions Strip */
 .vis-quick-strip {
-  padding: 12px 20px;
+  padding: 14px 22px;
   border-top: 1px solid #1e293b;
   display: flex;
   gap: 8px;
@@ -9222,8 +9346,8 @@ select.input-field option:disabled {
 
 .vis-quick-chip {
   flex-shrink: 0;
-  padding: 8px 14px;
-  font-size: 12px;
+  padding: 10px 16px;
+  font-size: 15px;
   color: #94a3b8;
   border: 1px solid rgba(245, 158, 11, 0.3);
   border-radius: 9999px;
@@ -9242,7 +9366,7 @@ select.input-field option:disabled {
 
 /* Input Area */
 .vis-input-area {
-  padding: 16px 20px;
+  padding: 18px 22px;
   border-top: 1px solid #1e293b;
   display: flex;
   align-items: center;
@@ -9251,8 +9375,8 @@ select.input-field option:disabled {
 }
 
 .vis-voice-btn {
-  width: 48px;
-  height: 48px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -9336,7 +9460,7 @@ select.input-field option:disabled {
   background: transparent;
   outline: none;
   border: none;
-  font-size: 14px;
+  font-size: 15px;
   color: #e2e8f0;
   padding: 12px 16px;
   font-family: inherit;
@@ -9347,8 +9471,8 @@ select.input-field option:disabled {
 }
 
 .vis-send-btn {
-  width: 48px;
-  height: 48px;
+  width: 52px;
+  height: 52px;
   background: #f59e0b;
   display: flex;
   align-items: center;
@@ -9358,7 +9482,7 @@ select.input-field option:disabled {
   transition: background 0.2s ease;
   border: none;
   color: #0c2340;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .vis-send-btn:hover {
@@ -9372,7 +9496,7 @@ select.input-field option:disabled {
 
 /* Recording state bar */
 .vis-recording-bar {
-  padding: 10px 20px;
+  padding: 12px 22px;
   background: rgba(249, 115, 22, 0.1);
   border-top: 1px solid rgba(249, 115, 22, 0.2);
   display: flex;
@@ -9391,7 +9515,7 @@ select.input-field option:disabled {
 }
 
 .vis-recording-bar__text {
-  font-size: 12px;
+  font-size: 14px;
   color: #f97316;
   font-weight: 600;
 }
@@ -9408,7 +9532,7 @@ select.input-field option:disabled {
   align-items: center;
   justify-content: center;
   gap: 32px;
-  padding: 12px 24px;
+  padding: 14px 26px;
 }
 
 .vis-stat-card {
@@ -9432,17 +9556,17 @@ select.input-field option:disabled {
 
 .vis-stat-card__icon {
   color: rgba(255, 255, 255, 0.8);
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .vis-stat-card__value {
-  font-size: 14px;
+  font-size: 16px;
   color: #fff;
   font-weight: 600;
 }
 
 .vis-stat-card__label {
-  font-size: 12px;
+  font-size: 13px;
   color: rgba(255, 255, 255, 0.7);
 }
 
@@ -9518,7 +9642,7 @@ select.input-field option:disabled {
 
 /* --- Process Panel (overlaid on center or in sidebar) --- */
 .vis-process-strip {
-  padding: 12px 24px;
+  padding: 14px 26px;
   background: rgba(12, 35, 64, 0.9);
   border-top: 1px solid #1e293b;
   flex-shrink: 0;
@@ -9526,12 +9650,12 @@ select.input-field option:disabled {
 
 .vis-center > .vis-process-strip {
   position: absolute;
-  top: clamp(18px, 2.8vh, 30px);
+  top: clamp(16px, 2.4vh, 26px);
   left: 50%;
-  width: min(calc(100% - clamp(32px, 8vw, 104px)), 760px);
+  width: min(calc(100% - clamp(28px, 6vw, 88px)), 820px);
   transform: translateX(-50%);
-  z-index: 8;
-  padding: 18px 24px;
+  z-index: 3;
+  padding: 16px 22px;
   border: 1px solid rgba(85, 198, 255, 0.18);
   border-radius: 18px;
   background:
@@ -9565,8 +9689,8 @@ select.input-field option:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 14px;
-  font-size: 16px;
+  margin-bottom: 12px;
+  font-size: 18px;
   color: #e2e8f0;
   font-weight: 800;
   position: relative;
@@ -9576,7 +9700,7 @@ select.input-field option:disabled {
 .vis-process-strip__question {
   font-weight: 600;
   color: #f59e0b;
-  font-size: 13px;
+  font-size: 14px;
   text-align: right;
   min-width: 0;
   overflow: hidden;
@@ -9594,24 +9718,29 @@ select.input-field option:disabled {
 
 .vis-process-step {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   min-width: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: #94a3b8;
 }
 
 .vis-process-step strong {
   display: block;
   color: #dbeafe;
-  font-size: 13px;
+  font-size: 15px;
   margin-bottom: 4px;
 }
 
 .vis-process-step small {
   display: block;
   color: #7f95b4;
+  font-size: 13px;
   line-height: 1.45;
+}
+
+.vis-center > .vis-process-strip .vis-process-step small {
+  display: none;
 }
 
 .vis-process-step--active {
@@ -9623,8 +9752,8 @@ select.input-field option:disabled {
 }
 
 .vis-process-step__dot {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   margin-top: 4px;
   border-radius: 50%;
   background: #334155;
@@ -9643,7 +9772,7 @@ select.input-field option:disabled {
 /* --- Media Stage (video/stream in center panel) --- */
 .vis-media-stage {
   position: absolute;
-  inset: clamp(132px, 16vh, 176px) clamp(18px, 3vw, 40px) clamp(70px, 9vh, 96px);
+  inset: clamp(104px, 12vh, 136px) clamp(16px, 2.4vw, 34px) clamp(44px, 6vh, 68px);
   z-index: 5;
   display: flex;
   align-items: center;
@@ -9675,17 +9804,17 @@ select.input-field option:disabled {
 
 .vis-media-stage__placeholder strong {
   color: #e2e8f0;
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .vis-media-stage__placeholder span {
-  font-size: 13px;
+  font-size: 16px;
 }
 
 /* --- Stream Notice --- */
 .vis-stream-notice {
   position: absolute;
-  bottom: 80px;
+  bottom: 92px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
@@ -9700,7 +9829,7 @@ select.input-field option:disabled {
 
 /* --- Context Bar --- */
 .vis-context-bar {
-  padding: 12px 20px;
+  padding: 14px 22px;
   background: rgba(12, 35, 64, 0.6);
   border-top: 1px solid rgba(51, 65, 85, 0.5);
   flex-shrink: 0;
@@ -9715,7 +9844,7 @@ select.input-field option:disabled {
 }
 
 .vis-context-bar__copy {
-  font-size: 12px;
+  font-size: 14px;
   color: #94a3b8;
   margin-bottom: 8px;
 }
@@ -9728,7 +9857,7 @@ select.input-field option:disabled {
 
 .vis-context-bar__links a {
   color: #f59e0b;
-  font-size: 12px;
+  font-size: 14px;
   text-decoration: none;
 }
 
@@ -9743,8 +9872,8 @@ select.input-field option:disabled {
 }
 
 .vis-context-chip {
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: 8px 14px;
+  font-size: 13px;
   color: #f59e0b;
   border: 1px solid rgba(245, 158, 11, 0.3);
   border-radius: 9999px;
@@ -9764,7 +9893,7 @@ select.input-field option:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 20px;
+  padding: 10px 22px;
   border-top: 1px solid #1e293b;
   flex-shrink: 0;
 }
@@ -9786,12 +9915,12 @@ select.input-field option:disabled {
 }
 
 .vis-btn-primary {
-  padding: 8px 16px;
+  padding: 9px 18px;
   background: #f59e0b;
   color: #0c2340;
   border: none;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   font-family: inherit;
@@ -9803,12 +9932,12 @@ select.input-field option:disabled {
 }
 
 .vis-btn-secondary {
-  padding: 8px 16px;
+  padding: 9px 18px;
   background: #1e293b;
   color: #94a3b8;
   border: 1px solid #334155;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   font-family: inherit;
   transition: all 0.2s ease;
@@ -9820,12 +9949,12 @@ select.input-field option:disabled {
 }
 
 .vis-btn-danger {
-  padding: 8px 16px;
+  padding: 9px 18px;
   background: rgba(239, 68, 68, 0.15);
   color: #ef4444;
   border: 1px solid rgba(239, 68, 68, 0.3);
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   font-family: inherit;
   transition: all 0.2s ease;
@@ -9858,7 +9987,7 @@ select.input-field option:disabled {
   display: block;
   width: 100%;
   padding: 10px 14px;
-  font-size: 13px;
+  font-size: 14px;
   color: #e2e8f0;
   background: transparent;
   border: none;
@@ -9883,7 +10012,7 @@ select.input-field option:disabled {
 
 /* --- Preset Tray --- */
 .vis-preset-tray {
-  padding: 12px 20px;
+  padding: 14px 22px;
   border-top: 1px solid #1e293b;
   flex-shrink: 0;
 }
@@ -9893,12 +10022,12 @@ select.input-field option:disabled {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 10px 14px;
+  padding: 14px 16px;
   background: rgba(245, 158, 11, 0.06);
   border: 1px solid rgba(245, 158, 11, 0.15);
   border-radius: 10px;
   color: #e2e8f0;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   font-family: inherit;
   transition: background 0.2s ease;
@@ -9910,13 +10039,13 @@ select.input-field option:disabled {
 
 .vis-preset-tray__toggle strong {
   display: block;
-  font-size: 13px;
+  font-size: 15px;
   margin-bottom: 2px;
 }
 
 .vis-preset-tray__toggle small {
   color: #94a3b8;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .vis-preset-tray__toggle b {
@@ -9939,12 +10068,12 @@ select.input-field option:disabled {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 14px;
+  padding: 12px 16px;
   background: rgba(20, 184, 166, 0.06);
   border: 1px solid rgba(20, 184, 166, 0.15);
   border-radius: 10px;
   color: #e2e8f0;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   font-family: inherit;
   text-align: left;
@@ -9956,7 +10085,7 @@ select.input-field option:disabled {
 }
 
 .vis-route-card__label {
-  font-size: 11px;
+  font-size: 12px;
   color: #14b8a6;
   font-weight: 600;
   text-transform: uppercase;
@@ -9964,17 +10093,17 @@ select.input-field option:disabled {
 }
 
 .vis-route-card strong {
-  font-size: 13px;
+  font-size: 15px;
   color: #fff;
 }
 
 .vis-route-card span {
-  font-size: 12px;
+  font-size: 13px;
   color: #94a3b8;
 }
 
 .vis-route-card em {
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   font-style: normal;
 }
@@ -9987,20 +10116,20 @@ select.input-field option:disabled {
 
 /* --- Read Only Banner --- */
 .vis-readonly-banner {
-  padding: 12px 16px;
+  padding: 14px 18px;
   background: rgba(100, 116, 139, 0.1);
   border: 1px solid rgba(100, 116, 139, 0.2);
   border-radius: 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: 14px;
   color: #94a3b8;
 }
 
 .vis-readonly-banner strong {
   color: #e2e8f0;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 /* --- Dialog Scrim --- */
@@ -10019,13 +10148,13 @@ select.input-field option:disabled {
   border: 1px solid #334155;
   border-radius: 16px;
   padding: 24px;
-  max-width: 400px;
+  max-width: 440px;
   width: 90%;
   box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
 }
 
 .vis-dialog-card__eyebrow {
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: #f59e0b;
@@ -10033,21 +10162,21 @@ select.input-field option:disabled {
 }
 
 .vis-dialog-card__title {
-  font-size: 18px;
+  font-size: 21px;
   font-weight: 700;
   color: #fff;
   margin-bottom: 8px;
 }
 
 .vis-dialog-card__copy {
-  font-size: 13px;
+  font-size: 15px;
   color: #94a3b8;
   line-height: 1.6;
   margin-bottom: 12px;
 }
 
 .vis-dialog-card__session-title {
-  font-size: 14px;
+  font-size: 15px;
   color: #f59e0b;
   font-weight: 600;
   padding: 8px 12px;
@@ -10067,9 +10196,9 @@ select.input-field option:disabled {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  padding: 5px 12px;
   border-radius: 9999px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -10104,14 +10233,14 @@ select.input-field option:disabled {
   align-items: center;
   gap: 10px;
   padding: 8px 0;
-  font-size: 13px;
+  font-size: 14px;
   color: #94a3b8;
 }
 
 /* --- Footnote --- */
 .vis-footnote {
-  padding: 12px 20px;
-  font-size: 11px;
+  padding: 14px 22px;
+  font-size: 12px;
   color: #64748b;
   line-height: 1.6;
   border-top: 1px solid rgba(51, 65, 85, 0.3);
@@ -10172,11 +10301,11 @@ select.input-field option:disabled {
     max-height: min(45vh, 630px);
   }
   .vis-digital-human {
-    --vis-avatar-stage-size: min(36vh, 552px, calc(80vw - 25.6px));
-    padding: 124px 16px 72px;
+    --vis-avatar-stage-size: min(39vh, 600px, calc(84vw - 24px));
+    padding: 116px 14px 64px;
   }
   .vis-media-stage {
-    inset: 124px 16px 72px;
+    inset: 116px 14px 64px;
   }
   .vis-media-stage__video,
   .vis-media-stage__frame {
@@ -10196,28 +10325,28 @@ select.input-field option:disabled {
     flex-direction: column;
     gap: 6px;
     margin-bottom: 10px;
-    font-size: 14px;
+    font-size: 15px;
   }
   .vis-process-strip__question {
     max-width: 100%;
     text-align: left;
-    font-size: 12px;
+    font-size: 13px;
   }
   .vis-process-steps {
     gap: 8px;
   }
   .vis-process-step {
     gap: 6px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .vis-process-step strong {
-    font-size: 11px;
+    font-size: 12px;
   }
   .vis-process-step small {
     display: none;
   }
   .vis-digital-human__bottom-bar {
-    padding: 12px 16px;
+    padding: 14px 16px;
   }
   .vis-digital-human__bottom-inner {
     align-items: flex-start;
