@@ -197,6 +197,38 @@ export function uploadAvatar(file) {
   });
 }
 
+export function fetchKBDocuments() {
+  return request("/api/v1/kb/list", { headers: authHeaders() });
+}
+
+export function uploadKBDocument(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request("/api/v1/kb/upload", {
+    method: "POST",
+    headers: authHeaders(),
+    body: formData,
+  });
+}
+
+export function deleteKBDocument(filename) {
+  return request(`/api/v1/kb/delete/${encodeURIComponent(filename)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+}
+
+export function rebuildKnowledgeBase() {
+  return request("/api/v1/kb/rebuild", {
+    method: "POST",
+    headers: authHeaders(),
+  });
+}
+
+export function fetchKBRebuildStatus() {
+  return request("/api/v1/kb/rebuild/status", { headers: authHeaders() });
+}
+
 export function fetchMemory3DStatus() {
   return request("/api/v1/memory3d/status", { headers: authHeaders() });
 }

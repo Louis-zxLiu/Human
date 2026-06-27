@@ -3,16 +3,21 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ProductFooter } from "../components/ProductFooter";
 import { ProductHeader } from "../components/ProductHeader";
 import {
+  deleteKBDocument,
   fetchAvatarRuntime,
   fetchDashboard,
+  fetchKBDocuments,
+  fetchKBRebuildStatus,
   fetchVoices,
   isAuthError,
   logout,
   previewVoice,
+  rebuildKnowledgeBase,
   refreshRuntimeCache,
   updateAvatarRuntime,
   updateVoice,
   uploadAvatar,
+  uploadKBDocument,
 } from "../lib/api";
 
 const AUTH_KEYS = ["auth_token", "username", "user_role"];
@@ -511,7 +516,13 @@ export function AdminApp() {
     previewVoice: false,
     uploadAvatar: false,
     avatarRuntime: false,
+    kbUpload: false,
+    kbDelete: null,
+    kbRebuild: false,
   });
+  const [kbDocs, setKbDocs] = useState([]);
+  const [kbFile, setKbFile] = useState(null);
+  const [kbRebuildResult, setKbRebuildResult] = useState(null);
 
   const revealRef = useReveal();
   const particleCanvasRef = useParticleCanvas();
@@ -551,15 +562,17 @@ export function AdminApp() {
     setLoading(true);
     setError("");
     try {
-      const [dashboardResult, voiceResult, runtimeResult] = await Promise.all([
+      const [dashboardResult, voiceResult, runtimeResult, kbResult] = await Promise.all([
         fetchDashboard(),
         fetchVoices(),
         fetchAvatarRuntime(),
+        fetchKBDocuments().catch(() => ({ documents: [] })),
       ]);
       setData(dashboardResult);
       setVoices(voiceResult.available_voices || []);
       setCurrentVoice(voiceResult.current_voice || voiceResult.available_voices?.[0]?.id || "");
       setAvatarRuntime(runtimeResult);
+      setKbDocs(kbResult.documents || []);
     } catch (err) {
       if (isAuthError(err)) {
         redirectToLogin();
@@ -616,6 +629,71 @@ export function AdminApp() {
       setFeedback({ type: "danger", message: err.message });
     } finally {
       setBusy((prev) => ({ ...prev, previewVoice: false }));
+    }
+  }
+
+  async function handleKBUpload() {
+    if (!kbFile) return;
+    setBusy((prev) => ({ ...prev, kbUpload: true }));
+    setFeedback(null);
+    try {
+      await uploadKBDocument(kbFile);
+      setKbFile(null);
+      const result = await fetchKBDocuments();
+      setKbDocs(result.documents || []);
+      setFeedback({ type: "success", message: `${kbFile.name} 上传成功` });
+    } catch (err) {
+      setFeedback({ type: "danger", message: err.message });
+    } finally {
+      setBusy((prev) => ({ ...prev, kbUpload: false }));
+    }
+  }
+
+  async function handleKBDelete(filename) {
+    setBusy((prev) => ({ ...prev, kbDelete: filename }));
+    setFeedback(null);
+    try {
+      await deleteKBDocument(filename);
+      const result = await fetchKBDocuments();
+      setKbDocs(result.documents || []);
+      setFeedback({ type: "success", message: `${filename} 已删除` });
+    } catch (err) {
+      setFeedback({ type: "danger", message: err.message });
+    } finally {
+      setBusy((prev) => ({ ...prev, kbDelete: null }));
+    }
+  }
+
+  async function handleKBRebuild() {
+    setBusy((prev) => ({ ...prev, kbRebuild: true }));
+    setKbRebuildResult(null);
+    setFeedback(null);
+    try {
+      const res = await rebuildKnowledgeBase();
+      setFeedback({ type: "info", message: res.message });
+      const poll = setInterval(async () => {
+        try {
+          const status = await fetchKBRebuildStatus();
+          if (!status.running) {
+            clearInterval(poll);
+            setBusy((prev) => ({ ...prev, kbRebuild: false }));
+            setKbRebuildResult(status.last_result);
+            const kbResult = await fetchKBDocuments().catch(() => ({ documents: [] }));
+            setKbDocs(kbResult.documents || []);
+            if (status.last_result?.success) {
+              setFeedback({ type: "success", message: status.last_result.message });
+            } else {
+              setFeedback({ type: "danger", message: status.last_result?.message || "重建失败" });
+            }
+          }
+        } catch (_e) {
+          clearInterval(poll);
+          setBusy((prev) => ({ ...prev, kbRebuild: false }));
+        }
+      }, 3000);
+    } catch (err) {
+      setFeedback({ type: "danger", message: err.message });
+      setBusy((prev) => ({ ...prev, kbRebuild: false }));
     }
   }
 
@@ -1058,6 +1136,79 @@ export function AdminApp() {
             管理操作
           </h2>
           <div className="adm-actions-grid adm-reveal-stagger">
+            {/* Knowledge Base Management */}
+            <div className="adm-action-card adm-reveal-child" style={{ gridColumn: "1 / -1" }}>
+              <h3 className="adm-action-title">
+                <span className="adm-action-icon">&#x1F4DA;</span> 知识库管理
+              </h3>
+              <div className="adm-action-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <div
+                  className="adm-file-upload-area"
+                  style={{ flex: "1 1 200px", minWidth: 180 }}
+                  onClick={() => document.getElementById("adm-kb-file-input")?.click()}
+                >
+                  <div className="adm-upload-icon">&#x2B06;</div>
+                  <p>点击上传知识文档</p>
+                  <p className="adm-upload-hint">支持 .docx / .txt / .xlsx / .csv</p>
+                </div>
+                <input
+                  id="adm-kb-file-input"
+                  type="file"
+                  accept=".docx,.txt,.xlsx,.csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => setKbFile(e.target.files?.[0] || null)}
+                />
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {kbFile && (
+                    <span className="adm-tag adm-tag--ok">已选择: {kbFile.name}</span>
+                  )}
+                  <MagneticBtn
+                    className="adm-btn adm-btn--amber adm-btn--sm"
+                    onClick={handleKBUpload}
+                    disabled={!kbFile || busy.kbUpload}
+                  >
+                    {busy.kbUpload ? "上传中..." : "上传文档"}
+                  </MagneticBtn>
+                  <MagneticBtn
+                    className="adm-btn adm-btn--teal adm-btn--sm"
+                    onClick={handleKBRebuild}
+                    disabled={busy.kbRebuild}
+                  >
+                    {busy.kbRebuild ? "重建中..." : "重建向量库"}
+                  </MagneticBtn>
+                  {kbRebuildResult && (
+                    <span className={`adm-tag ${kbRebuildResult.success ? "adm-tag--ok" : "adm-tag--err"}`}>
+                      {kbRebuildResult.message}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="adm-kb-doc-list" style={{ marginTop: 12 }}>
+                {kbDocs.length === 0 ? (
+                  <div className="adm-empty">暂无知识文档</div>
+                ) : (
+                  kbDocs.map((doc) => (
+                    <div key={doc.name} className="adm-action-row" style={{ justifyContent: "space-between", padding: "4px 0" }}>
+                      <span style={{ fontSize: "0.85rem" }}>
+                        {doc.name}
+                        <span className="adm-tag" style={{ marginLeft: 8, fontSize: "0.75rem" }}>
+                          {(doc.size / 1024).toFixed(1)} KB
+                        </span>
+                      </span>
+                      <MagneticBtn
+                        className="adm-btn adm-btn--outline adm-btn--sm"
+                        onClick={() => handleKBDelete(doc.name)}
+                        disabled={busy.kbDelete === doc.name}
+                        style={{ color: "#ef4444", borderColor: "#ef4444" }}
+                      >
+                        {busy.kbDelete === doc.name ? "删除中..." : "删除"}
+                      </MagneticBtn>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
             {/* Avatar Upload */}
             <div className="adm-action-card adm-reveal-child">
               <h3 className="adm-action-title">
