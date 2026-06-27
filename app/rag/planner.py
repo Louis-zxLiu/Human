@@ -539,6 +539,11 @@ class QueryPlanner:
         question_type = str(payload.get("question_type") or "description").strip()
         if question_type not in allowed_question_types:
             question_type = "description"
+        # Override: "建筑艺术/工艺/规模/材质" terms imply architecture_params
+        if question_type not in {"architecture_params"} and any(
+            t in query for t in ("建筑艺术", "建筑工艺", "规模参数", "建筑参数", "尺寸材质", "建筑结构")
+        ):
+            question_type = "architecture_params"
 
         route_profile = str(payload.get("route_profile") or "general").strip()
         if route_profile not in allowed_profiles:

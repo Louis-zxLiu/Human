@@ -1,6 +1,5 @@
 from functools import lru_cache
-
-from openai import OpenAI
+from typing import Optional
 
 from app.core.config import settings
 
@@ -13,14 +12,14 @@ def llm_is_configured() -> bool:
 
 
 @lru_cache(maxsize=1)
-def get_llm_client() -> OpenAI:
-    """
-    初始化并返回一个配置好环境参数的 OpenAI 客户端实例。
-    兼容 DeepSeek 等支持 OpenAI 标准协议的模型。
-    """
-    return OpenAI(
+def get_chat_llm():
+    """返回 LangChain ChatOpenAI 实例，兼容 DeepSeek 等 OpenAI 协议模型。"""
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(
         api_key=settings.LLM_API_KEY,
         base_url=settings.LLM_API_BASE,
+        model=settings.LLM_MODEL_NAME,
+        temperature=0.0,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         max_retries=settings.LLM_MAX_RETRIES,
     )
@@ -34,30 +33,23 @@ def generate_chat_completion(
     return_error_text: bool = True,
     json_mode: bool = False,
 ) -> str:
-    """
-    统一的 LLM 生成接口。
-
-    在真实运行中，LLM 是增强器而不是单点依赖；当配置缺失或调用失败时，
-    调用方可以选择接收错误文本，或拿到空字符串走确定性降级分支。
-    """
+    """统一 LLM 生成接口，内部使用 ChatOpenAI，保持原有签名不变。"""
     if not llm_is_configured():
         return "LLM 调用失败: 未配置可用的 LLM 客户端。" if return_error_text else ""
 
     try:
-        request_payload = {
-            "model": settings.LLM_MODEL_NAME,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        from langchain_core.messages import HumanMessage, SystemMessage
+        llm = get_chat_llm()
+        # 按调用参数动态调整 temperature / max_tokens
+        bound = llm.bind(temperature=temperature, max_tokens=max_tokens)
         if json_mode:
-            request_payload["response_format"] = {"type": "json_object"}
-
-        response = get_llm_client().chat.completions.create(**request_payload)
-        message = response.choices[0].message.content
-        return message.strip() if isinstance(message, str) else ""
+            bound = bound.bind(response_format={"type": "json_object"})
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=prompt),
+        ]
+        result = bound.invoke(messages)
+        content = result.content if hasattr(result, "content") else str(result)
+        return content.strip() if isinstance(content, str) else ""
     except Exception as exc:
         return f"LLM 调用失败: {str(exc)}" if return_error_text else ""

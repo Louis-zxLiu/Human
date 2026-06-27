@@ -1,15 +1,13 @@
-import os
-import chromadb
-from typing import List, Dict, Any
-from chromadb.config import Settings
-from langchain.vectorstores import Chroma
-from langchain.retrievers import EnsembleRetriever
-from langchain.retrievers import BM25Retriever
-from langchain.schema import Document as LangChainDocument
-from sentence_transformers import CrossEncoder
-from app.core.config import settings, resolve_path
-from app.rag.document_loader import load_docx_with_tables, load_excel
-from app.rag.llm_client import generate_chat_completion
+# DEPRECATED: This module has been superseded by the LangGraph pipeline.
+# CrossEncoder reranking is now available in ChromaStaticAgent(use_reranker=True).
+# This file is kept for reference only and is not imported anywhere in production.
+import warnings
+warnings.warn(
+    "advanced_pipeline.py is deprecated. Use app.rag.chroma_agent.ChromaStaticAgent(use_reranker=True) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 
 # Initialize local embedding model wrapper for LangChain
 class LocalEmbeddings:

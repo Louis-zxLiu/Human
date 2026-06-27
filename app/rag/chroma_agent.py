@@ -37,12 +37,18 @@ class ChromaStaticAgent:
     - keep structured facts and SQL outside of RAG
     - use dense retrieval from Chroma as the primary recall path
     - blend in lexical and context bonuses for better precision on scenic docs
+    - optionally rerank with CrossEncoder (use_reranker=True, threshold 0.72)
     - degrade gracefully to deterministic evidence snippets when LLM is absent
     """
 
-    def __init__(self, collection_name: str = "scenic_knowledge"):
+    RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    RERANKER_THRESHOLD = 0.72
+
+    def __init__(self, collection_name: str = "scenic_knowledge", use_reranker: bool = False):
         self.db_dir = resolve_path(settings.CHROMA_DB_DIR)
         self.collection_name = collection_name
+        self.use_reranker = use_reranker
+        self._reranker = None  # lazy-loaded on first use
         self.client = chromadb.PersistentClient(
             path=self.db_dir,
             settings=Settings(anonymized_telemetry=False),
@@ -162,7 +168,26 @@ class ChromaStaticAgent:
             )
 
         ranked.sort(key=lambda item: item.score, reverse=True)
+
+        if self.use_reranker and ranked:
+            ranked = self._rerank(user_query, ranked)
+
         return ranked[:top_k]
+
+    def _rerank(self, query: str, chunks: List[RetrievedChunk]) -> List[RetrievedChunk]:
+        if self._reranker is None:
+            try:
+                from sentence_transformers import CrossEncoder
+                self._reranker = CrossEncoder(self.RERANKER_MODEL, device=settings.EMBEDDING_DEVICE)
+            except Exception:
+                return chunks
+        try:
+            pairs = [[query, chunk.text] for chunk in chunks]
+            scores = self._reranker.predict(pairs)
+            scored = sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)
+            return [chunk for chunk, score in scored if score >= self.RERANKER_THRESHOLD]
+        except Exception:
+            return chunks
 
     @staticmethod
     def _distance_to_score(distance: Any) -> float:

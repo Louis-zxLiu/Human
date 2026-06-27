@@ -6,13 +6,16 @@
 
 ## 当前架构
 
-系统已经从早期的简单业务路由，升级为 planner-first 的 RAG+SQL 架构：
+系统已从早期的简单业务路由，升级为基于 **LangGraph StateGraph** 的多智能体框架：
 
+- **LangGraph 驱动**：RAG pipeline 完全由 `StateGraph` 编排，每个能力封装为独立节点，条件边负责路由，流程可视化、可测试、可扩展。
+- 节点链路：`planner → fast_answer / tool_dispatch → tool_execute → agent_loop_decide → synthesize → review → repair_execute → finalize`
 - Planner 先判断问题类型、证据需求、可执行策略和拒答边界。
 - 景区结构化事实优先走事实层，不再直接依赖自由检索生成。
 - 游客行为分析优先走 semantic SQL，由 LLM 负责意图到查询计划的映射。
-- 非结构化景区知识才进入 hybrid RAG，用于历史文化、讲解扩展等深资料场景。
+- 非结构化景区知识才进入 hybrid RAG，用于历史文化、讲解扩展等深资料场景；支持 CrossEncoder 重排序（可选）。
 - 路线推荐由独立 route planner 负责，把景区知识、行为偏好与讲解重点合成可执行路线。
+- Review → Repair 循环：answer_review_agent 检查回答质量，不通过时自动调用修复节点重新召回。
 - 全链路统一输出响应契约，支持前端展示、日志留痕、评测回放和后续观测。
 
 ## 当前能力
@@ -185,14 +188,11 @@ conda run -p "D:/Human/env" python -m app.cli eval-unified --report reports/unif
 
 ## 最近这次升级
 
-- 新增 planner-first RAG+SQL 架构。
-- 新增统一 response contract。
-- 新增 semantic SQL 优先链路。
-- 新增机器可读 refusal / warnings / observability。
-- API 返回更丰富的 `rag_metadata`。
-- 日志持久化新增结构化 JSON 元数据字段。
-- 新增响应契约测试与文档。
-- 完整统一评测刷新到 `99.38/100`。
+- **迁移到 LangGraph 多智能体框架**：RAG pipeline 由 `StateGraph` 驱动，节点化编排，条件边路由，支持图可视化。
+- **LLM 客户端切换**：从自定义 OpenAI 客户端切换到 LangChain `ChatOpenAI`，统一接入 langchain 生态。
+- **CrossEncoder Reranking 整合**：将 `advanced_pipeline.py` 的重排序逻辑合并进 `ChromaStaticAgent`，懒加载，按需开启。
+- **Review → Repair 闭环**：answer_review_agent 不通过时，repair_execute 节点自动重新召回并二次合成。
+- **全部测试通过**：70 个测试 100% 通过，`process_query()` API 保持不变。
 
 ## 相关文档
 

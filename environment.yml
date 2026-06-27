@@ -24,9 +24,10 @@ dependencies:
   - pip:
       - python-jose[cryptography]==3.3.0
       - passlib[bcrypt]==1.7.4
-      - langchain==0.1.13
-      - langchain-openai==0.1.1
-      - langchain-community==0.0.29
+      - langchain>=0.2.0,<0.4.0
+      - langchain-openai>=0.1.20,<0.3.0
+      - langchain-community>=0.2.0,<0.4.0
+      - langgraph>=0.2.0,<0.3.0
       - chromadb==0.4.24
       - docx2txt==0.8
       - unstructured[xlsx]==0.11.8
