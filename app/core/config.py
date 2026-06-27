@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    BOCHA_API_KEY: str = ""
+    BOCHA_API_BASE: str = "https://api.bochaai.com/v1"
+    BOCHA_SEARCH_FRESHNESS: str = "noLimit"
+    BOCHA_SEARCH_COUNT: int = 5
+
     model_config = {
         "env_file": ENV_FILE_PATH,
         "env_file_encoding": "utf-8",
@@ -75,6 +80,10 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def bocha_is_configured() -> bool:
+    return bool(settings.BOCHA_API_KEY and settings.BOCHA_API_KEY != "sk-placeholder")
 
 
 def persist_env_overrides(overrides: dict[str, str]) -> None:

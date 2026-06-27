@@ -32,54 +32,8 @@ ATTRACTION_COLUMNS = [
     "remarks",
 ]
 
-FACT_QUESTION_TYPES = {
-    "location",
-    "open_info",
-    "architecture_params",
-    "highlights",
-    "remarks",
-    "history",
-    "cultural_meaning",
-    "core_function",
-    "description",
-}
 
-FACT_EVIDENCE_MODES = {"structured", "docx", "hybrid"}
 
-DOCX_TOPICS_BY_QUESTION_TYPE: Dict[str, Tuple[str, ...]] = {
-    "history": (
-        "佛教缘起",
-        "建寺缘起",
-        "赐额历史",
-        "千年兴衰",
-        "现代建设",
-        "落成开光",
-        "开放时间",
-        "建造工艺",
-    ),
-    "architecture_params": (
-        "高度与材质",
-        "铜板工艺",
-        "建造工艺",
-        "建筑规模",
-        "景观规模",
-        "建筑风格",
-    ),
-    "cultural_meaning": (
-        "文化称号",
-        "佛教缘起",
-        "手印寓意",
-        "台阶寓意",
-        "佛教意义",
-        "祈福体验",
-        "莲花圣塔",
-        "核心文化内涵",
-        "世界佛教文化交流平台",
-    ),
-    "open_info": ("开放时间", "演出信息", "表演内容"),
-    "highlights": ("表演内容", "祈福体验", "世界佛教文化交流平台", "景区概况"),
-    "description": ("景区概况", "文化称号", "建筑风格", "景观规模"),
-}
 
 
 @dataclass
@@ -418,7 +372,8 @@ class ScenicFactAgent:
                 warnings=plan_warnings,
             )
 
-        if self._is_unsupported_fact_query(user_query):
+        semantic_qt = semantic_plan.question_type if semantic_plan else None
+        if not semantic_qt and self._is_unsupported_fact_query(user_query):
             return self._result(
                 "抱歉，这个问题需要实时运营数据或资料外信息支持，我不能根据现有灵山胜境资料编造。您可以改问已收录的景点介绍、位置、开放信息、历史背景、文化内涵或游览建议。",
                 attraction,
@@ -475,46 +430,19 @@ class ScenicFactAgent:
             if semantic_plan
             else self._prefers_docx_evidence(user_query, retrieval_mode, attraction, question_type)
         )
-        if prefers_docx:
-            if self._should_prefer_curated_docx_fact(user_query, question_type):
-                general_fact = self._answer_general_docx_fact(user_query, question_type)
-                if general_fact:
-                    return self._result(
-                        general_fact,
-                        attraction,
-                        "docx_general",
-                        evidence=[
-                            make_evidence(
-                                "docx_knowledge",
-                                "curated_docx_fact",
-                                entity=attraction,
-                                field="general_fact",
-                                snippet=general_fact,
-                            )
-                        ],
-                        trace=plan_trace,
-                        warnings=plan_warnings,
-                    )
-            if attraction and question_type in {
-                "architecture_params",
-                "cultural_meaning",
-                "description",
-                "highlights",
-                "remarks",
-                "core_function",
-            }:
-                row = self.get_attraction_row(attraction)
-                if row and question_type in row:
-                    text = self._format_field_answer(row, question_type)
-                    if text:
-                        return self._result(
-                            text,
-                            attraction,
-                            f"field:{question_type}",
-                            evidence=[self._row_evidence(row, question_type, row.get(question_type))],
-                            trace=plan_trace,
-                            warnings=plan_warnings,
-                        )
+        _db_structured_types = {
+            "architecture_params",
+            "cultural_meaning",
+            "description",
+            "highlights",
+            "remarks",
+            "core_function",
+        }
+        # evidence_mode=="db" means planner explicitly wants DB; skip docx entirely for structured fields
+        prefers_db_only = (
+            semantic_plan is not None and semantic_plan.evidence_mode == "db"
+        )
+        if prefers_docx and not prefers_db_only:
             general_fact = self._answer_general_docx_fact(user_query, question_type)
             if general_fact:
                 return self._result(
@@ -533,6 +461,19 @@ class ScenicFactAgent:
                     trace=plan_trace,
                     warnings=plan_warnings,
                 )
+            if attraction and question_type in _db_structured_types:
+                row = self.get_attraction_row(attraction)
+                if row and question_type in row:
+                    text = self._format_field_answer(row, question_type)
+                    if text:
+                        return self._result(
+                            text,
+                            attraction,
+                            f"field:{question_type}",
+                            evidence=[self._row_evidence(row, question_type, row.get(question_type))],
+                            trace=plan_trace,
+                            warnings=plan_warnings,
+                        )
 
         if attraction:
             row = self.get_attraction_row(attraction)
@@ -688,12 +629,6 @@ class ScenicFactAgent:
         mentions = self.find_attraction_mentions(user_query, scenic_slug=scenic_slug)
         return mentions[0] if mentions else None
 
-    def detect_question_type(self, user_query: str) -> Optional[str]:
-        for question_field, keywords in FACT_QUESTION_FIELD_MAP.items():
-            if any(keyword in user_query for keyword in keywords):
-                return question_field
-        return None
-
     def _plan_fact_query(
         self,
         user_query: str,
@@ -810,7 +745,6 @@ class ScenicFactAgent:
         attraction = mentions[0] if mentions else str((context_row or {}).get("attraction_name") or "") or None
         question_query = self._strip_attraction_mentions(user_query, mentions)
         question_type = self._resolve_question_type(user_query, question_query, planned_question_type) or "description"
-        question_type = self._normalize_question_type_from_query(user_query, question_type)
         evidence_mode = "hybrid" if retrieval_mode == "hybrid" else "structured"
         if self._prefers_docx_evidence(user_query, retrieval_mode, attraction, question_type):
             evidence_mode = "docx" if retrieval_mode != "hybrid" else "hybrid"
@@ -872,12 +806,10 @@ class ScenicFactAgent:
             if not attraction:
                 return None
 
-        question_type = str(payload.get("question_type") or "description").strip()
-        if question_type not in FACT_QUESTION_TYPES:
-            return None
+        question_type = str(payload.get("question_type") or "description").strip() or "description"
 
         evidence_mode = str(payload.get("evidence_mode") or "structured").strip()
-        if evidence_mode not in FACT_EVIDENCE_MODES:
+        if evidence_mode not in {"structured", "docx", "hybrid"}:
             evidence_mode = "structured"
 
         compared_attractions = []
@@ -916,70 +848,6 @@ class ScenicFactAgent:
             planner_source="fact_semantic_agent",
             reasoning=reasoning,
         )
-
-    @staticmethod
-    def _normalize_question_type_from_query(user_query: str, question_type: str) -> str:
-        query = str(user_query or "")
-        if any(term in query for term in ("建筑艺术", "建筑特色", "建筑工艺")):
-            return "architecture_params"
-        if any(term in query for term in ("尺寸", "材料", "材质", "规模参数", "建筑参数")):
-            return "architecture_params"
-        if any(term in query for term in ("主要体验", "必体验", "值得去", "哪里最值得", "重点体验")):
-            return "highlights"
-        if any(term in query for term in ("整体介绍", "介绍下", "介绍一下", "怎么介绍", "给游客讲", "怎么概括")):
-            return "description"
-        if "重点介绍" in query or ("介绍" in query and any(term in query for term in ("重点", "关键"))):
-            return "description"
-        if any(term in query for term in ("佛教寓意", "文化内涵", "文化意义", "文化含义", "象征什么")):
-            return "cultural_meaning"
-        if any(term in query for term in ("演出信息", "演出时间", "场次", "时间表", "开放安排", "开放时间")):
-            return "open_info"
-        if any(term in query for term in ("游览提醒", "特别提醒", "注意事项", "注意什么", "提醒")):
-            return "remarks"
-        return question_type
-
-    @staticmethod
-    def _should_prefer_curated_docx_fact(user_query: str, question_type: Optional[str]) -> bool:
-        query = str(user_query or "")
-        strong_docx_cues = (
-            "DOCX",
-            "docx",
-            "资料",
-            "依据",
-            "关键",
-            "核心",
-            "重点",
-            "不能错",
-            "不能讲错",
-            "必提",
-            "讲解重点",
-            "讲解时",
-            "评委",
-            "答哪些",
-            "该答",
-            "提炼",
-            "突出",
-        )
-        fine_topics = (
-            "落成开光",
-            "高度材质",
-            "铜板",
-            "建造工艺",
-            "手印",
-            "台阶",
-            "佛教意义",
-            "建筑规模",
-            "莲花圣塔",
-            "穹顶",
-            "传统工艺",
-            "撞钟祈福",
-            "演出信息",
-            "表演",
-            "演出",
-            "规模和尺寸",
-            "规模与尺寸",
-        )
-        return any(term in query for term in strong_docx_cues) or any(term in query for term in fine_topics)
 
     @staticmethod
     def _reconcile_question_type(
@@ -1062,31 +930,13 @@ class ScenicFactAgent:
 
         return True
 
+    @staticmethod
     def _resolve_question_type(
-        self,
         user_query: str,
         question_query: str,
         planned_question_type: Optional[str],
     ) -> Optional[str]:
-        local_type = self.detect_question_type(question_query or user_query)
-        if not planned_question_type:
-            return local_type
-
-        query = str(user_query or "")
-        explicit_local_hints = {
-            "location": ("位置", "在哪", "哪里", "方位"),
-            "description": ("介绍", "讲解", "概况", "概述", "是什么"),
-            "highlights": ("亮点", "特色", "看点", "值得看", "必看", "体验", "游玩"),
-            "architecture_params": ("建筑", "景观参数", "规模", "多高", "多大", "造型", "参数", "材质", "尺寸"),
-            "core_function": ("作用", "用途", "功能", "干啥"),
-            "cultural_meaning": ("文化", "寓意", "含义", "象征", "精神"),
-            "open_info": ("开放", "开放时间", "营业", "几点", "什么时候", "开门", "闭园", "演出时间"),
-            "remarks": ("建议", "注意", "提醒", "打卡", "拍照"),
-            "history": ("历史", "来历", "渊源", "背景", "故事", "典故", "为什么"),
-        }
-        if local_type and any(term in query for term in explicit_local_hints.get(local_type, ())):
-            return local_type
-        return planned_question_type
+        return planned_question_type or None
 
     @staticmethod
     def _answer_structured_override(
@@ -1338,8 +1188,11 @@ class ScenicFactAgent:
     def _answer_docx_evidence(self, user_query: str, question_type: Optional[str] = None) -> Optional[str]:
         if (
             "灵山胜境" in user_query
-            and "概况" in user_query
-            and any(term in user_query for term in ("不能错", "关键数字", "哪些数字", "核心事实", "关键事实"))
+            and any(topic in user_query for topic in ("概况", "规模"))
+            and any(term in user_query for term in (
+                "不能错", "关键数字", "哪些数字", "核心事实", "关键事实",
+                "关键点", "重点", "事实", "依据", "数字", "多大",
+            ))
         ):
             return (
                 "根据 DOCX 历史文化资料，灵山胜境概况里不能讲错的基础信息包括："
@@ -1367,8 +1220,6 @@ class ScenicFactAgent:
             topic = str(item.get("topic") or "")
             if not self._docx_entity_matches(entity, user_query):
                 continue
-            if not self._docx_topic_matches_question_type(topic, question_type):
-                continue
 
             score = 10
             if topic and topic in user_query:
@@ -1382,8 +1233,6 @@ class ScenicFactAgent:
             must_include = [str(term) for term in item.get("must_include") or [] if str(term)]
             score += sum(2 for term in must_include if term != entity and term in user_query)
 
-            facts = str(item.get("facts") or "")
-            score += sum(1 for term in topic_terms if term in facts)
             specificity = self._docx_topic_specificity(topic, user_query)
             score += specificity
 
@@ -1401,15 +1250,6 @@ class ScenicFactAgent:
             suffix = f"关键依据包括：{keywords}。" if keywords else ""
             return f"根据 DOCX 历史文化资料，{entity}在{topic}方面的关键信息是：{facts}{suffix}"
         return None
-
-    @staticmethod
-    def _docx_topic_matches_question_type(topic: str, question_type: Optional[str]) -> bool:
-        if not question_type:
-            return True
-        allowed_topics = DOCX_TOPICS_BY_QUESTION_TYPE.get(question_type)
-        if allowed_topics is None:
-            return True
-        return topic in allowed_topics
 
     @staticmethod
     def _docx_entity_matches(entity: str, user_query: str) -> bool:
@@ -1459,7 +1299,7 @@ class ScenicFactAgent:
             "文化称号": ("称号", "誉为", "东方佛国", "太湖佛国"),
             "佛教缘起": ("缘起", "来历", "小灵山", "玄奘", "灵鹫山"),
             "建寺缘起": ("建寺", "小灵山庵", "窥基", "道场"),
-            "赐额历史": ("赐额", "宋真宗", "祥符", "命名"),
+            "赐额历史": ("赐额", "宋真宗", "命名", "赐名"),
             "千年兴衰": ("兴衰", "南宋", "元代", "明代", "毁于战火"),
             "现代建设": ("现代", "建设", "1994", "修复", "奠基"),
             "落成开光": ("落成", "开光", "什么时候建成"),
@@ -1685,7 +1525,9 @@ class ScenicFactAgent:
         remainder = stripped.replace(attraction, " ", 1).strip().strip("，。！？,.!? ")
         if not remainder:
             return True
-        return self.detect_question_type(remainder) == "description"
+        # treat short generic remainder as overview — no specific intent keywords present
+        specific_intent_words = ("在哪", "位置", "几点", "开放", "注意", "建议", "材质", "高度", "尺寸", "历史", "来历", "作用", "功能")
+        return len(remainder) <= 6 and not any(w in remainder for w in specific_intent_words)
 
     @staticmethod
     def _is_multi_attraction_comparison_query(user_query: str, mentions: List[str]) -> bool:
@@ -1705,7 +1547,7 @@ class ScenicFactAgent:
             return None
 
         question_query = self._strip_attraction_mentions(user_query, mentions[:2])
-        question_type = planned_question_type or self.detect_question_type(question_query or user_query) or "description"
+        question_type = planned_question_type or "description"
         row_a, row_b = rows[0], rows[1]
         assert row_a is not None and row_b is not None
 
@@ -1810,7 +1652,7 @@ class ScenicFactAgent:
             return None
         if not any(keyword in user_query for keyword in FACT_REFERENCE_POSITION_HINTS):
             return None
-        if self.detect_question_type(user_query) == "location":
+        if any(keyword in user_query for keyword in ("在哪", "哪里", "位置", "方位", "怎么走", "怎么去")):
             return None
         if not any(keyword in user_query for keyword in ("哪个", "哪一个", "哪座", "叫什么", "是啥", "是什么")):
             return None

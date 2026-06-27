@@ -99,7 +99,11 @@ def ensure_whisper_runtime() -> int:
 
 def in_expected_conda_env() -> bool:
     conda_prefix = os.environ.get("CONDA_PREFIX")
-    return bool(conda_prefix) and Path(conda_prefix).resolve() == CONDA_ENV_PREFIX.resolve()
+    if conda_prefix and Path(conda_prefix).resolve() == CONDA_ENV_PREFIX.resolve():
+        return True
+    # Also accept when sys.prefix matches (e.g. activated via direct python path, no CONDA_PREFIX set)
+    import sys
+    return Path(sys.prefix).resolve() == CONDA_ENV_PREFIX.resolve()
 
 
 def ensure_runtime_env() -> None:

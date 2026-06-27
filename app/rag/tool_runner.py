@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from app.rag.bocha_agent import BochaSearchAgent
 from app.rag.fact_agent import ScenicFactAgent
 from app.rag.recommendation_agent import ScenicRecommendationAgent
 from app.rag.sql_agent import TouristAnalyticsAgent
@@ -123,6 +124,25 @@ class ToolRunner:
                 "required": ["user_query"],
             },
         ),
+        "web_search": ToolSpec(
+            name="web_search",
+            description=(
+                "Search the web for real-time information, recent events, or questions not covered "
+                "by the scenic knowledge base. Use when the user asks about current conditions, "
+                "latest news, or topics outside the local knowledge base."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "user_query": {"type": "string", "description": "原始用户问题"},
+                    "search_query": {
+                        "type": ["string", "null"],
+                        "description": "优化后的搜索词（可选，默认使用 user_query）",
+                    },
+                },
+                "required": ["user_query"],
+            },
+        ),
     }
 
     def __init__(
@@ -131,15 +151,18 @@ class ToolRunner:
         fact_agent: ScenicFactAgent,
         analytics_agent: TouristAnalyticsAgent,
         recommendation_agent: ScenicRecommendationAgent,
+        bocha_agent: Optional[BochaSearchAgent] = None,
     ) -> None:
         self.fact_agent = fact_agent
         self.analytics_agent = analytics_agent
         self.recommendation_agent = recommendation_agent
+        self.bocha_agent = bocha_agent or BochaSearchAgent()
         self._handlers: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
             "structured_fact": self._run_structured_fact,
             "hybrid_rag": self._run_hybrid_rag,
             "behavior_sql": self._run_behavior_sql,
             "route_planner": self._run_route_planner,
+            "web_search": self._run_web_search,
         }
 
     @classmethod
@@ -245,6 +268,12 @@ class ToolRunner:
             scenic_slug=args.get("scenic_slug"),
             forced_profile_key=args.get("forced_profile_key"),
             forced_title=args.get("forced_title"),
+        )
+
+    def _run_web_search(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        return self.bocha_agent.search(
+            str(args.get("user_query") or ""),
+            search_query=args.get("search_query"),
         )
 
     @staticmethod

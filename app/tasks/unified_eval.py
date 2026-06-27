@@ -2,8 +2,10 @@ import json
 import math
 import re
 import sqlite3
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -190,17 +192,12 @@ def score_unified_eval(
     suites: Optional[Sequence[str]] = None,
     limit: Optional[int] = None,
     tier: str = "full",
+    max_workers: int = 16,
 ) -> Dict[str, Any]:
     cases = load_cases(dataset_path, suites=suites, limit=limit, tier=tier)
-    pipeline = ScenicRAGPipeline()
 
-    scored_cases = []
-    category_stats: Dict[str, Dict[str, Any]] = defaultdict(_empty_stats)
-    source_stats: Dict[str, Dict[str, Any]] = defaultdict(_empty_stats)
-    component_totals = {name: {"score": 0.0, "max": 0.0} for name in COMPONENT_WEIGHTS}
-    started_at = time.time()
-
-    for case in cases:
+    def _run_case(case: Dict[str, Any]) -> Dict[str, Any]:
+        pipeline = ScenicRAGPipeline()
         case_started_at = time.time()
         gold_rows: List[Dict[str, Any]] = []
         gold_error = None
@@ -209,7 +206,6 @@ def score_unified_eval(
                 gold_rows = execute_gold_sql(case["gold_sql"])
             except Exception as exc:
                 gold_error = str(exc)
-
         try:
             result = pipeline.process_query(case["query"])
             runtime_error = None
@@ -222,18 +218,32 @@ def score_unified_eval(
                 "response_kind": "exception",
             }
             runtime_error = str(exc)
-
         case_score = score_case(case, result, gold_rows, gold_error=gold_error, runtime_error=runtime_error)
         case_score["latency_seconds"] = round(time.time() - case_started_at, 3)
-        scored_cases.append(case_score)
+        return case_score
 
-        category = case.get("category", "UNKNOWN")
-        source = case.get("gold_source", "unknown")
-        _merge_case_stats(category_stats[category], case_score)
-        _merge_case_stats(source_stats[source], case_score)
-        for component, detail in case_score["components"].items():
-            component_totals[component]["score"] += detail["score"]
-            component_totals[component]["max"] += detail["max"]
+    scored_cases: List[Dict[str, Any]] = [None] * len(cases)  # type: ignore[list-item]
+    category_stats: Dict[str, Dict[str, Any]] = defaultdict(_empty_stats)
+    source_stats: Dict[str, Dict[str, Any]] = defaultdict(_empty_stats)
+    component_totals = {name: {"score": 0.0, "max": 0.0} for name in COMPONENT_WEIGHTS}
+    started_at = time.time()
+    _lock = threading.Lock()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {executor.submit(_run_case, case): i for i, case in enumerate(cases)}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            case_score = future.result()
+            scored_cases[idx] = case_score
+            case = cases[idx]
+            category = case.get("category", "UNKNOWN")
+            source = case.get("gold_source", "unknown")
+            with _lock:
+                _merge_case_stats(category_stats[category], case_score)
+                _merge_case_stats(source_stats[source], case_score)
+                for component, detail in case_score["components"].items():
+                    component_totals[component]["score"] += detail["score"]
+                    component_totals[component]["max"] += detail["max"]
 
     total_score = sum(item["score"] for item in scored_cases)
     total_max = sum(item["max_score"] for item in scored_cases)
@@ -330,8 +340,10 @@ def score_case(
 
 
 def _score_route(case: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
-    if case.get("gold_source") == "boundary" and str(result.get("response_kind") or "").startswith("refused"):
-        return _component("route", 1.0, [])
+    if case.get("category") == "BOUNDARY":
+        refused = str(result.get("response_kind") or "").startswith("refused")
+        return _component("route", 1.0 if refused else 0.0,
+                          [] if refused else ["boundary case was not refused"])
 
     expected = case.get("expected_intent")
     if not expected:
@@ -357,7 +369,7 @@ def _score_source(case: Dict[str, Any], result: Dict[str, Any], answer: str) -> 
             notes.append("behavior question did not route to ANALYTICS")
         if parts[1] == 0:
             notes.append("behavior answer did not state data source")
-    elif source in {"docx_structured", "docx_rag"}:
+    elif source in {"docx_structured", "docx_rag", "docx_structured_llm"}:
         parts.append(1.0 if intent == "FACT" else 0.0)
         parts.append(1.0 if agent_type in SCENIC_FACT_AGENT_TYPES else 0.0)
         parts.append(1.0 if "游客行为数据" not in answer else 0.0)
@@ -436,7 +448,7 @@ def _score_expression(case: Dict[str, Any], answer: str) -> Dict[str, Any]:
     elif source == "fusion":
         parts.append(1.0 if "预计" in answer or "时长" in answer else 0.0)
         parts.append(1.0 if "讲解重点" in answer or "重点" in answer else 0.0)
-    elif source in {"docx_structured", "docx_rag"}:
+    elif source in {"docx_structured", "docx_rag", "docx_structured_llm"}:
         parts.append(1.0 if len(answer) >= 12 else 0.0)
     elif source == "boundary":
         parts.append(1.0 if _looks_like_refusal(answer, {}) else 0.0)

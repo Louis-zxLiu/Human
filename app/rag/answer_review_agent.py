@@ -127,15 +127,34 @@ class AnswerReviewAgent:
             "deterministic_issue_signals": detected_issues,
             "main_plan": self._compact_plan(plan),
         }
+
+        # Extract evidence snippets separately so the reviewer can do fact-completeness checks
+        evidence_snippets = [
+            str(e.get("snippet") or "")
+            for e in (result.get("evidence") or [])
+            if isinstance(e, dict) and e.get("snippet")
+        ]
+
         system_prompt = (
             "You are the final LLM review agent for a scenic-guide multi-agent system. "
             "You must audit every final answer before it is shown to the user. "
             "Return strict JSON only."
         )
+        fact_completeness_rule = (
+            "For FACT answers (agent_type=scenic_fact, docx_general, structured_fact): "
+            "compare the answer against the evidence_snippets below. "
+            "If the snippets contain specific numbers, years, named entities, or proper nouns "
+            "that are clearly relevant to the question but absent from the answer, "
+            "return approved=false, issue=missing_key_facts, repair_action=call_hybrid_rag. "
+            "Only flag this when the omission is material — do not flag when the answer is a "
+            "natural summary that covers the key point without quoting every detail.\n"
+        ) if evidence_snippets else ""
+
         prompt = (
             "Review the candidate answer using only the supplied context. Do not add new facts.\n"
             "You are an auditor only: do not rewrite the answer and do not provide replacement answer text.\n"
             "If the answer is already safe and natural, return approved=true and repair_action=none.\n"
+            f"{fact_completeness_rule}"
             "If it leaks machine fields, has unformatted numbers, misses units, mixes data sources, "
             "overclaims evidence, or is unnatural for a visitor, return approved=false and choose a repair action for the main agent.\n"
             "For analytics answers: never expose SQL column names such as avg_cost or avg_total_cost; "
@@ -146,13 +165,19 @@ class AnswerReviewAgent:
             "Return JSON with this schema:\n"
             "{\n"
             '  "approved": true/false,\n'
-            '  "issues": ["field_name_leak|unformatted_number|missing_unit|source_conflict|overclaim|unnatural|other"],\n'
+            '  "issues": ["field_name_leak|unformatted_number|missing_unit|source_conflict|overclaim|unnatural|missing_key_facts|other"],\n'
             '  "risk_level": "ok|minor|major",\n'
             '  "repair_action": "none|retry_same_agent|call_structured_fact|call_hybrid_rag|call_behavior_sql|call_route_planner|ask_clarification|refuse",\n'
             '  "reasoning": "short Chinese reason"\n'
             "}\n\n"
             f"Context: {json.dumps(review_context, ensure_ascii=False, default=str)}\n"
-            "JSON only."
+            + (
+                f"Evidence snippets (for fact-completeness check):\n"
+                + "\n".join(f"- {s}" for s in evidence_snippets[:4])
+                + "\n"
+                if evidence_snippets else ""
+            )
+            + "JSON only."
         )
         raw = generate_chat_completion(
             prompt,
@@ -211,6 +236,9 @@ class AnswerReviewAgent:
         }
         return action if action in allowed else "none"
 
+    # Matches standalone numbers, years, percentages, measurements in Chinese text
+    NUMERIC_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?(?:万|亿|米|元|年|级|吨|平方米|公斤|%|场|尊|块)?")
+
     def _detect_issues(self, answer: str, result: Dict[str, Any]) -> list[str]:
         issues: list[str] = []
         if self.FIELD_LEAK_PATTERN.search(answer):
@@ -219,4 +247,17 @@ class AnswerReviewAgent:
             issues.append("unformatted_number")
         if str(result.get("response_kind") or "") == "analytics:fallback":
             issues.append("fallback_answer")
+        # Deterministic fact-completeness pre-check: find numeric tokens present in
+        # evidence snippets but absent from the answer — signal for LLM reviewer.
+        evidence = result.get("evidence") or []
+        snippets = " ".join(
+            str(e.get("snippet") or "") for e in evidence if isinstance(e, dict)
+        )
+        if snippets and answer:
+            evidence_nums = set(self.NUMERIC_TOKEN_RE.findall(snippets))
+            answer_nums = set(self.NUMERIC_TOKEN_RE.findall(answer))
+            missing = evidence_nums - answer_nums
+            # Only flag when there are several missing numbers (avoid noise on short answers)
+            if len(missing) >= 2:
+                issues.append("key_facts_potentially_missing")
         return issues

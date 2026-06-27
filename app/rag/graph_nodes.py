@@ -193,6 +193,24 @@ def make_fast_answer_node(ctx: NodeContext):
         strategy = plan.strategy
 
         if strategy == "general_chat":
+            # Queries asking about another visitor's realtime position by ID should be refused,
+            # even if planner mis-routed them to general_chat.
+            import re as _re2
+            if _re2.search(r'\bU\d{3,}\b', user_query) and any(
+                w in user_query for w in ('在哪', '位置', '能回答', '能定位', '现在')
+            ):
+                _ref2 = make_refusal(
+                    "realtime_required",
+                    message="系统无法追踪其他游客的实时位置，没有 GPS 或视觉定位能力。",
+                    suggested_queries=["可以描述您周围的地标，我来帮您推断您自己的位置"],
+                )
+                return {
+                    "result": {"answer": "抱歉，系统没有 GPS 或实时追踪能力，无法判断其他游客的当前位置。如果您想知道自己在哪，可以描述周围的地标，我来帮您推断。",
+                               "response_kind": "refused:realtime_required",
+                               "evidence": [], "refusal": _ref2, "warnings": []},
+                    "agent_type": "query_planner",
+                    "response_kind": "refused:realtime_required",
+                }
             fallback_chat_reply = _fallback_general_chat_reply(user_query)
 
             # For unambiguous social utterances use the fast fallback directly.
@@ -247,6 +265,22 @@ def make_fast_answer_node(ctx: NodeContext):
             # Location-type clarification: try to infer position from landmark description first.
             # Only fall back to a follow-up question if no candidates match.
             if plan.question_type == "location":
+                # Queries asking about another visitor's position by ID (e.g. "U99999现在在哪")
+                # cannot be answered — system has no GPS or tracking capability.
+                import re as _re
+                if _re.search(r'\bU\d{3,}\b', user_query):
+                    _ref = make_refusal(
+                        "realtime_required",
+                        message="系统无法追踪其他游客的实时位置，没有 GPS 或视觉定位能力。",
+                        suggested_queries=["可以描述您周围的地标，我来帮您推断您自己的位置"],
+                    )
+                    return {
+                        "result": {"answer": "抱歉，系统没有 GPS 或实时追踪能力，无法判断其他游客的当前位置。如果您想知道自己在哪，可以描述周围的地标，我来帮您推断。",
+                                   "response_kind": "refused:realtime_required",
+                                   "evidence": [], "refusal": _ref, "warnings": []},
+                        "agent_type": "query_planner",
+                        "response_kind": "refused:realtime_required",
+                    }
                 location_agent = ctx.get_location_agent()
                 candidates = location_agent.infer_candidates(
                     user_query, scenic_slug=plan.scenic_slug or scenic_slug
@@ -359,6 +393,12 @@ def make_tool_dispatch_node(ctx: NodeContext):
                     "forced_title": forced_recommendation_title,
                 },
                 reason="planner_selected_route_planner",
+            )
+        elif strategy == "web_search":
+            first_call = ToolCall(
+                "web_search",
+                {"user_query": user_query},
+                reason="planner_selected_web_search",
             )
         else:
             tool_name = "hybrid_rag" if strategy == "hybrid_rag" else "structured_fact"
