@@ -31,6 +31,7 @@ function formDataWithContext({
   attractionId = "",
   routeLabel = "",
   presetRouteKey = "",
+  conversationContext = null,
 } = {}) {
   const formData = new FormData();
   if (text) formData.append("text", text);
@@ -40,6 +41,9 @@ function formDataWithContext({
   if (attractionId) formData.append("attractionId", attractionId);
   if (routeLabel) formData.append("routeLabel", routeLabel);
   if (presetRouteKey) formData.append("presetRouteKey", presetRouteKey);
+  if (conversationContext && conversationContext.length > 0) {
+    formData.append("conversation_context", JSON.stringify(conversationContext));
+  }
   return formData;
 }
 
@@ -108,6 +112,7 @@ export function buildAudioMessageForm({
   attractionId = "",
   routeLabel = "",
   presetRouteKey = "",
+  conversationContext = null,
 } = {}) {
   const formData = new FormData();
   formData.append("audio", audioFile);
@@ -117,6 +122,9 @@ export function buildAudioMessageForm({
   if (attractionId) formData.append("attractionId", attractionId);
   if (routeLabel) formData.append("routeLabel", routeLabel);
   if (presetRouteKey) formData.append("presetRouteKey", presetRouteKey);
+  if (conversationContext && conversationContext.length > 0) {
+    formData.append("conversation_context", JSON.stringify(conversationContext));
+  }
   return formData;
 }
 

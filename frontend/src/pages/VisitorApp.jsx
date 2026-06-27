@@ -519,6 +519,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       attractionId: activeGuideContext.attractionId,
       routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
       presetRouteKey: options.presetRouteKey || "",
+      conversationContext: messagesRef.current.slice(-6),
     });
     const result = await sendTextMessage(formData);
 
@@ -588,6 +589,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           attractionId: activeGuideContext.attractionId,
           routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
           presetRouteKey: options.presetRouteKey || "",
+          conversation_context: baseMessages.slice(-6),
         }));
         setStreamNotice("实时链路已连接，正在分段生成文本、语音和数字人画面。");
       };
@@ -774,6 +776,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
               scenicSlug: activeGuideContext.scenicSlug,
               attractionId: activeGuideContext.attractionId,
               routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+              conversationContext: messagesRef.current.slice(-6),
             });
             const result = await sendAudioMessage(formData);
             setActiveQuestion(result.user_text || "语音提问");
@@ -798,6 +801,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             scenicSlug: activeGuideContext.scenicSlug,
             attractionId: activeGuideContext.attractionId,
             routeLabel: activeGuideContext.routeTitle || activeGuideContext.routeLabel,
+            conversationContext: messagesRef.current.slice(-6),
           });
           const result = await sendAudioMessage(formData);
           setActiveQuestion(result.user_text || "语音提问");
