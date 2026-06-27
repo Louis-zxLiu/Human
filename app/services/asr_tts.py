@@ -157,10 +157,9 @@ class TTSService:
     def synthesize(self, text: str, output_path: str, voice_id: str = None, style: str = None) -> str:
         """
         Synthesize text to speech using Edge-TTS asynchronously but wrapped synchronously.
-        When style is provided, wraps text in SSML mstts:express-as for emotional delivery.
         """
         target_voice = voice_id if voice_id else self.voice
-        print(f"[TTS] Edge-TTS Synthesis: '{text[:50]}...' using {target_voice} style={style} -> {output_path}")
+        print(f"[TTS] Edge-TTS Synthesis: '{text[:50]}...' using {target_voice} -> {output_path}")
 
         # Ensure output directory exists
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -169,19 +168,7 @@ class TTSService:
         import edge_tts
 
         async def _save():
-            if style:
-                ssml = (
-                    "<speak version='1.0' "
-                    "xmlns='http://www.w3.org/2001/10/synthesis' "
-                    "xmlns:mstts='http://www.w3.org/2001/mstts' "
-                    "xml:lang='zh-CN'>"
-                    f"<voice name='{target_voice}'>"
-                    f"<mstts:express-as style='{style}'>{text}</mstts:express-as>"
-                    "</voice></speak>"
-                )
-                communicate = edge_tts.Communicate(ssml, target_voice)
-            else:
-                communicate = edge_tts.Communicate(text, target_voice)
+            communicate = edge_tts.Communicate(text, target_voice)
             await communicate.save(output_path)
 
         # Run the async function in the current thread's event loop

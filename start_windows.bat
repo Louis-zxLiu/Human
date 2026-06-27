@@ -19,6 +19,7 @@ if not exist "%CONDA_PYTHON%" (
     exit /b 1
 )
 
+set "CONDA_PREFIX=%CONDA_ENV_PREFIX%"
 "%CONDA_PYTHON%" -m app.cli runtime-health --quiet
 if errorlevel 1 (
     echo [ERROR] Current env is not healthy enough to start the system.
@@ -27,7 +28,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-start "Human Backend" cmd /k "chcp 65001 >nul && cd /d ""%PROJECT_ROOT%"" && set ""CONDARC=%CONDARC%"" && set ""CONDA_PKGS_DIRS=%CONDA_PKGS_DIRS%"" && call conda run -p ""%CONDA_ENV_PREFIX%"" python -m app.cli start --host %HOST% --port %PORT%"
+start "Human Backend" cmd /k "chcp 65001 >nul && cd /d ""%PROJECT_ROOT%"" && set ""CONDA_PREFIX=%CONDA_ENV_PREFIX%"" && set ""CONDARC=%CONDARC%"" && set ""CONDA_PKGS_DIRS=%CONDA_PKGS_DIRS%"" && ""%CONDA_PYTHON%"" -m app.cli start --host %HOST% --port %PORT%"
 
 set "READY="
 for /l %%I in (1,1,20) do (
