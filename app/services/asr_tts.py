@@ -154,23 +154,36 @@ class TTSService:
             raise RuntimeError(f"Failed to prepend TTS leading silence: {result.stderr}")
         os.replace(temp_output_path, audio_path)
         
-    def synthesize(self, text: str, output_path: str, voice_id: str = None) -> str:
+    def synthesize(self, text: str, output_path: str, voice_id: str = None, style: str = None) -> str:
         """
         Synthesize text to speech using Edge-TTS asynchronously but wrapped synchronously.
+        When style is provided, wraps text in SSML mstts:express-as for emotional delivery.
         """
         target_voice = voice_id if voice_id else self.voice
-        print(f"[TTS] Edge-TTS Synthesis: '{text[:50]}...' using {target_voice} -> {output_path}")
-        
+        print(f"[TTS] Edge-TTS Synthesis: '{text[:50]}...' using {target_voice} style={style} -> {output_path}")
+
         # Ensure output directory exists
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-        
+
         import asyncio
         import edge_tts
-        
+
         async def _save():
-            communicate = edge_tts.Communicate(text, target_voice)
+            if style:
+                ssml = (
+                    "<speak version='1.0' "
+                    "xmlns='http://www.w3.org/2001/10/synthesis' "
+                    "xmlns:mstts='http://www.w3.org/2001/mstts' "
+                    "xml:lang='zh-CN'>"
+                    f"<voice name='{target_voice}'>"
+                    f"<mstts:express-as style='{style}'>{text}</mstts:express-as>"
+                    "</voice></speak>"
+                )
+                communicate = edge_tts.Communicate(ssml, target_voice)
+            else:
+                communicate = edge_tts.Communicate(text, target_voice)
             await communicate.save(output_path)
-            
+
         # Run the async function in the current thread's event loop
         # Since this is likely called from a background thread, we can use asyncio.run
         try:
@@ -178,12 +191,12 @@ class TTSService:
         except Exception as e:
             print(f"[TTS] Edge-TTS Error: {e}")
             raise e
-            
+
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             raise FileNotFoundError(f"Edge-TTS failed to create file: {output_path}")
 
         self._prepend_leading_silence(output_path)
-            
+
         return output_path
 
 _asr_service = None

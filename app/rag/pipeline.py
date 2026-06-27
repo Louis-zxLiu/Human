@@ -153,6 +153,7 @@ class ScenicRAGPipeline:
             "evidence": evidence,
             "refusal": refusal,
             "warnings": warnings,
+            "tts_style": state.get("tts_style", "gentle"),
             "observability": {
                 "timestamp": utc_timestamp(),
                 "latency_ms": latency_ms,

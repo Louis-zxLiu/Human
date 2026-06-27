@@ -56,5 +56,8 @@ class GraphState(TypedDict, total=False):
     finalized_plan: Dict[str, Any]
     latency_ms: float
 
+    # --- tts ---
+    tts_style: str  # Edge-TTS mstts:express-as style, e.g. "gentle"
+
     # --- timing ---
     latency_start: float

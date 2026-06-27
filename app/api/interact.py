@@ -224,7 +224,7 @@ def is_valid_user_text(text: str) -> bool:
     return bool(text.strip()) and text not in INVALID_INPUTS
 
 
-def synthesize_chunk_payload(text: str) -> Optional[Dict[str, Any]]:
+def synthesize_chunk_payload(text: str, tts_style: str = None) -> Optional[Dict[str, Any]]:
     clean_text = clean_markdown_for_tts(text)
     if not clean_text or not re.search(r"[\w\u4e00-\u9fa5]", clean_text):
         return None
@@ -233,7 +233,7 @@ def synthesize_chunk_payload(text: str) -> Optional[Dict[str, Any]]:
     avatar_engine = get_avatar_engine()
     sentence_id = str(uuid.uuid4())
     audio_path = os.path.join(TEMP_DIR, f"{sentence_id}.mp3")
-    tts_service.synthesize(clean_text, audio_path)
+    tts_service.synthesize(clean_text, audio_path, style=tts_style)
     if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
         return None
 
@@ -562,6 +562,7 @@ def _generate_fresh_avatar_response(
     video_output_path = os.path.join(TEMP_DIR, f"{request_id}_video.mp4")
 
     audio_ready = False
+    tts_style = str(pipeline_result.get("tts_style") or "gentle")
     try:
         clean_text_for_tts = clean_markdown_for_tts(assistant_text)
         if clean_text_for_tts and re.search(r"[\w\u4e00-\u9fa5]", clean_text_for_tts):
@@ -570,7 +571,7 @@ def _generate_fresh_avatar_response(
             def run_tts() -> None:
                 try:
                     tts_service = get_tts_service()
-                    tts_service.synthesize(clean_text_for_tts, audio_output_path)
+                    tts_service.synthesize(clean_text_for_tts, audio_output_path, style=tts_style)
                 except Exception as exc:
                     tts_error.append(exc)
 
@@ -624,6 +625,7 @@ def _generate_static_avatar_response(
     assistant_text: str,
     response_kind: str,
     agent_type: str = "static_reply",
+    tts_style: str = None,
 ) -> Dict[str, Any]:
     request_id = str(uuid.uuid4())
     audio_output_path = os.path.join(TEMP_DIR, f"{request_id}.mp3")
@@ -634,7 +636,7 @@ def _generate_static_avatar_response(
         clean_text_for_tts = clean_markdown_for_tts(assistant_text)
         if clean_text_for_tts and re.search(r"[\w\u4e00-\u9fa5]", clean_text_for_tts):
             tts_service = get_tts_service()
-            tts_service.synthesize(clean_text_for_tts, audio_output_path)
+            tts_service.synthesize(clean_text_for_tts, audio_output_path, style=tts_style)
             audio_ready = os.path.exists(audio_output_path) and os.path.getsize(audio_output_path) > 0
     except Exception as exc:
         print(f"[TTS] static synthesis failed: {exc}")
@@ -915,8 +917,9 @@ async def interact_stream_ws(websocket: WebSocket):
                 await websocket.send_json({"type": "text_token", "text": char})
 
             response_kind = str(pipeline_result.get("response_kind") or "")
+            ws_tts_style = str(pipeline_result.get("tts_style") or "gentle")
             for sentence in build_stream_tts_segments(assistant_text, response_kind=response_kind):
-                payload_chunk = await asyncio.to_thread(synthesize_chunk_payload, sentence)
+                payload_chunk = await asyncio.to_thread(synthesize_chunk_payload, sentence, ws_tts_style)
                 if payload_chunk:
                     await websocket.send_json({"type": "chunk", **payload_chunk})
 

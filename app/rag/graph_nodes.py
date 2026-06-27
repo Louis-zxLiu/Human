@@ -762,6 +762,7 @@ def make_finalize_node(ctx: NodeContext):
             "trace": trace,
             "finalized_plan": _plan_payload(plan),
             "latency_ms": latency_ms,
+            "tts_style": _infer_tts_style(ctx.llm_fn, answer),
         }
 
         compact = {
@@ -779,6 +780,46 @@ def make_finalize_node(ctx: NodeContext):
 
         return payload
     return finalize_node
+
+
+
+# ---------------------------------------------------------------------------
+# TTS style inference
+# ---------------------------------------------------------------------------
+
+EDGE_TTS_STYLES = frozenset({
+    "assistant", "calm", "chat", "cheerful", "customerservice",
+    "depressed", "disgruntled", "documentary-narration", "embarrassed",
+    "empathetic", "fearful", "friendly", "gentle", "lyrical",
+    "newscast", "poetry-reading", "sad", "serious", "sorry", "whisper",
+})
+TTS_STYLE_FALLBACK = "gentle"
+_STYLES_STR = ", ".join(sorted(EDGE_TTS_STYLES))
+
+
+def _infer_tts_style(llm_fn, answer: str) -> str:
+    if not answer or not answer.strip():
+        return TTS_STYLE_FALLBACK
+    prompt = (
+        f"你是语音助手情绪分类器。根据以下导览回答，从列表中选择最合适的一个语气风格，"
+        f"只输出该词，不要有其他内容。\n"
+        f"可选风格：{_STYLES_STR}\n"
+        f"回答文本：{answer[:300]}"
+    )
+    try:
+        raw = llm_fn(
+            prompt,
+            system_prompt="Only output one word from the allowed list. No explanation.",
+            temperature=0.0,
+            max_tokens=15,
+            return_error_text=False,
+        )
+        candidate = str(raw or "").strip().strip("\"'. ").lower()
+        if candidate in EDGE_TTS_STYLES:
+            return candidate
+    except Exception:
+        pass
+    return TTS_STYLE_FALLBACK
 
 
 # ---------------------------------------------------------------------------
