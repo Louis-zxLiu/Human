@@ -192,15 +192,11 @@ conda run -p "D:/Human/env" python -m app.cli eval-unified --report reports/unif
 - **LLM 客户端切换**：从自定义 OpenAI 客户端切换到 LangChain `ChatOpenAI`，统一接入 langchain 生态。
 - **CrossEncoder Reranking 整合**：将 `advanced_pipeline.py` 的重排序逻辑合并进 `ChromaStaticAgent`，懒加载，按需开启。
 - **Review → Repair 闭环**：answer_review_agent 不通过时，repair_execute 节点自动重新召回并二次合成。
-- **全部测试通过**：70 个测试 100% 通过，`process_query()` API 保持不变。
+- **全部测试通过**：71 个测试 100% 通过，`process_query()` API 保持不变。
 
 ## 相关文档
 
-- [总体设计文档.md](/D:/Human/总体设计文档.md)
 - [docs/rag_response_contract.md](/D:/Human/docs/rag_response_contract.md)
-- [docs/submission/01_部署和使用手册.md](/D:/Human/docs/submission/01_部署和使用手册.md)
-- [docs/submission/02_产品总体设计文档.md](/D:/Human/docs/submission/02_产品总体设计文档.md)
-- [docs/submission/05_测试评测报告.md](/D:/Human/docs/submission/05_测试评测报告.md)
 
 ## 3D记忆部署说明
 
