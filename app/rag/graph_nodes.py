@@ -135,6 +135,13 @@ class NodeContext:
         # LLM callable — can be replaced in tests
         from app.rag.llm_client import generate_chat_completion as _llm
         self.llm_fn = _llm
+        self._location_agent = None
+
+    def get_location_agent(self):
+        if self._location_agent is None:
+            from app.rag.location_agent import ScenicLocationAgent
+            self._location_agent = ScenicLocationAgent(self.fact_agent)
+        return self._location_agent
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +254,44 @@ def make_fast_answer_node(ctx: NodeContext):
             }
 
         if strategy == "ask_clarification":
+            # Location-type clarification: try to infer position from landmark description first.
+            # Only fall back to a follow-up question if no candidates match.
+            if plan.question_type == "location":
+                location_agent = ctx.get_location_agent()
+                candidates = location_agent.infer_candidates(
+                    user_query, scenic_slug=plan.scenic_slug or scenic_slug
+                )
+                gps_result = location_agent.build_candidate_reply(candidates, user_query)
+                gps_state = gps_result["gps_state"]
+                if gps_state == "resolved":
+                    resolved = gps_result["resolved_attraction"]
+                    answer = gps_result["answer"]
+                    return {
+                        "result": {"answer": answer, "response_kind": "gps:resolved",
+                                   "evidence": [], "refusal": None, "warnings": []},
+                        "agent_type": "location_agent",
+                        "response_kind": "gps:resolved",
+                        "matched_attraction": resolved,
+                    }
+                elif gps_state == "ambiguous":
+                    answer = gps_result["answer"]
+                    return {
+                        "result": {"answer": answer, "response_kind": "gps:ambiguous",
+                                   "evidence": [], "refusal": None, "warnings": []},
+                        "agent_type": "location_agent",
+                        "response_kind": "gps:ambiguous",
+                        "gps_candidates": gps_result.get("candidate_names", []),
+                    }
+                else:
+                    # need_more_landmarks — ask follow-up
+                    answer = location_agent.build_follow_up_prompt()
+                    return {
+                        "result": {"answer": answer, "response_kind": "gps:need_more_landmarks",
+                                   "evidence": [], "refusal": None, "warnings": []},
+                        "agent_type": "location_agent",
+                        "response_kind": "gps:need_more_landmarks",
+                    }
+
             answer = _normalize_general_chat_reply(
                 plan.chat_reply,
                 _build_clarification_reply(user_query, plan.question_type, plan.scenic_slug or scenic_slug),
