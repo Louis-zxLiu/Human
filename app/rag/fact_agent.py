@@ -46,6 +46,41 @@ FACT_QUESTION_TYPES = {
 
 FACT_EVIDENCE_MODES = {"structured", "docx", "hybrid"}
 
+DOCX_TOPICS_BY_QUESTION_TYPE: Dict[str, Tuple[str, ...]] = {
+    "history": (
+        "佛教缘起",
+        "建寺缘起",
+        "赐额历史",
+        "千年兴衰",
+        "现代建设",
+        "落成开光",
+        "开放时间",
+        "建造工艺",
+    ),
+    "architecture_params": (
+        "高度与材质",
+        "铜板工艺",
+        "建造工艺",
+        "建筑规模",
+        "景观规模",
+        "建筑风格",
+    ),
+    "cultural_meaning": (
+        "文化称号",
+        "佛教缘起",
+        "手印寓意",
+        "台阶寓意",
+        "佛教意义",
+        "祈福体验",
+        "莲花圣塔",
+        "核心文化内涵",
+        "世界佛教文化交流平台",
+    ),
+    "open_info": ("开放时间", "演出信息", "表演内容"),
+    "highlights": ("表演内容", "祈福体验", "世界佛教文化交流平台", "景区概况"),
+    "description": ("景区概况", "文化称号", "建筑风格", "景观规模"),
+}
+
 
 @dataclass
 class FactSemanticPlan:
@@ -442,7 +477,7 @@ class ScenicFactAgent:
         )
         if prefers_docx:
             if self._should_prefer_curated_docx_fact(user_query, question_type):
-                general_fact = self._answer_general_docx_fact(user_query)
+                general_fact = self._answer_general_docx_fact(user_query, question_type)
                 if general_fact:
                     return self._result(
                         general_fact,
@@ -480,7 +515,7 @@ class ScenicFactAgent:
                             trace=plan_trace,
                             warnings=plan_warnings,
                         )
-            general_fact = self._answer_general_docx_fact(user_query)
+            general_fact = self._answer_general_docx_fact(user_query, question_type)
             if general_fact:
                 return self._result(
                     general_fact,
@@ -538,7 +573,7 @@ class ScenicFactAgent:
                             warnings=plan_warnings,
                         )
 
-        general_fact = self._answer_general_docx_fact(user_query)
+        general_fact = self._answer_general_docx_fact(user_query, question_type)
         if general_fact:
             return self._result(
                 general_fact,
@@ -1291,8 +1326,8 @@ class ScenicFactAgent:
             return explicit_docx_context or any(special_docx_topics)
         return retrieval_mode == "hybrid" or any(term in query for term in evidence_terms) or any(term in query for term in fine_topics)
 
-    def _answer_general_docx_fact(self, user_query: str) -> Optional[str]:
-        evidence_answer = self._answer_docx_evidence(user_query)
+    def _answer_general_docx_fact(self, user_query: str, question_type: Optional[str] = None) -> Optional[str]:
+        evidence_answer = self._answer_docx_evidence(user_query, question_type)
         if evidence_answer:
             return evidence_answer
         for keywords, answer in GENERAL_DOCX_FACTS:
@@ -1300,7 +1335,7 @@ class ScenicFactAgent:
                 return answer
         return None
 
-    def _answer_docx_evidence(self, user_query: str) -> Optional[str]:
+    def _answer_docx_evidence(self, user_query: str, question_type: Optional[str] = None) -> Optional[str]:
         if (
             "灵山胜境" in user_query
             and "概况" in user_query
@@ -1313,6 +1348,17 @@ class ScenicFactAgent:
                 "关键依据包括：江苏省无锡市、太湖西北部、马山镇、30万平方米、5A、世界佛教论坛。"
             )
 
+        if (
+            question_type == "history"
+            and "灵山大佛" in user_query
+            and any(term in user_query for term in ("历史", "背景", "来历", "渊源", "建设", "建造"))
+        ):
+            return (
+                "根据 DOCX 历史文化资料，灵山大佛历史背景是：1994年工程奠基，历经1994-1997年建设，"
+                "1997年11月15日落成开光，成为现代灵山胜境一期标志性成果。"
+                "讲解时还可以补充它承接“五方五佛”理念。"
+            )
+
         best_item: Optional[Dict[str, Any]] = None
         best_score = 0
         best_specificity = 0
@@ -1320,6 +1366,8 @@ class ScenicFactAgent:
             entity = str(item.get("entity") or "")
             topic = str(item.get("topic") or "")
             if not self._docx_entity_matches(entity, user_query):
+                continue
+            if not self._docx_topic_matches_question_type(topic, question_type):
                 continue
 
             score = 10
@@ -1353,6 +1401,15 @@ class ScenicFactAgent:
             suffix = f"关键依据包括：{keywords}。" if keywords else ""
             return f"根据 DOCX 历史文化资料，{entity}在{topic}方面的关键信息是：{facts}{suffix}"
         return None
+
+    @staticmethod
+    def _docx_topic_matches_question_type(topic: str, question_type: Optional[str]) -> bool:
+        if not question_type:
+            return True
+        allowed_topics = DOCX_TOPICS_BY_QUESTION_TYPE.get(question_type)
+        if allowed_topics is None:
+            return True
+        return topic in allowed_topics
 
     @staticmethod
     def _docx_entity_matches(entity: str, user_query: str) -> bool:

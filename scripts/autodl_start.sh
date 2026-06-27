@@ -17,6 +17,16 @@ export EMBEDDING_DEVICE="${EMBEDDING_DEVICE:-cpu}"
 cd "${PROJECT_ROOT}"
 
 if ! command -v conda >/dev/null 2>&1; then
+  if [ -f "${HOME}/miniconda3/etc/profile.d/conda.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${HOME}/miniconda3/etc/profile.d/conda.sh"
+  elif [ -f "${HOME}/anaconda3/etc/profile.d/conda.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${HOME}/anaconda3/etc/profile.d/conda.sh"
+  fi
+fi
+
+if ! command -v conda >/dev/null 2>&1; then
   echo "[ERROR] conda was not found. Run scripts/autodl_prepare.sh in a conda-enabled AutoDL image first."
   exit 1
 fi

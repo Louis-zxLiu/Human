@@ -61,6 +61,24 @@ class FactConfiguredOverridesTests(unittest.TestCase):
             )
         )
 
+    def test_docx_history_background_does_not_return_mudra_topic(self):
+        answer = self.agent._answer_general_docx_fact("灵山大佛的历史背景是什么", question_type="history")
+
+        self.assertIsNotNone(answer)
+        self.assertIn("1994", answer)
+        self.assertIn("1997年11月15日", answer)
+        self.assertIn("落成开光", answer)
+        self.assertNotIn("手印", answer)
+        self.assertNotIn("施无畏印", answer)
+        self.assertNotIn("施与愿印", answer)
+
+    def test_docx_mudra_topic_still_matches_cultural_meaning(self):
+        answer = self.agent._answer_general_docx_fact("灵山大佛手印寓意是什么", question_type="cultural_meaning")
+
+        self.assertIsNotNone(answer)
+        self.assertIn("施无畏印", answer)
+        self.assertIn("施与愿印", answer)
+
     def test_fact_semantic_agent_uses_llm_structured_plan(self):
         payload = (
             '{"attraction_name":"灵山大照壁","question_type":"location","evidence_mode":"structured",'
