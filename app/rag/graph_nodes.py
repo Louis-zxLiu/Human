@@ -24,13 +24,6 @@ import re
 
 REFERENCE_PRONOUN_PATTERN = re.compile(r"(它|这里|这个景点|这个地方|刚才那个|刚刚那个|上一个|这个)")
 
-GENERAL_CHAT_DOMAIN_SIGNALS = (
-    "灵山", "拈花湾", "梵宫", "大佛", "景区", "景点", "路线", "推荐",
-    "介绍", "讲解", "位置", "在哪", "哪里", "怎么走", "导航", "开放",
-    "门票", "天气", "停车", "客流", "排队",
-)
-
-
 def _fallback_general_chat_reply(user_query: str) -> Optional[str]:
     query = re.sub(r"\s+", "", str(user_query or "")).lower()
     if not query:
@@ -63,31 +56,31 @@ def _normalize_general_chat_reply(reply: str, fallback: str, max_chars: int = 80
 
 def _build_clarification_reply(user_query: str, question_type: Optional[str] = None, scenic_slug: Optional[str] = None) -> str:
     query = str(user_query or "")
-    if question_type == "highlights" or any(t in query for t in ("好玩", "好看", "看点", "亮点", "特色")):
+    if question_type == "highlights":
         return "可以，我先帮你缩小范围。你想了解哪个景点的看点？也可以告诉我你偏自然风光、历史文化、亲子还是拍照打卡。"
-    if any(t in query for t in ("路线", "怎么逛", "怎么走", "安排", "规划")):
+    if question_type in ("route", "route_planner"):
         return "可以规划。你从哪个位置出发，同行有没有老人或孩子，想轻松逛还是多看几个核心景点？"
     if scenic_slug:
         return "可以介绍。你想了解哪个具体景点？如果还没确定，我可以先从代表性景点、历史文化、主要看点或游览建议里选一个方向讲。"
     return "可以介绍。你想了解哪个城市、景区或具体景点？如果还没确定，也可以告诉我偏自然风光、历史文化、亲子游还是拍照打卡。"
 
 
-def _looks_like_non_social_task(user_query: str) -> bool:
-    query = re.sub(r"\s+", "", str(user_query or ""))
-    task_terms = ("是什么", "在哪", "哪里", "怎么", "怎样", "多少", "几", "哪个",
-                  "介绍", "推荐", "路线", "景点", "景区", "游客", "数据", "统计", "分析")
-    return any(t in query for t in task_terms)
+def _is_pure_social_chat(user_query: str) -> bool:
+    """LLM-free fast check: only matches unambiguous one-line social utterances."""
+    query = re.sub(r"\s+", "", str(user_query or "")).lower()
+    return bool(re.fullmatch(
+        r"(你好|您好|嗨|哈喽|hello|hi|早上好|中午好|下午好|晚上好|在吗|在不在|有人吗"
+        r"|谢谢|多谢|感谢你|谢了|再见|拜拜|bye|goodbye|好的|好哦|收到|明白了|嗯嗯|行|ok|okay"
+        r"|你是谁|你是干嘛的|你能做什么|介绍一下你自己)[!,.?~]*",
+        query, re.IGNORECASE,
+    ))
 
 
 def _should_screen_general_chat(user_query: str, fallback_reply: Optional[str]) -> bool:
-    query = str(user_query or "").strip()
-    if not query:
-        return False
+    """Return True when the query is safe to handle as general_chat without RAG."""
     if fallback_reply:
         return True
-    if len(query) > 18:
-        return False
-    return not any(s in query for s in GENERAL_CHAT_DOMAIN_SIGNALS)
+    return _is_pure_social_chat(user_query)
 
 
 def _agent_type_for_tool(tool_name: str) -> str:
@@ -201,42 +194,39 @@ def make_fast_answer_node(ctx: NodeContext):
 
         if strategy == "general_chat":
             fallback_chat_reply = _fallback_general_chat_reply(user_query)
-            # Always run LLM screening so tests can patch ctx.llm_fn;
-            # plan.chat_reply comes from the planner's own LLM schema and must not
-            # be used here directly.
-            screened_chat_reply = None if _looks_like_non_social_task(user_query) else fallback_chat_reply
 
-            # LLM detect (always attempted when query could be social)
-            if screened_chat_reply is None or fallback_chat_reply is None:
+            # For unambiguous social utterances use the fast fallback directly.
+            if fallback_chat_reply and _is_pure_social_chat(user_query):
+                screened_chat_reply = fallback_chat_reply
+            else:
+                # Use LLM to verify this is really general chat and get a reply.
                 fallback = fallback_chat_reply or "你好，我在。"
-                # attempt LLM detect (mirrors detect_general_chat_reply)
-                if _should_screen_general_chat(user_query, fallback_chat_reply):
-                    system_prompt = (
-                        "You classify whether a message to a scenic-guide assistant is ordinary conversation. "
-                        "Return strict JSON only. "
-                        'Use {"is_general_chat": true, "reply": "...", "reason": "..."} for greetings, thanks, '
-                        "goodbyes, simple acknowledgements, asking who the assistant is, or other brief social talk. "
-                        'Use {"is_general_chat": false, "reason": "..."} for scenic facts, route recommendations, '
-                        "navigation, weather, traffic, opening info, or any domain task. "
-                        "If is_general_chat is true, reply in concise Simplified Chinese, warm and natural, under 24 Chinese characters."
+                screened_chat_reply = None
+                system_prompt = (
+                    "You classify whether a message to a scenic-guide assistant is ordinary conversation. "
+                    "Return strict JSON only. "
+                    'Use {"is_general_chat": true, "reply": "..."} for greetings, thanks, '
+                    "goodbyes, simple acknowledgements, asking who the assistant is, or other brief social talk. "
+                    'Use {"is_general_chat": false} for scenic facts, route recommendations, '
+                    "navigation, weather, traffic, opening info, or any domain task. "
+                    "If is_general_chat is true, reply in concise Simplified Chinese, warm and natural, under 24 Chinese characters."
+                )
+                try:
+                    raw = ctx.llm_fn(
+                        f"User message: {user_query}\nReturn JSON only.",
+                        system_prompt, temperature=0.0, max_tokens=160,
+                        return_error_text=False, json_mode=True,
                     )
-                    prompt = (
-                        f"User message: {user_query}\n"
-                        'Return JSON only.'
-                    )
-                    try:
-                        raw = ctx.llm_fn(prompt, system_prompt, temperature=0.0, max_tokens=160,
-                                         return_error_text=False, json_mode=True)
-                        cleaned = str(raw or "").replace("```json", "").replace("```", "").strip()
-                        if cleaned:
-                            payload = json.loads(cleaned)
-                            if payload.get("is_general_chat") is True:
-                                screened_chat_reply = _normalize_general_chat_reply(
-                                    str(payload.get("reply") or ""), fallback, max_chars=80)
-                            elif payload.get("is_general_chat") is False:
-                                screened_chat_reply = None
-                    except Exception:
-                        pass
+                    cleaned = str(raw or "").replace("```json", "").replace("```", "").strip()
+                    if cleaned:
+                        payload = json.loads(cleaned)
+                        if payload.get("is_general_chat") is True:
+                            screened_chat_reply = _normalize_general_chat_reply(
+                                str(payload.get("reply") or ""), fallback, max_chars=80)
+                        elif payload.get("is_general_chat") is False:
+                            screened_chat_reply = None
+                except Exception:
+                    pass
                 if screened_chat_reply is None:
                     screened_chat_reply = fallback_chat_reply or "你好，我在。"
 

@@ -6,71 +6,6 @@ from app.rag.fact_agent import ScenicFactAgent
 from app.rag.llm_client import generate_chat_completion
 
 
-CURRENT_POSITION_HINTS = (
-    "我现在",
-    "当前位置",
-    "当前所在",
-    "我在哪",
-    "我在哪里",
-    "我附近",
-    "附近",
-    "周边",
-    "离我最近",
-    "从这里",
-    "从这儿",
-    "接下来",
-    "下一步",
-)
-
-NEXT_STEP_HINTS = (
-    "下一步",
-    "接下来",
-    "后面去哪",
-    "先去哪里",
-    "适合去哪些点",
-    "附近有什么",
-    "离我最近",
-)
-
-ROUTE_GUIDANCE_HINTS = (
-    "怎么走",
-    "怎么去",
-    "往哪走",
-    "导航",
-    "带我去",
-    "去怎么走",
-)
-
-STATIC_LOCATION_FACT_HINTS = (
-    "在哪里",
-    "在哪",
-    "哪里",
-    "位于",
-    "什么位置",
-    "具体方位",
-    "方位",
-)
-
-
-def should_request_landmark_follow_up(user_query: str, intent: str) -> bool:
-    query = str(user_query or "").strip()
-    if not query:
-        return False
-
-    has_current_position_hint = any(keyword in query for keyword in CURRENT_POSITION_HINTS)
-    has_route_guidance_hint = any(keyword in query for keyword in ROUTE_GUIDANCE_HINTS)
-    has_static_location_hint = any(keyword in query for keyword in STATIC_LOCATION_FACT_HINTS)
-    has_next_step_hint = any(keyword in query for keyword in NEXT_STEP_HINTS)
-
-    if has_current_position_hint:
-        return True
-    if intent == "RECOMMEND" and has_next_step_hint:
-        return True
-    if has_route_guidance_hint and not has_static_location_hint:
-        return True
-    return False
-
-
 def detect_landmark_follow_up_need(user_query: str, intent: str) -> bool:
     query = str(user_query or "").strip()
     normalized_intent = str(intent or "").strip().upper() or "FACT"
@@ -113,7 +48,7 @@ def detect_landmark_follow_up_need(user_query: str, intent: str) -> bool:
                 return value
     except Exception:
         pass
-    return should_request_landmark_follow_up(query, normalized_intent)
+    return False
 
 
 LANDMARK_HINTS: Dict[str, List[str]] = {

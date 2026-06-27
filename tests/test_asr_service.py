@@ -43,7 +43,23 @@ class ASRServiceTests(unittest.TestCase):
         service.model.transcribe.return_value = {"text": "  介紹一下靈山梵宮  "}
 
         audio = np.ones(16000, dtype=np.float32) * 0.02
-        with patch("os.path.exists", return_value=True), patch.object(service, "_decode_audio", return_value=audio):
+
+        class _FakeCC:
+            def convert(self, text):
+                mapping = str.maketrans("介紹靈梵宮", "介绍灵梵宫")
+                return text.translate(mapping)
+
+        fake_opencc_module = Mock()
+        fake_opencc_module.OpenCC = Mock(return_value=_FakeCC())
+
+        with patch("os.path.exists", return_value=True), patch.object(
+            service, "_decode_audio", return_value=audio
+        ), patch.dict("sys.modules", {"opencc": fake_opencc_module}), patch(
+            "app.services.asr_tts._simplified_converter", None
+        ):
+            # Reset cached converter so the mock opencc is used
+            import app.services.asr_tts as _asr_mod
+            _asr_mod._simplified_converter = None
             text = service.transcribe("voice.webm")
 
         self.assertEqual(text, "介绍一下灵山梵宫")

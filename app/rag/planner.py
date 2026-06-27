@@ -24,129 +24,6 @@ ExecutionStrategy = Literal[
 ]
 
 
-ANALYTICS_KEYWORDS = (
-    "人群",
-    "偏好",
-    "消费",
-    "花费",
-    "停留",
-    "满意度",
-    "热门",
-    "趋势",
-    "年龄",
-    "男性",
-    "女性",
-    "统计",
-    "分析",
-    "数据",
-    "人均",
-    "同行",
-    "记录",
-    "访问量",
-    "月份",
-    "景点类型",
-    "sql",
-    "excel",
-)
-
-REALTIME_UNSUPPORTED_HINTS = (
-    "实时",
-    "现在排队",
-    "排队要多久",
-    "当前停车",
-    "剩多少车位",
-    "今天客流",
-    "现在客流",
-    "明天",
-    "预测",
-    "最新票价",
-    "最新开放时间",
-)
-
-REALTIME_TIME_HINTS = (
-    "今天",
-    "今天下午",
-    "今天晚上",
-    "现在",
-    "当前",
-    "实时",
-    "这会儿",
-    "刚刚",
-    "稍后",
-    "等会",
-    "今晚",
-    "明天",
-)
-
-REALTIME_WEATHER_HINTS = (
-    "天气",
-    "下雨",
-    "雨",
-    "晴",
-    "阴",
-    "多云",
-    "气温",
-    "温度",
-    "风力",
-    "风大",
-    "空气质量",
-)
-
-REALTIME_TRAFFIC_HINTS = (
-    "堵不堵",
-    "堵车",
-    "路况",
-    "拥堵",
-    "交通",
-    "停车",
-    "车位",
-    "排队",
-    "客流",
-)
-
-DOCX_TERMS = ("docx", "DOCX", "历史文化资料", "景区资料", "介绍文档")
-BEHAVIOR_TERMS = ("游客行为数据", "行为数据", "游客行为 excel", "游客行为excel", "excel", "sql")
-FACT_TERMS = (
-    "开放时间",
-    "位置",
-    "多高",
-    "高度",
-    "文化内涵",
-    "历史",
-    "事实",
-    "门票",
-    "票价",
-    "介绍",
-)
-
-ROUTE_REQUEST_TERMS = (
-    "推荐",
-    "路线",
-    "行程",
-    "安排",
-    "规划",
-    "怎么走",
-    "咋走",
-    "怎么逛",
-    "咋逛",
-    "怎么游览",
-    "如何游览",
-    "每站",
-    "下一步",
-    "核心节点",
-    "核心景点",
-    "经典首游",
-    "带我走",
-)
-
-ROUTE_PROFILE_TERMS = {
-    "history": ("历史", "文化", "人文", "佛教", "禅意", "古刹", "礼佛", "梵宫"),
-    "nature": ("自然", "风光", "湖景", "拍照", "打卡", "花海"),
-    "family": ("亲子", "孩子", "儿童", "家庭", "老人", "长辈"),
-    "architecture": ("建筑", "艺术", "空间", "坛城", "工艺"),
-    "relaxed": ("轻松", "慢游", "慢慢", "休闲", "夜游", "放松", "不赶路"),
-}
-
 @dataclass
 class QueryPlan:
     intent: QueryIntent
@@ -176,93 +53,11 @@ class QueryPlanner:
         conversation_context: Optional[List[Dict[str, Any]]] = None,
         session_memory: Optional[Dict[str, Any]] = None,
     ) -> QueryPlan:
-        llm_plan = self._plan_with_llm(
+        return self._plan_with_llm(
             user_query,
             scenic_slug=scenic_slug,
             conversation_context=conversation_context,
             session_memory=session_memory,
-        )
-        if llm_plan:
-            return llm_plan
-        semantic_fallback = self._semantic_fallback_plan(user_query, scenic_slug=scenic_slug)
-        if semantic_fallback:
-            semantic_fallback.planner_source = "llm_planner_failed_semantic_fallback" if llm_is_configured() else "heuristic_fallback"
-            return semantic_fallback
-        if llm_is_configured():
-            return QueryPlan(
-                intent="CHAT",
-                strategy="ask_clarification",
-                scenic_slug=scenic_slug or infer_scenic_slug_from_text(user_query),
-                question_type="description",
-                confidence=0.4,
-                reasoning=["LLM planner failed; asking for clarification instead of using heuristic semantic routing."],
-                chat_reply="我需要先确认一下你的具体需求：你想查景点资料、规划路线，还是分析游客数据？",
-                planner_source="llm_planner_failed",
-            )
-        return self._heuristic_plan(user_query, scenic_slug=scenic_slug)
-
-    def _heuristic_plan(self, user_query: str, scenic_slug: Optional[str] = None) -> QueryPlan:
-        query = str(user_query or "").strip()
-        lowered = query.lower()
-        resolved_scenic_slug = scenic_slug or infer_scenic_slug_from_text(query)
-
-        if self._has_source_conflict(lowered):
-            return QueryPlan(
-                intent="FACT",
-                strategy="refuse_source_conflict",
-                scenic_slug=resolved_scenic_slug,
-                source_conflict=True,
-                confidence=0.98,
-                reasoning=["Detected mixed fact/analytics source requirements."],
-                planner_source="heuristic_fallback",
-            )
-
-        if self._is_private_or_live_location_query(query):
-            return QueryPlan(
-                intent="ANALYTICS",
-                strategy="refuse_realtime",
-                scenic_slug=resolved_scenic_slug,
-                requires_realtime_data=True,
-                confidence=0.98,
-                reasoning=["Query asks for a specific user's live/private location."],
-                planner_source="heuristic_fallback",
-            )
-
-        if self._requires_realtime_data(lowered):
-            return QueryPlan(
-                intent=self._default_intent(lowered),
-                strategy="refuse_realtime",
-                scenic_slug=resolved_scenic_slug,
-                requires_realtime_data=True,
-                confidence=0.96,
-                reasoning=["Query asks for realtime or future operational data."],
-                planner_source="heuristic_fallback",
-            )
-
-        if self._is_simple_social_chat(query):
-            return QueryPlan(
-                intent="CHAT",
-                strategy="general_chat",
-                scenic_slug=resolved_scenic_slug,
-                confidence=0.78,
-                reasoning=["LLM planner unavailable; handled only simple social chat locally."],
-                chat_reply="你好，我在。",
-                planner_source="heuristic_fallback",
-            )
-
-        semantic_plan = self._semantic_fallback_plan(query, scenic_slug=resolved_scenic_slug)
-        if semantic_plan:
-            return semantic_plan
-
-        return QueryPlan(
-            intent="CHAT",
-            strategy="ask_clarification",
-            scenic_slug=resolved_scenic_slug,
-            question_type="description",
-            confidence=0.62,
-            reasoning=["LLM planner unavailable; asked for clarification instead of guessing a tool route."],
-            chat_reply="我需要先确认一下你的具体需求：你想查景点资料、规划路线，还是分析游客数据？",
-            planner_source="heuristic_fallback",
         )
 
     def _plan_with_llm(
@@ -489,25 +284,17 @@ class QueryPlanner:
         requires_realtime_data = QueryPlanner._coerce_bool(payload.get("requires_realtime_data"))
         source_conflict = QueryPlanner._coerce_bool(payload.get("source_conflict"))
         query = str(user_query or "")
+
+        # Hard-coded safety guards for fabrication / external-event requests (not routing heuristics)
         if QueryPlanner._requires_fabrication_refusal(query) or QueryPlanner._requires_external_event_refusal(query):
             strategy = "refuse_realtime"
             requires_realtime_data = True
-        elif QueryPlanner._has_source_conflict(query):
-            strategy = "refuse_source_conflict"
-            source_conflict = True
-        elif QueryPlanner._requires_realtime_data(query) and not QueryPlanner._is_historical_analytics_query(query):
-            strategy = "refuse_realtime"
-            requires_realtime_data = True
-        elif source_conflict:
-            strategy = "refuse_source_conflict"
-        elif strategy == "refuse_realtime" and QueryPlanner._is_historical_analytics_query(query):
-            strategy = "semantic_sql"
-            requires_realtime_data = False
-        elif requires_realtime_data and not QueryPlanner._is_historical_analytics_query(query):
-            strategy = "refuse_realtime"
-        elif requires_realtime_data:
-            requires_realtime_data = False
 
+        # Honour LLM's source_conflict flag
+        if source_conflict and strategy not in {"refuse_realtime"}:
+            strategy = "refuse_source_conflict"
+
+        # Sync intent from strategy where strategy is canonical
         strategy_intent = {
             "semantic_sql": "ANALYTICS",
             "route_planner": "RECOMMEND",
@@ -517,25 +304,11 @@ class QueryPlanner:
         if strategy in strategy_intent:
             intent = strategy_intent[strategy]
 
-        if QueryPlanner._is_private_or_live_location_query(query):
-            strategy = "refuse_realtime"
-            intent = "ANALYTICS"
-            requires_realtime_data = True
-        if strategy in {"general_chat", "ask_clarification"} and QueryPlanner._is_route_request(query):
-            strategy = "route_planner"
-            intent = "RECOMMEND"
-        if strategy == "general_chat" and QueryPlanner._has_hard_boundary_signal(query):
-            return None
-        if strategy == "ask_clarification" and (
-            QueryPlanner._has_source_conflict(query) or QueryPlanner._requires_realtime_data(query)
-        ):
-            return None
+        # Historical analytics: allow even if LLM flagged requires_realtime_data
         if strategy == "refuse_realtime" and QueryPlanner._is_historical_analytics_query(query):
             strategy = "semantic_sql"
             intent = "ANALYTICS"
             requires_realtime_data = False
-        if strategy in {"refuse_realtime", "refuse_source_conflict"} and intent == "CHAT":
-            intent = QueryPlanner._default_intent(query)
         question_type = str(payload.get("question_type") or "description").strip()
         if question_type not in allowed_question_types:
             question_type = "description"
@@ -662,125 +435,22 @@ class QueryPlanner:
         schedule_signal = any(term in query for term in ("几点", "时间", "开始", "开放", "安排"))
         return event_signal and schedule_signal
 
-    @staticmethod
-    def _is_simple_social_chat(query: str) -> bool:
-        normalized = re.sub(r"\s+", "", str(query or "")).lower()
-        return bool(
-            re.fullmatch(
-                r"(你好|您好|嗨|哈喽|hello|hi|早上好|中午好|下午好|晚上好|在吗|在不在|有人吗|谢谢|多谢|感谢你|谢了|再见|拜拜|bye|goodbye|好的|好哦|收到|明白了|嗯嗯|行|ok|okay)[!,.?~]*",
-                normalized,
-                flags=re.IGNORECASE,
-            )
-        )
-
-    @staticmethod
-    def _is_route_request(query: str) -> bool:
-        normalized = re.sub(r"\s+", "", str(query or ""))
-        if not normalized:
-            return False
-        return any(term in normalized for term in ROUTE_REQUEST_TERMS)
-
-    @staticmethod
-    def _detect_route_profile(query: str) -> str:
-        normalized = str(query or "")
-        for profile, terms in ROUTE_PROFILE_TERMS.items():
-            if any(term in normalized for term in terms):
-                return profile
-        return "general"
-
-    @staticmethod
-    def _semantic_fallback_plan(user_query: str, scenic_slug: Optional[str] = None) -> Optional[QueryPlan]:
-        query = str(user_query or "").strip()
-        resolved_scenic_slug = scenic_slug or infer_scenic_slug_from_text(query)
-        if QueryPlanner._is_route_request(query):
-            return QueryPlan(
-                intent="RECOMMEND",
-                strategy="route_planner",
-                scenic_slug=resolved_scenic_slug,
-                question_type="description",
-                route_profile=QueryPlanner._detect_route_profile(query),
-                confidence=0.82,
-                reasoning=["Detected an explicit route-planning request with deterministic semantic fallback."],
-                planner_source="heuristic_fallback",
-            )
-        return None
-
-    @staticmethod
-    def _requires_realtime_data(query: str) -> bool:
-        return contains_realtime_unsupported_signal(query)
-
-    @staticmethod
-    def _is_private_or_live_location_query(query: str) -> bool:
-        return bool(re.search(r"(?<![A-Za-z0-9])U\d{3,}", query, flags=re.IGNORECASE)) and any(
-            term in query for term in ("位置", "在哪", "哪里", "定位", "轨迹")
-        )
-
-    @staticmethod
-    def _has_source_conflict(query: str) -> bool:
-        if QueryPlanner._is_behavior_cost_stat_query(query):
-            return False
-        has_docx = any(term.lower() in query for term in DOCX_TERMS)
-        has_behavior = any(term.lower() in query for term in BEHAVIOR_TERMS)
-        has_fact = any(term in query for term in FACT_TERMS)
-        has_analytics = any(term in query for term in ANALYTICS_KEYWORDS)
-        analytics_metric_terms = (
-            "统计",
-            "平均",
-            "消费",
-            "花费",
-            "满意度",
-            "访问量",
-            "偏好",
-            "停留",
-            "记录",
-            "排名",
-            "分布",
-            "人群",
-            "性别",
-            "年龄",
-            "同行",
-            "月份",
-            "景点类型",
-        )
-        has_behavior_metric = any(term in query for term in analytics_metric_terms)
-        if has_docx and has_analytics:
-            return True
-        if "官方" in query and has_behavior and has_fact:
-            return True
-        if has_behavior and has_fact and not has_behavior_metric:
-            return True
-        if any(term in query for term in ("当作", "当成", "说成", "当")) and any(
-            term in query for term in ("门票", "票价", "开放时间", "文化内涵")
-        ):
-            return True
-        return False
-
-    @staticmethod
-    def _is_behavior_cost_stat_query(query: str) -> bool:
-        if not query:
-            return False
-        has_cost_field = any(term in query for term in ("门票", "票", "餐饮", "吃饭", "购物", "交通", "娱乐", "花费", "消费", "多少钱"))
-        has_stat = any(term in query for term in ("平均", "人均", "均值", "一般", "多少"))
-        has_official_boundary = any(term in query for term in ("官方", "当作", "等于", "是不是官方"))
-        return has_cost_field and has_stat and not has_official_boundary
-
-    @staticmethod
-    def _default_intent(query: str) -> QueryIntent:
-        return "FACT"
-
 
 def contains_realtime_unsupported_signal(query: str) -> bool:
-    if any(keyword in query for keyword in REALTIME_UNSUPPORTED_HINTS):
-        return True
-
-    has_time_anchor = any(keyword in query for keyword in REALTIME_TIME_HINTS)
-    weather_related = any(keyword in query for keyword in REALTIME_WEATHER_HINTS)
-    traffic_related = any(keyword in query for keyword in REALTIME_TRAFFIC_HINTS)
-
-    if has_time_anchor and (weather_related or traffic_related):
-        return True
-
-    if weather_related and any(keyword in query for keyword in ("会不会", "是否", "能不能", "怎么样")):
-        return True
-
-    return False
+    """LLM-based realtime signal detector used by fact_agent."""
+    q = str(query or "").strip()
+    if not q:
+        return False
+    try:
+        raw = generate_chat_completion(
+            f"Does this query require real-time, live, or future operational data "
+            f"(e.g. current crowd, today's weather, live queue, tomorrow's schedule, "
+            f"real-time traffic)? Answer only yes or no.\nQuery: {q}",
+            system_prompt="You are a classifier. Answer only 'yes' or 'no'.",
+            temperature=0.0,
+            max_tokens=5,
+            return_error_text=False,
+        )
+        return str(raw or "").strip().lower().startswith("yes")
+    except Exception:
+        return False

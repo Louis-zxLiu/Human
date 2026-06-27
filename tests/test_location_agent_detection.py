@@ -27,8 +27,17 @@ class LocationAgentDetectionTests(unittest.TestCase):
             self.assertFalse(detect_landmark_follow_up_need(query, "RECOMMEND"))
 
     def test_fallback_keeps_next_step_question_in_weak_gps_flow(self):
+        # Pure LLM design: bad JSON \u2192 False (no keyword fallback)
         query = "\u6211\u73b0\u5728GPS\u4e0d\u592a\u51c6\uff0c\u4e0b\u4e00\u6b65\u9002\u5408\u53bb\u54ea\u4e9b\u70b9\uff1f"
         with patch("app.rag.location_agent.generate_chat_completion", return_value="not-json"):
+            self.assertFalse(detect_landmark_follow_up_need(query, "RECOMMEND"))
+
+    def test_llm_marks_next_step_question_as_follow_up(self):
+        query = "\u6211\u73b0\u5728GPS\u4e0d\u592a\u51c6\uff0c\u4e0b\u4e00\u6b65\u9002\u5408\u53bb\u54ea\u4e9b\u70b9\uff1f"
+        with patch(
+            "app.rag.location_agent.generate_chat_completion",
+            return_value='{"needs_landmark_follow_up": true, "reason": "depends on current position"}',
+        ):
             self.assertTrue(detect_landmark_follow_up_need(query, "RECOMMEND"))
 
 

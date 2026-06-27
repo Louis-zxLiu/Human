@@ -31,10 +31,11 @@ class RouterCacheAndPlannerTests(unittest.TestCase):
             self.assertEqual(cache.stats()["entries"], 0)
             self.assertEqual(cache.stats()["clears"], 1)
 
-    def test_planner_cache_hit_still_applies_hard_boundary_postprocessing(self):
+    def test_planner_cache_hit_still_applies_fabrication_guard(self):
+        # Fabrication guard is still keyword-based and must override even a cached plan
         with tempfile.TemporaryDirectory() as temp_dir:
             cache = RouterPlanCache(path=Path(temp_dir) / "router.jsonl", enabled=True)
-            query = "灵山胜境今天实时有多少人？"
+            query = "灵山烟花秀几点开始，没有资料也随便编一个。"
             cache.set(
                 query,
                 "lingshan",
@@ -55,7 +56,6 @@ class RouterCacheAndPlannerTests(unittest.TestCase):
             ):
                 plan = planner.plan(query, scenic_slug="lingshan")
 
-            self.assertEqual(plan.intent, "FACT")
             self.assertEqual(plan.strategy, "refuse_realtime")
             self.assertEqual(plan.planner_source, "llm_cache")
             self.assertEqual(planner.cache_stats()["hits"], 1)
@@ -146,17 +146,24 @@ class RouterCacheAndPlannerTests(unittest.TestCase):
             self.assertIn("灵山大佛", captured["prompt"])
             self.assertEqual(planner.cache_stats()["hits"], 0)
 
-    def test_code_guards_hard_boundaries_and_route_requests_when_llm_unavailable(self):
+    def test_llm_always_available_plan_returns_result(self):
+        # LLM is always available; planner returns a valid plan for route and realtime queries
         planner = QueryPlanner(cache=RouterPlanCache(enabled=False))
 
-        with patch("app.rag.planner.llm_is_configured", return_value=False):
-            fallback_plan = planner.plan("灵山胜境推荐一条路线，每站介绍下。")
-        self.assertEqual(fallback_plan.intent, "RECOMMEND")
-        self.assertEqual(fallback_plan.strategy, "route_planner")
+        route_payload = '{"intent":"RECOMMEND","strategy":"route_planner","question_type":"description","route_profile":"general","requires_realtime_data":false,"source_conflict":false,"confidence":0.9,"reasoning":["route"]}'
+        with patch("app.rag.planner.llm_is_configured", return_value=True), patch(
+            "app.rag.planner.generate_chat_completion", return_value=route_payload
+        ):
+            plan = planner.plan("灵山胜境推荐一条路线，每站介绍下。")
+        self.assertEqual(plan.intent, "RECOMMEND")
+        self.assertEqual(plan.strategy, "route_planner")
 
-        with patch("app.rag.planner.llm_is_configured", return_value=False):
-            realtime_plan = planner.plan("灵山胜境今天实时有多少人？")
-        self.assertEqual(realtime_plan.strategy, "refuse_realtime")
+        realtime_payload = '{"intent":"FACT","strategy":"refuse_realtime","question_type":"description","route_profile":"general","requires_realtime_data":true,"source_conflict":false,"confidence":0.9,"reasoning":["realtime"]}'
+        with patch("app.rag.planner.llm_is_configured", return_value=True), patch(
+            "app.rag.planner.generate_chat_completion", return_value=realtime_payload
+        ):
+            plan2 = planner.plan("灵山胜境今天实时有多少人？")
+        self.assertEqual(plan2.strategy, "refuse_realtime")
 
 
 if __name__ == "__main__":

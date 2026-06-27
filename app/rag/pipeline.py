@@ -8,9 +8,9 @@ from app.rag.graph import build_graph
 from app.rag.graph_nodes import (
     NodeContext,
     _fallback_general_chat_reply,
+    _is_pure_social_chat,
     _normalize_general_chat_reply,
     _plan_payload,
-    _should_screen_general_chat,
 )
 from app.rag.graph_state import GraphState
 from app.rag.llm_client import generate_chat_completion
@@ -24,7 +24,7 @@ def detect_general_chat_reply(user_query: str) -> Optional[str]:
     if not query:
         return None
     fallback_reply = _fallback_general_chat_reply(query)
-    if not _should_screen_general_chat(query, fallback_reply):
+    if not _is_pure_social_chat(query) and not fallback_reply:
         return None
     system_prompt = (
         "You classify whether a message to a scenic-guide assistant is ordinary conversation. "
