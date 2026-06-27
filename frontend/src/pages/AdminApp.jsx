@@ -822,7 +822,14 @@ export function AdminApp() {
   const operationRecommendations = data.operation_recommendations || [];
 
   /* ── Sentiment distribution for pie ── */
-  const sentimentDist = data.sentiment_distribution || [];
+  const sentimentRaw = data.sentiment_distribution || {};
+  const sentimentTotal = Object.values(sentimentRaw).reduce((a, b) => a + Number(b), 0);
+  const sentimentDist = sentimentTotal > 0
+    ? Object.entries(sentimentRaw).map(([label, count]) => ({
+        label: formatLabel(label),
+        value: Math.round((Number(count) / sentimentTotal) * 100),
+      }))
+    : [];
 
   /* ── Satisfaction trend ── */
   const satisfactionTrend = data.satisfaction_trend || [];
