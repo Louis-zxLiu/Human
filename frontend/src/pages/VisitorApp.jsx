@@ -22,6 +22,7 @@ import {
   sendTextMessage,
 } from "../lib/api";
 import { buildLoginHref, buildPlannerHref, buildScenicHref } from "../lib/routes";
+import { AgentGraphCard } from "../components/AgentGraphCard";
 
 const AUTH_KEYS = ["auth_token", "username", "user_role"];
 const LINGSHAN_QUICK_PROMPTS = [
@@ -249,6 +250,9 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   const [isSessionMenuOpen, setIsSessionMenuOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [isPresetOpen, setIsPresetOpen] = useState(false);
+  const [agentNodes, setAgentNodes] = useState([]);
+  const [isAgentGraphExpanded, setIsAgentGraphExpanded] = useState(false);
+  const [agentElapsedMs, setAgentElapsedMs] = useState(0);
 
   const currentSessionRef = useRef(currentSession);
   const chatRef = useRef(null);
@@ -263,6 +267,8 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   const streamAudioPlayingRef = useRef(false);
   const messagesRef = useRef(messages);
   const recordingStartedAtRef = useRef(0);
+  const agentStartTimeRef = useRef(null);
+  const agentElapsedTimerRef = useRef(null);
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
@@ -282,6 +288,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       streamAudioCurrentRef.current = null;
     }
     streamAudioUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    if (agentElapsedTimerRef.current) clearInterval(agentElapsedTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -461,7 +468,24 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     stageTimersRef.current = [];
   }
 
+  function resetAgentNodes() {
+    setAgentNodes([]);
+    agentStartTimeRef.current = Date.now();
+    if (agentElapsedTimerRef.current) clearInterval(agentElapsedTimerRef.current);
+    agentElapsedTimerRef.current = setInterval(() => {
+      setAgentElapsedMs(Date.now() - (agentStartTimeRef.current || Date.now()));
+    }, 100);
+  }
+
+  function stopAgentTimer() {
+    if (agentElapsedTimerRef.current) {
+      clearInterval(agentElapsedTimerRef.current);
+      agentElapsedTimerRef.current = null;
+    }
+  }
+
   function scheduleProcessingStages(question, startStage = "heard") {
+    resetAgentNodes();
     clearStageTimers();
     setActiveQuestion(question);
     setProcessStage(startStage);
@@ -533,6 +557,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     });
     updateVideoFromResult(result);
     completeProcessing(result);
+    stopAgentTimer();
   }
 
   async function runRealtimeInteraction(payload, options = {}) {
@@ -620,6 +645,18 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           return;
         }
 
+        if (message.type === "agent_node") {
+          const { node, label, status } = message;
+          setAgentNodes((prev) => {
+            const existing = prev.find((n) => n.node === node);
+            if (existing) {
+              return prev.map((n) => (n.node === node ? { ...n, status } : n));
+            }
+            return [...prev, { node, label: label || node, status }];
+          });
+          return;
+        }
+
         if (message.type === "text_token") {
           ensureAssistantPlaceholder();
           assistantText += message.text || "";
@@ -653,6 +690,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             return;
           }
           completeProcessing({ video_stream_url: "__stream__" });
+          stopAgentTimer();
           settled = true;
           closeSocket();
           resolve(message);
@@ -715,6 +753,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       }
     } catch (err) {
       clearStageTimers();
+      stopAgentTimer();
       setProcessStage("done");
       setMessages((previous) => {
         const updatedMessages = [
@@ -792,6 +831,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             });
             updateVideoFromResult(result);
             completeProcessing(result);
+            stopAgentTimer();
           }
         } else {
           const formData = buildAudioMessageForm({
@@ -817,9 +857,11 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           });
           updateVideoFromResult(result);
           completeProcessing(result);
+          stopAgentTimer();
         }
       } catch (err) {
         clearStageTimers();
+        stopAgentTimer();
         setProcessStage("done");
         setMessages((previous) => {
           const updatedMessages = [
@@ -1159,6 +1201,14 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
               })}
             </div>
           </div>
+
+          {/* Agent graph card */}
+          <AgentGraphCard
+            agentNodes={agentNodes}
+            isExpanded={isAgentGraphExpanded}
+            onToggle={() => setIsAgentGraphExpanded((v) => !v)}
+            elapsedMs={agentElapsedMs}
+          />
 
         </section>
 
