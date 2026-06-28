@@ -375,7 +375,7 @@ class ScenicFactAgent:
         semantic_qt = semantic_plan.question_type if semantic_plan else None
         if not semantic_qt and self._is_unsupported_fact_query(user_query):
             return self._result(
-                "抱歉，这个问题需要实时运营数据或资料外信息支持，我不能根据现有灵山胜境资料编造。您可以改问已收录的景点介绍、位置、开放信息、历史背景、文化内涵或游览建议。",
+                "这个问题涉及实时数据，我目前没有对应信息。您可以改问景点介绍、位置、开放时间、历史背景或游览建议。",
                 attraction,
                 "refused:unsupported_fact",
                 refusal=make_refusal(
@@ -1195,7 +1195,7 @@ class ScenicFactAgent:
             ))
         ):
             return (
-                "根据 DOCX 历史文化资料，灵山胜境概况里不能讲错的基础信息包括："
+                "灵山胜境概况里，以下信息是不能讲错的："
                 "灵山胜境坐落于江苏省无锡市太湖西北部的马山镇，地处秦履峰、青龙山、白虎山三山环抱之间；"
                 "景区占地面积约30万平方米，是国家5A级旅游景区，也是世界佛教论坛永久会址。"
                 "关键依据包括：江苏省无锡市、太湖西北部、马山镇、30万平方米、5A、世界佛教论坛。"
@@ -1207,7 +1207,7 @@ class ScenicFactAgent:
             and any(term in user_query for term in ("历史", "背景", "来历", "渊源", "建设", "建造"))
         ):
             return (
-                "根据 DOCX 历史文化资料，灵山大佛历史背景是：1994年工程奠基，历经1994-1997年建设，"
+                "灵山大佛的历史背景：1994年工程奠基，历经1994-1997年建设，"
                 "1997年11月15日落成开光，成为现代灵山胜境一期标志性成果。"
                 "讲解时还可以补充它承接“五方五佛”理念。"
             )
@@ -1248,7 +1248,7 @@ class ScenicFactAgent:
             must_include = [str(term) for term in best_item.get("must_include") or [] if str(term)]
             keywords = "、".join(must_include)
             suffix = f"关键依据包括：{keywords}。" if keywords else ""
-            return f"根据 DOCX 历史文化资料，{entity}在{topic}方面的关键信息是：{facts}{suffix}"
+            return f"{entity}在{topic}方面的关键信息：{facts}{suffix}"
         return None
 
     @staticmethod

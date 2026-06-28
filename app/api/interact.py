@@ -9,7 +9,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -17,12 +17,13 @@ from app.api.auth import get_current_user, get_current_user_optional
 from app.api.stream_utils import build_stream_tts_segments, split_sentences
 from app.core.config import resolve_path, settings
 from app.rag.location_agent import ScenicLocationAgent, detect_landmark_follow_up_need
-from app.rag.pipeline import ScenicRAGPipeline
+from app.rag.pipeline import ScenicRAGPipeline, AGENT_NODE_LABELS
 from app.rag.router import get_query_intent
 from app.services.asr_tts import get_asr_service, get_tts_service
 from app.services.avatar_engine import get_avatar_engine
 from app.services.log_service import log_service
 from app.services.preset_route_cache import preset_route_cache
+from app.services.session_store import get_session_memory, save_session_memory, init_store
 
 router = APIRouter()
 
@@ -34,6 +35,24 @@ _location_agent_cache: Optional[ScenicLocationAgent] = None
 INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
 WEAK_GPS_SESSIONS: Dict[str, Dict[str, Any]] = {}
 CONVERSATION_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+
+def _init_session_store() -> None:
+    """Schedule SQLite session store initialisation without blocking module load."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(init_store())
+    except RuntimeError:
+        # No running loop at import time — run synchronously
+        try:
+            asyncio.run(init_store())
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+_init_session_store()
 
 
 @router.get("/v1/interact/avatar/default")
@@ -290,8 +309,21 @@ def parse_conversation_context(raw: Optional[str]) -> list[Dict[str, Any]]:
 
 
 def get_conversation_memory(session_key: str) -> Dict[str, Any]:
-    return dict(CONVERSATION_SESSIONS.get(session_key) or {})
-
+    """Get conversation memory. Falls back to SQLite if not in the in-memory cache."""
+    if session_key in CONVERSATION_SESSIONS:
+        return dict(CONVERSATION_SESSIONS[session_key])
+    # Try persistent store (run in a worker thread to avoid blocking the event loop)
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, get_session_memory(session_key))
+            memory = future.result(timeout=2.0)
+            if memory:
+                CONVERSATION_SESSIONS[session_key] = memory
+                return dict(memory)
+    except Exception:
+        pass
+    return {}
 
 def _extract_preference_memory(
     user_text: str,
@@ -377,6 +409,15 @@ def update_conversation_memory(
     elif previous.get("pending_clarification"):
         memory["pending_clarification"] = None
     CONVERSATION_SESSIONS[session_key] = {key: value for key, value in memory.items() if value is not None}
+    # Persist asynchronously — fire-and-forget, failure only prints a warning
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(save_session_memory(session_key, CONVERSATION_SESSIONS[session_key]))
+    except RuntimeError:
+        # No running loop (e.g. unit tests calling this synchronously) — skip persistence
+        pass
+    except Exception:
+        pass
 
 
 def handle_weak_gps_flow(
@@ -887,15 +928,43 @@ async def interact_stream_ws(websocket: WebSocket):
             if is_audio_input:
                 await websocket.send_json({"type": "text_user", "text": user_text})
 
-            assistant_text, pipeline_result = run_answer_pipeline(
+            # Phase 1: try weak-GPS fast path; if not applicable, stream graph nodes.
+            gps_fast = handle_weak_gps_flow(
                 user_text,
                 gps_status,
-                session_key=session_key,
+                session_key,
                 user_profile=None,
                 scenic_slug=scenic_slug,
                 attraction_id=attraction_id,
                 conversation_context=conversation_context,
             )
+            if gps_fast:
+                assistant_text, pipeline_result = gps_fast
+            else:
+                # Normal path: stream per-node progress events to the client.
+                _pipeline = get_pipeline()
+                assistant_text = ""
+                pipeline_result = {}
+                async for _event in _pipeline.async_stream_events(
+                    user_text=user_text,
+                    scenic_slug=scenic_slug,
+                    attraction_id=attraction_id,
+                    conversation_context=conversation_context,
+                    session_memory=get_conversation_memory(session_key),
+                ):
+                    if _event["node"] == "__final__":
+                        pipeline_result = _event["data"]
+                        assistant_text = pipeline_result.get("answer", "")
+                    else:
+                        await websocket.send_json({
+                            "type": "agent_node",
+                            "node": _event["node"],
+                            "label": AGENT_NODE_LABELS.get(_event["node"], _event["node"]),
+                            "status": _event["status"],
+                            "ts": _event["ts"],
+                        })
+                pipeline_result["gps_state"] = "normal" if gps_status != "weak" else "weak_without_followup"
+                pipeline_result["gps_candidates"] = []
             assistant_text = _select_avatar_response_text(
                 assistant_text,
                 pipeline_result,
@@ -929,7 +998,6 @@ async def interact_stream_ws(websocket: WebSocket):
                 attraction_id=attraction_id,
                 route_label=route_label,
             )
-            await websocket.send_json({"type": "done", "full_text": assistant_text, "rag_metadata": rag_metadata})
             update_conversation_memory(
                 session_key,
                 user_text,
@@ -940,8 +1008,11 @@ async def interact_stream_ws(websocket: WebSocket):
                 route_label=route_label,
             )
 
+            # Log first so we have log_id for review_status
+            log_id = None
+            review_status = "auto"
             try:
-                log_service.analyze_and_log(
+                log_id, review_status = log_service.analyze_and_log_returning_status(
                     user_query=user_text,
                     ai_response=assistant_text,
                     cost_time=0.0,
@@ -956,6 +1027,14 @@ async def interact_stream_ws(websocket: WebSocket):
             except Exception as exc:
                 print(f"[API] failed to log websocket interaction: {exc}")
 
+            await websocket.send_json({
+                "type": "done",
+                "full_text": assistant_text,
+                "rag_metadata": rag_metadata,
+                "review_status": review_status,
+                "log_id": log_id,
+            })
+
     except WebSocketDisconnect:
         print("[API] WebSocket disconnected")
     except Exception as exc:
@@ -968,7 +1047,6 @@ async def interact_stream_ws(websocket: WebSocket):
 
 @router.post("/v1/interact/audio")
 async def interact_audio(
-    background_tasks: BackgroundTasks,
     audio: UploadFile = File(...),
     avatar_image: Optional[UploadFile] = File(None),
     gps_status: str = Form("normal"),
@@ -1017,21 +1095,26 @@ async def interact_audio(
     )
 
     total_latency = time.time() - api_start_time
-    background_tasks.add_task(
-        log_service.analyze_and_log,
-        user_query=user_text,
-        ai_response=result.get("assistant_text", ""),
-        cost_time=total_latency,
-        username=username,
-        metadata=result.get("rag_metadata", {}),
-    )
+    log_id = None
+    review_status = "auto"
+    try:
+        log_id, review_status = log_service.analyze_and_log_returning_status(
+            user_query=user_text,
+            ai_response=result.get("assistant_text", ""),
+            cost_time=total_latency,
+            username=username,
+            metadata=result.get("rag_metadata", {}),
+        )
+    except Exception as exc:
+        print(f"[API] failed to log audio interaction: {exc}")
 
+    result["review_status"] = review_status
+    result["log_id"] = log_id
     return JSONResponse(content=result)
 
 
 @router.post("/v1/interact/text")
 async def interact_text(
-    background_tasks: BackgroundTasks,
     text: str = Form(...),
     avatar_image: Optional[UploadFile] = File(None),
     gps_status: str = Form("normal"),
@@ -1067,16 +1150,49 @@ async def interact_text(
     )
 
     total_latency = time.time() - api_start_time
-    background_tasks.add_task(
-        log_service.analyze_and_log,
-        user_query=text,
-        ai_response=result.get("assistant_text", ""),
-        cost_time=total_latency,
-        username=username,
-        metadata=result.get("rag_metadata", {}),
-    )
+    log_id = None
+    review_status = "auto"
+    try:
+        log_id, review_status = log_service.analyze_and_log_returning_status(
+            user_query=text,
+            ai_response=result.get("assistant_text", ""),
+            cost_time=total_latency,
+            username=username,
+            metadata=result.get("rag_metadata", {}),
+        )
+    except Exception as exc:
+        print(f"[API] failed to log text interaction: {exc}")
 
+    result["review_status"] = review_status
+    result["log_id"] = log_id
     return JSONResponse(content=result)
+
+
+@router.get("/v1/interact/review/{log_id}")
+async def get_review_status(
+    log_id: int,
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+):
+    """Poll endpoint for frontend to check if a pending review has been resolved."""
+    import sqlite3 as _sqlite3
+    from app.core.config import resolve_path as _rp
+    db_path = _rp("data/processed/interaction_logs.db")
+    try:
+        conn = _sqlite3.connect(db_path)
+        conn.row_factory = _sqlite3.Row
+        row = conn.execute(
+            "SELECT review_status, suggested_answer, ai_response FROM interaction_logs WHERE id=?",
+            (log_id,),
+        ).fetchone()
+        conn.close()
+    except Exception:
+        raise HTTPException(status_code=500, detail="DB error")
+    if not row:
+        raise HTTPException(status_code=404, detail="Not found")
+    status = row["review_status"]
+    # If admin suggested a replacement answer, return it; else return original
+    answer = row["suggested_answer"] or row["ai_response"]
+    return JSONResponse(content={"review_status": status, "answer": answer if status in ("approved", "rejected") else None})
 
 
 @router.get("/v1/interact/profile")

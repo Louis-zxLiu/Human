@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from app.api import admin, auth, chat, interact, kb, memory3d, scenic
+from app.api import admin, admin_notify, auth, chat, interact, kb, memory3d, scenic
 from app.core.chroma_telemetry import disable_chroma_telemetry
 from app.core.config import resolve_path, settings
 from app.core.runtime import FRONTEND_DIST_ASSETS, FRONTEND_DIST_INDEX, frontend_build_ready
@@ -95,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(kb.router, prefix="/api/v1/kb", tags=["Knowledge Base Management"])
     app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin Dashboard"])
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
+    app.include_router(admin_notify.router, tags=["Admin Notify"])
 
     @app.get("/", include_in_schema=False)
     async def root():

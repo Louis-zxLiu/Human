@@ -106,11 +106,12 @@ class ChromaStaticAgent:
 
         context = self._build_context(chunks)
         sys_prompt = (
-            "你是一个专业的景区导览数字人。请仅根据参考资料回答问题。"
-            "如果资料不足，就直接说明资料不足，不要编造。"
-            "回答风格要自然、清晰、适合导游口播，不要输出表情。"
+            "你是景区的数字人导游，直接用第一人称自然地回答游客问题。"
+            "禁止用'根据现有资料'、'根据资料' 等开场白——直接给出答案。"
+            "如果资料确实不足，简短说明即可，不要编造。"
+            "语气亲切自然，适合口播，不要输出表情或符号。"
         )
-        prompt = f"参考资料：\n{context}\n\n用户提问：{user_query}\n\n请基于资料作答："
+        prompt = f"参考资料：\n{context}\n\n游客提问：{user_query}\n\n请直接回答："
         final_answer = generate_chat_completion(
             prompt,
             sys_prompt,

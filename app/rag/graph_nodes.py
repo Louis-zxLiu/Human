@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import time
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+
+from langgraph.types import Send
 
 from app.rag.agent_loop import AgentLoopController, AgentStep
 from app.rag.answer_review_agent import AnswerReviewAgent
@@ -24,34 +26,6 @@ import re
 
 REFERENCE_PRONOUN_PATTERN = re.compile(r"(它|这里|这个景点|这个地方|刚才那个|刚刚那个|上一个|这个)")
 
-def _fallback_general_chat_reply(user_query: str) -> Optional[str]:
-    query = re.sub(r"\s+", "", str(user_query or "")).lower()
-    if not query:
-        return None
-    if re.fullmatch(r"(你好|您好|嗨|哈喽|hello|hi|早上好|中午好|下午好|晚上好)[!,.?~]*", query, re.IGNORECASE):
-        return "你好，我在。"
-    if re.fullmatch(r"(在吗|在不在|有人吗)[!,.?~]*", query, re.IGNORECASE):
-        return "在，你说。"
-    if re.fullmatch(r"(谢谢|多谢|感谢你|谢了)[!,.?~]*", query, re.IGNORECASE):
-        return "不客气，我在。"
-    if re.fullmatch(r"(再见|拜拜|bye|goodbye)[!,.?~]*", query, re.IGNORECASE):
-        return "好，随时叫我。"
-    if re.fullmatch(r"(你是谁|你是干嘛的|你能做什么|介绍一下你自己)[!,.?~]*", query):
-        return "我是景区导览助手，可以陪你聊天，也可以帮你查景点介绍、规划路线、分析游客行为数据。"
-    if re.fullmatch(r"(好的|好哦|收到|明白了|嗯嗯|行|ok|okay)[!,.?~]*", query, re.IGNORECASE):
-        return "好的。"
-    return None
-
-
-def _normalize_general_chat_reply(reply: str, fallback: str, max_chars: int = 80) -> str:
-    normalized = re.sub(r"\s+", " ", str(reply or "")).strip().strip("\"'")
-    if not normalized:
-        return fallback
-    parts = [p.strip() for p in re.split(r"(?<=[。！？!?])", normalized) if p.strip()]
-    short_reply = "".join(parts[:2]) if parts else normalized
-    if len(short_reply) > max_chars:
-        short_reply = short_reply[:max_chars].rstrip("，。！？!? ")
-    return short_reply or fallback
 
 
 def _build_clarification_reply(user_query: str, question_type: Optional[str] = None, scenic_slug: Optional[str] = None) -> str:
@@ -65,22 +39,6 @@ def _build_clarification_reply(user_query: str, question_type: Optional[str] = N
     return "可以介绍。你想了解哪个城市、景区或具体景点？如果还没确定，也可以告诉我偏自然风光、历史文化、亲子游还是拍照打卡。"
 
 
-def _is_pure_social_chat(user_query: str) -> bool:
-    """LLM-free fast check: only matches unambiguous one-line social utterances."""
-    query = re.sub(r"\s+", "", str(user_query or "")).lower()
-    return bool(re.fullmatch(
-        r"(你好|您好|嗨|哈喽|hello|hi|早上好|中午好|下午好|晚上好|在吗|在不在|有人吗"
-        r"|谢谢|多谢|感谢你|谢了|再见|拜拜|bye|goodbye|好的|好哦|收到|明白了|嗯嗯|行|ok|okay"
-        r"|你是谁|你是干嘛的|你能做什么|介绍一下你自己)[!,.?~]*",
-        query, re.IGNORECASE,
-    ))
-
-
-def _should_screen_general_chat(user_query: str, fallback_reply: Optional[str]) -> bool:
-    """Return True when the query is safe to handle as general_chat without RAG."""
-    if fallback_reply:
-        return True
-    return _is_pure_social_chat(user_query)
 
 
 def _agent_type_for_tool(tool_name: str) -> str:
@@ -173,197 +131,54 @@ def make_plan_node(ctx: NodeContext):
                 if context_attraction not in query and not REFERENCE_PRONOUN_PATTERN.search(query):
                     context_attraction = None
 
-        return {
+        patch: dict = {
             "plan": plan,
             "context_attraction": context_attraction,
             "intent": plan.intent,
         }
+
+        # For fast-path strategies, resolve the reply here so finalize can use it directly.
+        if plan.strategy in FAST_ANSWER_STRATEGIES:
+            chat_reply = str(plan.chat_reply or "").strip()
+            if not chat_reply:
+                if plan.strategy == "refuse_off_topic":
+                    chat_reply = _OFF_TOPIC_REPLY
+                elif plan.strategy == "refuse_realtime":
+                    chat_reply = _REALTIME_REPLY
+                elif plan.strategy == "refuse_source_conflict":
+                    chat_reply = _SOURCE_CONFLICT_REPLY
+                elif plan.strategy == "ask_clarification":
+                    chat_reply = _build_clarification_reply(
+                        user_query,
+                        question_type=plan.question_type,
+                        scenic_slug=plan.scenic_slug or scenic_slug,
+                    )
+                else:
+                    # general_chat fallback
+                    chat_reply = "您好，有什么我可以帮您？"
+
+            response_kind = {
+                "refuse_off_topic": "refused:off_topic",
+                "refuse_realtime": "refused:realtime_required",
+                "refuse_source_conflict": "refused:source_conflict",
+                "ask_clarification": "clarification",
+                "general_chat": "chat",
+            }.get(plan.strategy, "chat")
+
+            patch["result"] = {
+                "answer": chat_reply,
+                "response_kind": response_kind,
+                "evidence": [],
+                "refusal": None,
+                "warnings": [],
+            }
+            patch["agent_type"] = plan.strategy
+            patch["response_kind"] = response_kind
+
+        return patch
     return plan_node
 
 
-def make_fast_answer_node(ctx: NodeContext):
-    """Handles general_chat / ask_clarification / refuse_* strategies directly."""
-
-    def fast_answer_node(state: GraphState) -> dict:
-        plan = state["plan"]
-        user_query = state.get("user_query", "")
-        scenic_slug = state.get("scenic_slug")
-        intent = state.get("intent", "CHAT")
-
-        strategy = plan.strategy
-
-        if strategy == "general_chat":
-            # Queries asking about another visitor's realtime position by ID should be refused,
-            # even if planner mis-routed them to general_chat.
-            import re as _re2
-            if _re2.search(r'\bU\d{3,}\b', user_query) and any(
-                w in user_query for w in ('在哪', '位置', '能回答', '能定位', '现在')
-            ):
-                _ref2 = make_refusal(
-                    "realtime_required",
-                    message="系统无法追踪其他游客的实时位置，没有 GPS 或视觉定位能力。",
-                    suggested_queries=["可以描述您周围的地标，我来帮您推断您自己的位置"],
-                )
-                return {
-                    "result": {"answer": "抱歉，系统没有 GPS 或实时追踪能力，无法判断其他游客的当前位置。如果您想知道自己在哪，可以描述周围的地标，我来帮您推断。",
-                               "response_kind": "refused:realtime_required",
-                               "evidence": [], "refusal": _ref2, "warnings": []},
-                    "agent_type": "query_planner",
-                    "response_kind": "refused:realtime_required",
-                }
-            fallback_chat_reply = _fallback_general_chat_reply(user_query)
-
-            # For unambiguous social utterances use the fast fallback directly.
-            if fallback_chat_reply and _is_pure_social_chat(user_query):
-                screened_chat_reply = fallback_chat_reply
-            else:
-                # Use LLM to verify this is really general chat and get a reply.
-                fallback = fallback_chat_reply or "你好，我在。"
-                screened_chat_reply = None
-                system_prompt = (
-                    "You classify whether a message to a scenic-guide assistant is ordinary conversation. "
-                    "Return strict JSON only. "
-                    'Use {"is_general_chat": true, "reply": "..."} for greetings, thanks, '
-                    "goodbyes, simple acknowledgements, asking who the assistant is, or other brief social talk. "
-                    'Use {"is_general_chat": false} for scenic facts, route recommendations, '
-                    "navigation, weather, traffic, opening info, or any domain task. "
-                    "If is_general_chat is true, reply in concise Simplified Chinese, warm and natural, under 24 Chinese characters."
-                )
-                try:
-                    raw = ctx.llm_fn(
-                        f"User message: {user_query}\nReturn JSON only.",
-                        system_prompt, temperature=0.0, max_tokens=160,
-                        return_error_text=False, json_mode=True,
-                    )
-                    cleaned = str(raw or "").replace("```json", "").replace("```", "").strip()
-                    if cleaned:
-                        payload = json.loads(cleaned)
-                        if payload.get("is_general_chat") is True:
-                            screened_chat_reply = _normalize_general_chat_reply(
-                                str(payload.get("reply") or ""), fallback, max_chars=80)
-                        elif payload.get("is_general_chat") is False:
-                            screened_chat_reply = None
-                except Exception:
-                    pass
-                if screened_chat_reply is None:
-                    screened_chat_reply = fallback_chat_reply or "你好，我在。"
-
-            fast_plan = SimpleNamespace(
-                strategy="general_chat", question_type=None, route_profile=None,
-                confidence=1.0, reasoning=plan.reasoning, scenic_slug=scenic_slug,
-                planner_source=plan.planner_source, raw_payload=plan.raw_payload,
-            )
-            return {
-                "result": {"answer": screened_chat_reply, "response_kind": "chat",
-                           "evidence": [], "refusal": None, "warnings": []},
-                "plan": fast_plan,
-                "agent_type": "general_chat",
-                "response_kind": "chat",
-            }
-
-        if strategy == "ask_clarification":
-            # Location-type clarification: try to infer position from landmark description first.
-            # Only fall back to a follow-up question if no candidates match.
-            if plan.question_type == "location":
-                # Queries asking about another visitor's position by ID (e.g. "U99999现在在哪")
-                # cannot be answered — system has no GPS or tracking capability.
-                import re as _re
-                if _re.search(r'\bU\d{3,}\b', user_query):
-                    _ref = make_refusal(
-                        "realtime_required",
-                        message="系统无法追踪其他游客的实时位置，没有 GPS 或视觉定位能力。",
-                        suggested_queries=["可以描述您周围的地标，我来帮您推断您自己的位置"],
-                    )
-                    return {
-                        "result": {"answer": "抱歉，系统没有 GPS 或实时追踪能力，无法判断其他游客的当前位置。如果您想知道自己在哪，可以描述周围的地标，我来帮您推断。",
-                                   "response_kind": "refused:realtime_required",
-                                   "evidence": [], "refusal": _ref, "warnings": []},
-                        "agent_type": "query_planner",
-                        "response_kind": "refused:realtime_required",
-                    }
-                location_agent = ctx.get_location_agent()
-                candidates = location_agent.infer_candidates(
-                    user_query, scenic_slug=plan.scenic_slug or scenic_slug
-                )
-                gps_result = location_agent.build_candidate_reply(candidates, user_query)
-                gps_state = gps_result["gps_state"]
-                if gps_state == "resolved":
-                    resolved = gps_result["resolved_attraction"]
-                    answer = gps_result["answer"]
-                    return {
-                        "result": {"answer": answer, "response_kind": "gps:resolved",
-                                   "evidence": [], "refusal": None, "warnings": []},
-                        "agent_type": "location_agent",
-                        "response_kind": "gps:resolved",
-                        "matched_attraction": resolved,
-                    }
-                elif gps_state == "ambiguous":
-                    answer = gps_result["answer"]
-                    return {
-                        "result": {"answer": answer, "response_kind": "gps:ambiguous",
-                                   "evidence": [], "refusal": None, "warnings": []},
-                        "agent_type": "location_agent",
-                        "response_kind": "gps:ambiguous",
-                        "gps_candidates": gps_result.get("candidate_names", []),
-                    }
-                else:
-                    # need_more_landmarks — ask follow-up
-                    answer = location_agent.build_follow_up_prompt()
-                    return {
-                        "result": {"answer": answer, "response_kind": "gps:need_more_landmarks",
-                                   "evidence": [], "refusal": None, "warnings": []},
-                        "agent_type": "location_agent",
-                        "response_kind": "gps:need_more_landmarks",
-                    }
-
-            answer = _normalize_general_chat_reply(
-                plan.chat_reply,
-                _build_clarification_reply(user_query, plan.question_type, plan.scenic_slug or scenic_slug),
-                max_chars=96,
-            )
-            return {
-                "result": {"answer": answer, "response_kind": "clarification",
-                           "evidence": [], "refusal": None, "warnings": []},
-                "agent_type": "dialog_agent",
-                "response_kind": "clarification",
-            }
-
-        if strategy == "refuse_realtime":
-            answer = (
-                "抱歉，这个问题需要实时运营数据或未来信息支持。"
-                "我不能根据当前离线知识资料和游客行为样本编造结果。"
-                "您可以改问景点事实、历史文化、推荐路线，或基于游客行为数据的统计分析。"
-            )
-            refusal = make_refusal(
-                "realtime_required",
-                message="当前系统只支持离线事实、离线文档知识和历史行为分析。",
-                suggested_queries=["今天的客流需要接入实时系统后再问", "可以先问景点事实、历史文化或游客偏好分析"],
-            )
-            return {
-                "result": {"answer": answer, "response_kind": "refused:realtime_required",
-                           "evidence": [], "refusal": refusal, "warnings": []},
-                "agent_type": "query_planner",
-                "response_kind": "refused:realtime_required",
-            }
-
-        # refuse_source_conflict
-        answer = (
-            "抱歉，这个问题混用了不合适的数据源。"
-            "游客行为数据只能用于统计分析，景区资料只能用于事实、历史文化和讲解内容。"
-            "请拆开提问，我再分别回答。"
-        )
-        refusal = make_refusal(
-            "source_conflict",
-            message="事实问答和行为分析需要分别求解。",
-            suggested_queries=["请单独问景点事实问题", "请单独问游客行为统计问题"],
-        )
-        return {
-            "result": {"answer": answer, "response_kind": "refused:source_conflict",
-                       "evidence": [], "refusal": refusal, "warnings": []},
-            "agent_type": "query_planner",
-            "response_kind": "refused:source_conflict",
-        }
-    return fast_answer_node
 
 
 def make_tool_dispatch_node(ctx: NodeContext):
@@ -379,10 +194,44 @@ def make_tool_dispatch_node(ctx: NodeContext):
         forced_recommendation_title = state.get("forced_recommendation_title")
 
         strategy = plan.strategy
-        if strategy == "semantic_sql" or intent == "ANALYTICS":
-            first_call = ToolCall("behavior_sql", {"user_query": user_query}, reason="planner_selected_semantic_sql")
+
+        def _fact_tool_call(tool_name: str, reason: str) -> ToolCall:
+            return ToolCall(
+                tool_name,
+                {
+                    "user_query": user_query,
+                    "scenic_slug": plan.scenic_slug or scenic_slug,
+                    "attraction_id": attraction_id,
+                    "attraction_name": context_attraction,
+                    "planned_question_type": plan.question_type,
+                },
+                reason=reason,
+            )
+
+        calls: List[ToolCall]
+
+        # Detect "fact + analytics" parallel case: user query asks for both factual
+        # information AND statistical analytics at the same time.  We recognise this
+        # by looking for the raw_payload hint "parallel_fact_analytics" set by the
+        # planner, OR by a heuristic: the plan carries ANALYTICS intent while the
+        # query also contains scenic-fact keywords.
+        raw_payload = getattr(plan, "raw_payload", {}) or {}
+        is_parallel_fact_analytics = raw_payload.get("parallel_fact_analytics", False)
+
+        if is_parallel_fact_analytics:
+            # Fan-out: fire both a fact tool and the SQL analytics tool in parallel.
+            tool_name = "hybrid_rag" if strategy == "hybrid_rag" else "structured_fact"
+            fact_call = _fact_tool_call(tool_name, "planner_parallel_fact")
+            sql_call = ToolCall(
+                "behavior_sql",
+                {"user_query": user_query},
+                reason="planner_parallel_analytics",
+            )
+            calls = [fact_call, sql_call]
+        elif strategy == "semantic_sql" or intent == "ANALYTICS":
+            calls = [ToolCall("behavior_sql", {"user_query": user_query}, reason="planner_selected_semantic_sql")]
         elif strategy == "route_planner" or intent == "RECOMMEND":
-            first_call = ToolCall(
+            calls = [ToolCall(
                 "route_planner",
                 {
                     "user_query": user_query,
@@ -393,35 +242,25 @@ def make_tool_dispatch_node(ctx: NodeContext):
                     "forced_title": forced_recommendation_title,
                 },
                 reason="planner_selected_route_planner",
-            )
+            )]
         elif strategy == "web_search":
-            first_call = ToolCall(
+            calls = [ToolCall(
                 "web_search",
                 {"user_query": user_query},
                 reason="planner_selected_web_search",
-            )
+            )]
         else:
             tool_name = "hybrid_rag" if strategy == "hybrid_rag" else "structured_fact"
-            first_call = ToolCall(
-                tool_name,
-                {
-                    "user_query": user_query,
-                    "scenic_slug": plan.scenic_slug or scenic_slug,
-                    "attraction_id": attraction_id,
-                    "attraction_name": context_attraction,
-                    "planned_question_type": plan.question_type,
-                },
-                reason=f"planner_selected_{tool_name}",
-            )
+            calls = [_fact_tool_call(tool_name, f"planner_selected_{tool_name}")]
 
         first_step = AgentStep(
             action="call_tool",
-            reason=first_call.reason or "planner_selected_initial_tool",
+            reason=calls[0].reason or "planner_selected_initial_tool",
             source="planner",
-            tool_call=first_call,
+            tool_call=calls[0],
         )
         return {
-            "candidate_tool_calls": [first_call],
+            "candidate_tool_calls": calls,
             "agent_steps": [first_step],
             "tool_observations": [],
             "seen_tools": [],
@@ -433,10 +272,7 @@ def make_tool_dispatch_node(ctx: NodeContext):
 def make_tool_execute_node(ctx: NodeContext):
     def tool_execute_node(state: GraphState) -> dict:
         candidate_calls: list = state.get("candidate_tool_calls", [])
-        observations: list = list(state.get("tool_observations", []))
-        agent_steps: list = list(state.get("agent_steps", []))
         seen_tools: list = list(state.get("seen_tools", []))
-        loop_count: int = state.get("tool_loop_count", 0)
 
         if not candidate_calls:
             return {}
@@ -448,19 +284,22 @@ def make_tool_execute_node(ctx: NodeContext):
                 reason=f"tool_already_called:{call.name}",
                 source="agent_policy_fallback",
             )
-            agent_steps.append(stop_step)
-            return {"agent_steps": agent_steps, "candidate_tool_calls": []}
+            # Return only the new step; reducer appends it.
+            # Don't return candidate_tool_calls here — agent_loop_decide will reset it.
+            return {"agent_steps": [stop_step]}
 
-        seen_tools.append(call.name)
         observation = ctx.tool_runner.run(call)
-        observations.append(observation)
 
+        # Return only the NEW items produced by this invocation. The Annotated
+        # reducers on tool_observations, seen_tools, agent_steps, and
+        # tool_loop_count will accumulate them correctly whether this node runs
+        # sequentially or as one of several parallel Send branches.
+        # candidate_tool_calls is intentionally omitted: agent_loop_decide always
+        # resets it, and returning [] from two parallel branches would conflict.
         return {
-            "tool_observations": observations,
-            "seen_tools": seen_tools,
-            "tool_loop_count": loop_count + 1,
-            "candidate_tool_calls": candidate_calls[1:],
-            "agent_steps": agent_steps,
+            "tool_observations": [observation],
+            "seen_tools": [call.name],
+            "tool_loop_count": 1,
         }
     return tool_execute_node
 
@@ -470,7 +309,6 @@ def make_agent_loop_decide_node(ctx: NodeContext):
         user_query = state.get("user_query", "")
         plan = state["plan"]
         observations: list = state.get("tool_observations", [])
-        agent_steps: list = list(state.get("agent_steps", []))
         seen_tools: list = state.get("seen_tools", [])
 
         # build candidate calls from last observation
@@ -515,14 +353,14 @@ def make_agent_loop_decide_node(ctx: NodeContext):
             observations=observations,
             candidate_calls=candidates,
         )
-        agent_steps.append(next_step)
 
         next_candidates = []
         if next_step.action == "call_tool" and next_step.tool_call:
             next_candidates = [next_step.tool_call]
 
+        # Return only the new step; the Annotated reducer on agent_steps appends it.
         return {
-            "agent_steps": agent_steps,
+            "agent_steps": [next_step],
             "candidate_tool_calls": next_candidates,
         }
     return agent_loop_decide_node
@@ -597,8 +435,10 @@ def make_synthesize_node(ctx: NodeContext):
                         "evidence_count": len(obs.evidence or []),
                     })
                 system_prompt = (
-                    "You are the final answer composer for a scenic-guide agent. "
-                    "Use only the supplied tool observations. Return concise Simplified Chinese only."
+                    "You are a friendly scenic-area guide composing a final answer in Simplified Chinese. "
+                    "NEVER start with '根据现有资料', '根据资料', '根据文献', '据资料显示' or similar stiff disclaimers. "
+                    "Speak naturally and directly as a knowledgeable guide. "
+                    "Use only the supplied tool observations. Do not invent facts."
                 )
                 prompt = (
                     f"User query: {user_query}\n"
@@ -689,7 +529,6 @@ def make_repair_execute_node(ctx: NodeContext):
         user_query = state.get("user_query", "")
         plan = state["plan"]
         observations: list = list(state.get("tool_observations", []))
-        agent_steps: list = list(state.get("agent_steps", []))
         repair_history: list = list(state.get("repair_history") or [])
         repair_count: int = state.get("repair_count", 0)
         review: dict = state.get("review_result") or {}
@@ -746,13 +585,13 @@ def make_repair_execute_node(ctx: NodeContext):
             user_query=user_query, plan=plan, observations=observations,
             review=review, candidate_calls=candidate_calls,
         )
-        agent_steps.append(repair_step)
 
         if repair_step.action != "call_tool" or not repair_step.tool_call:
             repair_history.append({"attempt": repair_count + 1, "action": action, "status": "no_repair_tool",
                                     "agent_step": repair_step.to_trace()})
             trace["answer_review_repair"] = repair_history
-            return {"agent_steps": agent_steps, "repair_history": repair_history, "trace": trace,
+            # Return only the new step; reducer appends it.
+            return {"agent_steps": [repair_step], "repair_history": repair_history, "trace": trace,
                     "repair_count": repair_count + 1, "candidate_tool_calls": []}
 
         repair_call = repair_step.tool_call
@@ -760,12 +599,10 @@ def make_repair_execute_node(ctx: NodeContext):
             repair_history.append({"attempt": repair_count + 1, "action": action, "status": "tool_already_called",
                                     "agent_step": repair_step.to_trace()})
             trace["answer_review_repair"] = repair_history
-            return {"agent_steps": agent_steps, "repair_history": repair_history, "trace": trace,
+            return {"agent_steps": [repair_step], "repair_history": repair_history, "trace": trace,
                     "repair_count": repair_count + 1, "candidate_tool_calls": []}
 
         new_obs = ctx.tool_runner.run(repair_call)
-        observations.append(new_obs)
-        seen_tools_new = list(seen_tools) + [repair_call.name]
         repair_history.append({
             "attempt": repair_count + 1,
             "action": action,
@@ -777,9 +614,9 @@ def make_repair_execute_node(ctx: NodeContext):
         })
 
         return {
-            "tool_observations": observations,
-            "agent_steps": agent_steps,
-            "seen_tools": seen_tools_new,
+            "tool_observations": [new_obs],
+            "agent_steps": [repair_step],
+            "seen_tools": [repair_call.name],
             "repair_count": repair_count + 1,
             "repair_history": repair_history,
             "trace": trace,
@@ -901,7 +738,11 @@ def _infer_tts_style(llm_fn, answer: str) -> str:
 # Conditional edge functions
 # ---------------------------------------------------------------------------
 
-FAST_ANSWER_STRATEGIES = {"general_chat", "ask_clarification", "refuse_realtime", "refuse_source_conflict"}
+FAST_ANSWER_STRATEGIES = {"general_chat", "ask_clarification", "refuse_realtime", "refuse_source_conflict", "refuse_off_topic"}
+
+_OFF_TOPIC_REPLY = "抱歉，这超出了我的服务范围。我是景区导游助手，可以帮您查景点介绍、规划路线或了解景区文化。"
+_REALTIME_REPLY = "抱歉，这需要实时或外部数据支持，我目前无法获取。可以帮您了解景区历史均值数据或景点讲解。"
+_SOURCE_CONFLICT_REPLY = "抱歉，这个问题要求用不匹配的数据源回答，我无法提供准确结果。"
 
 
 def route_after_plan(state: GraphState) -> str:
@@ -909,8 +750,17 @@ def route_after_plan(state: GraphState) -> str:
     if plan is None:
         return "finalize"
     if plan.strategy in FAST_ANSWER_STRATEGIES:
-        return "fast_answer"
+        return "finalize"
     return "tool_dispatch"
+
+
+def route_after_tool_dispatch(state: GraphState) -> Union[str, List[Send]]:
+    """Fan-out to parallel tool_execute nodes when multiple calls are queued."""
+    calls: list = state.get("candidate_tool_calls", [])
+    if len(calls) > 1:
+        # Each Send carries the full state but with only one tool call to execute.
+        return [Send("tool_execute", {**state, "candidate_tool_calls": [call]}) for call in calls]
+    return "tool_execute"
 
 
 def route_after_agent_loop_decide(state: GraphState) -> str:

@@ -110,8 +110,9 @@ class BochaSearchAgent:
 
     def _synthesize(self, user_query: str, snippets: str) -> str:
         system_prompt = (
-            "你是一个景区智能导览助手，请根据以下网络搜索结果，用简洁的中文回答用户问题。"
-            "只使用搜索结果中的信息，不要编造内容，不要重复列举来源。"
+            "你是景区数字人导游，直接用第一人称自然地回答游客问题。"
+            "禁止用搜索结果开场，直接给出答案。"
+            "只使用搜索到的信息，不要编造内容，语气亲切自然，适合口播。"
         )
         prompt = (
             f"用户问题：{user_query}\n\n"
