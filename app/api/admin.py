@@ -6,7 +6,7 @@ import uuid
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -682,3 +682,145 @@ async def preview_tts_voice(
             "preview_text": preview_text,
         }
     )
+
+
+# ─── Review Queue ─────────────────────────────────────────────────────────────
+
+class ReviewActionRequest(BaseModel):
+    review_note: Optional[str] = None
+    suggested_answer: Optional[str] = None
+
+
+@router.get("/review/queue")
+async def get_review_queue(
+    status: str = "pending",
+    limit: int = 20,
+    current_admin: Dict[str, Any] = Depends(get_current_admin),
+):
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, user_query, ai_response, response_kind, sentiment,
+                   focus_point, review_status, review_note, reviewed_by,
+                   reviewed_at, suggested_answer, refusal_json, warnings_json,
+                   observability_json, created_at
+            FROM interaction_logs
+            WHERE review_status = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (status, limit),
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            for key in ("refusal_json", "warnings_json", "observability_json"):
+                try:
+                    item[key.replace("_json", "")] = json.loads(item.pop(key) or "null")
+                except Exception:
+                    item[key.replace("_json", "")] = None
+            items.append(item)
+        return JSONResponse(content={"items": items, "count": len(items)})
+    finally:
+        conn.close()
+
+
+@router.post("/review/{log_id}/approve")
+async def approve_review(
+    log_id: int,
+    request: ReviewActionRequest,
+    current_admin: Dict[str, Any] = Depends(get_current_admin),
+):
+    _update_review(log_id, "approved", current_admin["username"], request.review_note)
+    return JSONResponse(content={"ok": True, "log_id": log_id, "status": "approved"})
+
+
+@router.post("/review/{log_id}/reject")
+async def reject_review(
+    log_id: int,
+    request: ReviewActionRequest,
+    current_admin: Dict[str, Any] = Depends(get_current_admin),
+):
+    _update_review(log_id, "rejected", current_admin["username"], request.review_note)
+    return JSONResponse(content={"ok": True, "log_id": log_id, "status": "rejected"})
+
+
+@router.post("/review/{log_id}/suggest")
+async def suggest_answer(
+    log_id: int,
+    request: ReviewActionRequest,
+    current_admin: Dict[str, Any] = Depends(get_current_admin),
+):
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            UPDATE interaction_logs
+            SET review_status='approved', suggested_answer=?, reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (request.suggested_answer, current_admin["username"], log_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail=f"Log {log_id} not found")
+    finally:
+        conn.close()
+    return JSONResponse(content={"ok": True, "log_id": log_id})
+
+
+@router.get("/review/stats")
+async def get_review_stats(current_admin: Dict[str, Any] = Depends(get_current_admin)):
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT review_status, COUNT(*) as count
+            FROM interaction_logs
+            WHERE review_status != 'auto'
+            GROUP BY review_status
+            """
+        ).fetchall()
+        stats = {row["review_status"]: row["count"] for row in rows}
+        hot = conn.execute(
+            """
+            SELECT focus_point, COUNT(*) as cnt
+            FROM interaction_logs
+            WHERE created_at >= datetime('now', '-24 hours', 'localtime')
+              AND focus_point != '未知' AND focus_point IS NOT NULL
+            GROUP BY focus_point
+            HAVING cnt >= 5
+            ORDER BY cnt DESC
+            """
+        ).fetchall()
+        return JSONResponse(content={
+            "stats": stats,
+            "hot_topics_needing_kb": [{"topic": r["focus_point"], "count": r["cnt"]} for r in hot],
+        })
+    finally:
+        conn.close()
+
+
+def _update_review(log_id: int, status: str, reviewed_by: str, note: Optional[str]) -> None:
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            UPDATE interaction_logs
+            SET review_status=?, review_note=?, reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (status, note, reviewed_by, log_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail=f"Log {log_id} not found")
+    finally:
+        conn.close()

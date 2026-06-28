@@ -11,6 +11,15 @@ from app.rag.llm_client import generate_chat_completion
 INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
 
 
+def _trigger_notify(log_id: int) -> None:
+    """Fire-and-forget WebSocket broadcast using a lazy import to avoid circular imports."""
+    try:
+        from app.api.admin_notify import notify_pending_review
+        notify_pending_review(log_id)
+    except Exception:
+        pass
+
+
 class LogService:
     """Persist interaction logs and expose lightweight user-profile summaries."""
 
@@ -60,6 +69,11 @@ class LogService:
                 "refusal_json": "ALTER TABLE interaction_logs ADD COLUMN refusal_json TEXT",
                 "warnings_json": "ALTER TABLE interaction_logs ADD COLUMN warnings_json TEXT",
                 "observability_json": "ALTER TABLE interaction_logs ADD COLUMN observability_json TEXT",
+                "review_status": "ALTER TABLE interaction_logs ADD COLUMN review_status TEXT DEFAULT 'auto'",
+                "review_note": "ALTER TABLE interaction_logs ADD COLUMN review_note TEXT",
+                "reviewed_by": "ALTER TABLE interaction_logs ADD COLUMN reviewed_by TEXT",
+                "reviewed_at": "ALTER TABLE interaction_logs ADD COLUMN reviewed_at DATETIME",
+                "suggested_answer": "ALTER TABLE interaction_logs ADD COLUMN suggested_answer TEXT",
             }
             for column, statement in migrations.items():
                 if column not in columns:
@@ -67,6 +81,27 @@ class LogService:
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _should_flag_for_review(metadata: dict, sentiment: str) -> bool:
+        """Return True if this interaction should be queued for human review."""
+        if metadata.get("refusal"):
+            return True
+        warnings = metadata.get("warnings") or []
+        if any("weak_evidence" in str(w) for w in warnings):
+            return True
+        response_kind = str(metadata.get("response_kind") or "")
+        if response_kind.startswith("gps:ambiguous"):
+            return True
+        if sentiment == "负面":
+            return True
+        obs = metadata.get("observability") or {}
+        try:
+            if float(obs.get("latency_ms") or 0) > 8000:
+                return True
+        except (TypeError, ValueError):
+            pass
+        return False
 
     def analyze_and_log(
         self,
@@ -100,6 +135,8 @@ class LogService:
             json.dumps(metadata.get("observability"), ensure_ascii=False) if metadata.get("observability") is not None else None
         )
 
+        review_status = "pending" if self._should_flag_for_review(metadata, sentiment) else "auto"
+
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.cursor()
@@ -108,8 +145,9 @@ class LogService:
                 INSERT INTO interaction_logs
                 (username, user_query, ai_response, intent_type, sentiment, focus_point,
                  query_scope, matched_attraction, recommendation_label, response_kind,
-                 plan_json, evidence_json, refusal_json, warnings_json, observability_json, cost_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 plan_json, evidence_json, refusal_json, warnings_json, observability_json, cost_time,
+                 review_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     username,
@@ -128,9 +166,12 @@ class LogService:
                     warnings_json,
                     observability_json,
                     cost_time,
+                    review_status,
                 ),
             )
             conn.commit()
+            if review_status == "pending":
+                _trigger_notify(cursor.lastrowid)
         finally:
             conn.close()
 
