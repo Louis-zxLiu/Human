@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -70,6 +71,19 @@ def detect_general_chat_reply(user_query: str) -> Optional[str]:
     except Exception:
         pass
     return fallback_reply
+
+
+AGENT_NODE_LABELS: Dict[str, str] = {
+    "planner": "意图解析",
+    "fast_answer": "快速回答",
+    "tool_dispatch": "工具调度",
+    "tool_execute": "工具执行",
+    "agent_loop_decide": "循环判断",
+    "synthesize": "综合生成",
+    "review": "质量审核",
+    "repair_execute": "修复执行",
+    "finalize": "最终输出",
+}
 
 
 class ScenicRAGPipeline:
@@ -143,15 +157,17 @@ class ScenicRAGPipeline:
     async def async_stream_events(
         self,
         user_text: str,
+        gps_status: str = "normal",
+        session_key: str = "",
+        user_profile: Optional[str] = None,
         scenic_slug: Optional[str] = None,
         attraction_id: Optional[str] = None,
         conversation_context: Optional[List[Dict[str, Any]]] = None,
         session_memory: Optional[Dict[str, Any]] = None,
-        user_profile: Optional[str] = None,
         forced_recommendation_profile: Optional[str] = None,
         forced_recommendation_title: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Stream per-node progress events, then yield a final ``__final__`` event.
+        """Stream per-node progress events using LangGraph astream(), then yield a final ``__final__`` event.
 
         Each intermediate event has the shape::
 
