@@ -33,7 +33,7 @@ async def broadcast_pending_review(log_id: int) -> None:
             await ws.send_json(payload)
         except Exception:
             dead.add(ws)
-    _admin_connections -= dead
+    _admin_connections.difference_update(dead)
 
 
 def notify_pending_review(log_id: int) -> None:

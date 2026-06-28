@@ -109,7 +109,8 @@ class QueryPlanner:
             "- route_planner：路线/推荐/游览安排。\n"
             "- ask_clarification：用户在问景区相关内容，但缺少必要槽位，应该先追问而不是拒答。例如没有说明具体景点、城市/景区、游览偏好、统计口径或时间范围。\n"
             "- refuse_off_topic：用户要求景区助手做完全无关的事情，例如写代码、写诗、做PPT、翻译文件、数学题等，这些超出景区导览范围。用 chat_reply 给出礼貌拒绝并说明助手能做什么。\n"
-            "- refuse_realtime：实时、当前、今天/明天/下周、天气、排队、停车、交通、预测、隐私或外部系统才知道的问题。\n"
+            "- refuse_realtime：实时排队/车位/客流/天气/交通、未来预测、隐私推断等联网也无法解决的问题。\n"
+            "- web_search：近期活动/演出/节目/明星/网红/节日安排/最新票价等联网可查的内容。\n"
             "- refuse_source_conflict：要求用错误数据源回答，例如用游客行为数据证明官方事实、用 DOCX 统计行为数据、把平均消费当官方票价。\n"
             "- general_chat：无需查库的自然闲聊、寒暄、感谢、告别、能力介绍。\n\n"
             "重要规则：\n"
@@ -120,7 +121,7 @@ class QueryPlanner:
             "5. 问“介绍一下景点”“讲讲这里”“有什么好看的”但没有具体对象或偏好时，用 CHAT + ask_clarification；可以在追问中给出可选方向。\n"
             "6. 如果上下文里已有 last_attraction 或最近对话明确了对象，用户说“它/这里/这个景点/刚才那个”时应沿用该对象，不要重新追问。\n"
             "7. 如果上一轮是 ask_clarification，本轮是在回答追问，应结合 pending_clarification 继续选择工具。\n"
-            "8. 边界/拒答策略优先级最高。凡是询问未来预测、实时状态、当前排队/车位/客流/天气/交通、隐私推断、外部景区实时信息，必须 strategy=refuse_realtime，不能用历史均值代替预测。\n"
+            "8. 边界策略：实时排队/车位/客流/天气/交通、未来预测、隐私推断 => strategy=refuse_realtime。近期活动/演出/节目/明星/网红/节日安排等联网可查 => strategy=web_search，禁止拒答。\n"
             "9. 凡是要求用错误数据源回答，必须 strategy=refuse_source_conflict。例如用游客行为数据证明官方开放时间/高度，或用 DOCX 统计游客平均消费。\n"
             "10. general_chat 可以自然一点，不要提知识库、证据不足或拒答；普通寒暄短答，能力/身份介绍可稍完整。\n\n"
             "11. 游客实时位置：仅凭 ID 或无任何描述的现在在哪 => refuse_realtime，系统无 GPS/视觉感知；但若游客描述了周围地标如在大佛旁边有石牌坊，可用景区知识推断位置 => FACT + structured_fact + location。\n\n"
@@ -146,11 +147,18 @@ class QueryPlanner:
             "- “请判断U99999现在的位置能回答吗？” => FACT + refuse_realtime，requires_realtime_data=true\n"
             "- “下周游客满意度大概多少？” => ANALYTICS + refuse_realtime，requires_realtime_data=true\n"
             "- “灵山胜境今天实时有多少人？” => FACT + refuse_realtime，requires_realtime_data=true\n"
-            "- “灵山大佛几点开门？从行为数据查。” => FACT + refuse_source_conflict，source_conflict=true\n\n"
+            "- “灵山大佛几点开门？从行为数据查。” => FACT + refuse_source_conflict，source_conflict=true\n"
+            "- 拈花湾最近有什么活动？ => FACT + web_search\n"
+            "- 景区今天有什么演出/节目？ => FACT + web_search\n"
+            "- 之前请了哪些网红/明星来演出？ => FACT + web_search\n"
+            "- 最近的烟花秀是哪天？ => FACT + web_search\n"
+            "- 现在门票最新价格是多少？ => FACT + web_search\n"
+            "- 今年春节/国庆有什么特别安排？ => FACT + web_search\n"
+            "- 灵山胜境最近有什么新闻/新开放景点？ => FACT + web_search\n\n"
             "字段要求：\n"
             "{\n"
             '  "intent": "FACT|ANALYTICS|RECOMMEND|CHAT",\n'
-            '  "strategy": "structured_fact|hybrid_rag|semantic_sql|route_planner|ask_clarification|refuse_realtime|refuse_source_conflict|general_chat",\n'
+            '  "strategy": "structured_fact|hybrid_rag|semantic_sql|route_planner|ask_clarification|web_search|refuse_realtime|refuse_source_conflict|general_chat",\n'
             '  "question_type": "location|open_info|architecture_params|highlights|remarks|history|cultural_meaning|core_function|description",\n'
             '  "route_profile": "history|nature|family|architecture|relaxed|general",\n'
             '  "requires_realtime_data": true/false,\n'
@@ -268,6 +276,7 @@ class QueryPlanner:
             "semantic_sql",
             "route_planner",
             "ask_clarification",
+            "web_search",
             "refuse_realtime",
             "refuse_source_conflict",
             "refuse_off_topic",
@@ -296,9 +305,12 @@ class QueryPlanner:
         query = str(user_query or "")
 
         # Hard-coded safety guards for fabrication / external-event requests (not routing heuristics)
-        if QueryPlanner._requires_fabrication_refusal(query) or QueryPlanner._requires_external_event_refusal(query):
+        if QueryPlanner._requires_fabrication_refusal(query):
             strategy = "refuse_realtime"
             requires_realtime_data = True
+        elif QueryPlanner._requires_external_event_refusal(query) and strategy not in {"refuse_realtime"}:
+            strategy = "web_search"
+            requires_realtime_data = False
 
         # Honour LLM's source_conflict flag
         if source_conflict and strategy not in {"refuse_realtime"}:

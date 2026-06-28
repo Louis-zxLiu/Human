@@ -97,7 +97,7 @@ class LogService:
             return True
         obs = metadata.get("observability") or {}
         try:
-            if float(obs.get("latency_ms") or 0) > 8000:
+            if float(obs.get("latency_ms") or 0) > 15000:
                 return True
         except (TypeError, ValueError):
             pass
@@ -266,7 +266,10 @@ class LogService:
     def _extract_summary_labels(self, user_query: str) -> Dict[str, str]:
         system_prompt = (
             "Return strict JSON only. Analyze the user query and extract intent_type, sentiment, focus_point. "
-            "Sentiment must be one of 正面, 中性, 负面."
+            "Sentiment must be one of 正面, 中性, 负面. "
+            "IMPORTANT: Pure information-seeking questions (asking about activities, schedules, prices, routes, attractions) "
+            "are ALWAYS 中性 regardless of phrasing. Only use 负面 when the user expresses clear dissatisfaction, "
+            "complaint, or negative emotion about something."
         )
         prompt = f"""
 用户提问: "{user_query}"

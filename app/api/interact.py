@@ -9,7 +9,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -1047,7 +1047,6 @@ async def interact_stream_ws(websocket: WebSocket):
 
 @router.post("/v1/interact/audio")
 async def interact_audio(
-    background_tasks: BackgroundTasks,
     audio: UploadFile = File(...),
     avatar_image: Optional[UploadFile] = File(None),
     gps_status: str = Form("normal"),
@@ -1096,21 +1095,26 @@ async def interact_audio(
     )
 
     total_latency = time.time() - api_start_time
-    background_tasks.add_task(
-        log_service.analyze_and_log,
-        user_query=user_text,
-        ai_response=result.get("assistant_text", ""),
-        cost_time=total_latency,
-        username=username,
-        metadata=result.get("rag_metadata", {}),
-    )
+    log_id = None
+    review_status = "auto"
+    try:
+        log_id, review_status = log_service.analyze_and_log_returning_status(
+            user_query=user_text,
+            ai_response=result.get("assistant_text", ""),
+            cost_time=total_latency,
+            username=username,
+            metadata=result.get("rag_metadata", {}),
+        )
+    except Exception as exc:
+        print(f"[API] failed to log audio interaction: {exc}")
 
+    result["review_status"] = review_status
+    result["log_id"] = log_id
     return JSONResponse(content=result)
 
 
 @router.post("/v1/interact/text")
 async def interact_text(
-    background_tasks: BackgroundTasks,
     text: str = Form(...),
     avatar_image: Optional[UploadFile] = File(None),
     gps_status: str = Form("normal"),
@@ -1146,15 +1150,21 @@ async def interact_text(
     )
 
     total_latency = time.time() - api_start_time
-    background_tasks.add_task(
-        log_service.analyze_and_log,
-        user_query=text,
-        ai_response=result.get("assistant_text", ""),
-        cost_time=total_latency,
-        username=username,
-        metadata=result.get("rag_metadata", {}),
-    )
+    log_id = None
+    review_status = "auto"
+    try:
+        log_id, review_status = log_service.analyze_and_log_returning_status(
+            user_query=text,
+            ai_response=result.get("assistant_text", ""),
+            cost_time=total_latency,
+            username=username,
+            metadata=result.get("rag_metadata", {}),
+        )
+    except Exception as exc:
+        print(f"[API] failed to log text interaction: {exc}")
 
+    result["review_status"] = review_status
+    result["log_id"] = log_id
     return JSONResponse(content=result)
 
 

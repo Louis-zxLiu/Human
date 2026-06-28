@@ -271,6 +271,8 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   const agentStartTimeRef = useRef(null);
   const agentElapsedTimerRef = useRef(null);
   const pendingReviewTimerRef = useRef(null);
+  const pendingReviewVideoRef = useRef(null);  // stores video_stream_url for after review
+  const stableAgentTimersRef = useRef([]);      // timers for stable-path node animation
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
@@ -486,6 +488,46 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     }
   }
 
+  // 稳定链路（HTTP）没有 WS agent_node 事件，用定时器模拟节点动画
+  // 节点按实际执行顺序依次 running→done，间隔根据典型耗时估算
+  const STABLE_NODE_SEQUENCE = [
+    { node: "planner",           label: "意图解析",  delay: 0,    duration: 500  },
+    { node: "fast_answer",       label: "快速回答",  delay: 0,    duration: 400  },
+    { node: "tool_dispatch",     label: "工具调度",  delay: 500,  duration: 400  },
+    { node: "tool_execute",      label: "工具执行",  delay: 900,  duration: 1200 },
+    { node: "agent_loop_decide", label: "循环决策",  delay: 2100, duration: 300  },
+    { node: "synthesize",        label: "综合生成",  delay: 2400, duration: 800  },
+    { node: "review",            label: "质量审核",  delay: 3200, duration: 400  },
+    { node: "repair_execute",    label: "修复执行",  delay: 3200, duration: 400  },
+    { node: "finalize",          label: "最终输出",  delay: 3600, duration: 300  },
+  ];
+
+  function startStableAgentAnimation() {
+    // 清掉上次残留
+    stableAgentTimersRef.current.forEach(clearTimeout);
+    stableAgentTimersRef.current = [];
+    setAgentNodes([]);
+
+    STABLE_NODE_SEQUENCE.forEach(({ node, label, delay, duration }) => {
+      const t1 = setTimeout(() => {
+        setAgentNodes((prev) => {
+          const exists = prev.find(n => n.node === node);
+          if (exists) return prev.map(n => n.node === node ? { ...n, status: "running" } : n);
+          return [...prev, { node, label, status: "running" }];
+        });
+      }, delay);
+      const t2 = setTimeout(() => {
+        setAgentNodes((prev) => prev.map(n => n.node === node ? { ...n, status: "done" } : n));
+      }, delay + duration);
+      stableAgentTimersRef.current.push(t1, t2);
+    });
+  }
+
+  function stopStableAgentAnimation() {
+    stableAgentTimersRef.current.forEach(clearTimeout);
+    stableAgentTimersRef.current = [];
+  }
+
   function clearPendingReviewPoller() {
     if (pendingReviewTimerRef.current) {
       clearInterval(pendingReviewTimerRef.current);
@@ -522,9 +564,17 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             content: data.answer,
             meta: null,
           }, true);
+          // 审核通过后启动数字人（如果原始响应有视频URL）
+          const videoUrl = pendingReviewVideoRef.current;
+          if (videoUrl) {
+            pendingReviewVideoRef.current = null;
+            updateVideoFromResult({ video_stream_url: videoUrl });
+            completeProcessing({ video_stream_url: videoUrl });
+          }
         } else if (data.review_status === "rejected") {
           clearPendingReviewPoller();
           setPendingReviewLogId(null);
+          pendingReviewVideoRef.current = null;
           updateAssistantMessage(assistantIndex, {
             content: "抱歉，本条回复已被系统审核拒绝，请换一种方式提问。",
             meta: null,
@@ -597,7 +647,37 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
       presetRouteKey: options.presetRouteKey || "",
       conversationContext: messagesRef.current.slice(-6),
     });
+
+    // 稳定链路：启动模拟节点动画（HTTP 没有 WS agent_node 事件）
+    resetAgentNodes();
+    startStableAgentAnimation();
+
     const result = await sendTextMessage(formData);
+
+    // 请求完成，立即把所有模拟节点标为 done
+    stopStableAgentAnimation();
+    setAgentNodes(STABLE_NODE_SEQUENCE.map(({ node, label }) => ({ node, label, status: "done" })));
+
+    const reviewStatus = result.review_status || "auto";
+    const logId = result.log_id || null;
+
+    if (reviewStatus === "pending" && logId) {
+      const assistantIndex = messagesRef.current.length;
+      // 保存视频URL，审核通过后启动数字人
+      pendingReviewVideoRef.current = result.video_stream_url || null;
+      setMessages((previous) => {
+        const updatedMessages = [
+          ...previous,
+          { role: "assistant", content: "⏳ 本条回复正在人工审核中，审核通过后将自动显示…", meta: null },
+        ];
+        persistMessages(updatedMessages);
+        return updatedMessages;
+      });
+      completeProcessing(result);
+      stopAgentTimer();
+      startPendingReviewPoller(logId, assistantIndex);
+      return;
+    }
 
     setMessages((previous) => {
       const updatedMessages = [
@@ -755,12 +835,10 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           );
           setStreamNotice("实时流式回答完成。");
           if (!streamedMedia) {
-            settled = true;
-            closeSocket();
-            reject(new Error("实时链路未生成数字人画面"));
-            return;
+            // 纯文字流模式：没有 chunk 媒体帧，用 video_stream_url 启动数字人
+            updateVideoFromResult(message);
           }
-          completeProcessing({ video_stream_url: "__stream__" });
+          completeProcessing(message);
           stopAgentTimer();
           settled = true;
           closeSocket();
@@ -1277,15 +1355,13 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
 
         </section>
 
-        {/* ===== RIGHT SIDEBAR: Agent Graph ===== */}
-        <aside className="vis-right-sidebar">
-          <AgentGraphCard
-            agentNodes={agentNodes}
-            isExpanded={isAgentGraphExpanded}
-            onToggle={() => setIsAgentGraphExpanded((v) => !v)}
-            elapsedMs={agentElapsedMs}
-          />
-        </aside>
+        {/* ===== AGENT GRAPH: fixed right-edge drawer ===== */}
+        <AgentGraphCard
+          agentNodes={agentNodes}
+          isExpanded={isAgentGraphExpanded}
+          onToggle={() => setIsAgentGraphExpanded((v) => !v)}
+          elapsedMs={agentElapsedMs}
+        />
 
         {/* ===== RIGHT PANEL: CHAT ===== */}
         <section className="vis-chat-panel">

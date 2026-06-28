@@ -1162,6 +1162,18 @@ export function AdminApp() {
               {reviewStats.hot_topics_needing_kb.map((t) => (
                 <span key={t.topic} className="adm-kb-gap-tag">
                   {t.topic} ×{t.count}
+                  <button
+                    className="adm-kb-gap-tag__del"
+                    title="忽略此缺口"
+                    onClick={() =>
+                      setReviewStats((prev) => ({
+                        ...prev,
+                        hot_topics_needing_kb: prev.hot_topics_needing_kb.filter(
+                          (x) => x.topic !== t.topic
+                        ),
+                      }))
+                    }
+                  >×</button>
                 </span>
               ))}
             </div>

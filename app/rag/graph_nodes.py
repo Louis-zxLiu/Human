@@ -435,8 +435,10 @@ def make_synthesize_node(ctx: NodeContext):
                         "evidence_count": len(obs.evidence or []),
                     })
                 system_prompt = (
-                    "You are the final answer composer for a scenic-guide agent. "
-                    "Use only the supplied tool observations. Return concise Simplified Chinese only."
+                    "You are a friendly scenic-area guide composing a final answer in Simplified Chinese. "
+                    "NEVER start with '根据现有资料', '根据资料', '根据文献', '据资料显示' or similar stiff disclaimers. "
+                    "Speak naturally and directly as a knowledgeable guide. "
+                    "Use only the supplied tool observations. Do not invent facts."
                 )
                 prompt = (
                     f"User query: {user_query}\n"
