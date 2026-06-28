@@ -20,6 +20,7 @@ ExecutionStrategy = Literal[
     "ask_clarification",
     "refuse_realtime",
     "refuse_source_conflict",
+    "refuse_off_topic",
     "general_chat",
 ]
 
@@ -107,6 +108,7 @@ class QueryPlanner:
             "- semantic_sql：游客行为统计分析。\n"
             "- route_planner：路线/推荐/游览安排。\n"
             "- ask_clarification：用户在问景区相关内容，但缺少必要槽位，应该先追问而不是拒答。例如没有说明具体景点、城市/景区、游览偏好、统计口径或时间范围。\n"
+            "- refuse_off_topic：用户要求景区助手做完全无关的事情，例如写代码、写诗、做PPT、翻译文件、数学题等，这些超出景区导览范围。用 chat_reply 给出礼貌拒绝并说明助手能做什么。\n"
             "- refuse_realtime：实时、当前、今天/明天/下周、天气、排队、停车、交通、预测、隐私或外部系统才知道的问题。\n"
             "- refuse_source_conflict：要求用错误数据源回答，例如用游客行为数据证明官方事实、用 DOCX 统计行为数据、把平均消费当官方票价。\n"
             "- general_chat：无需查库的自然闲聊、寒暄、感谢、告别、能力介绍。\n\n"
@@ -133,6 +135,8 @@ class QueryPlanner:
             "- “九龙灌浴表演，评委问时该答啥？” => FACT + hybrid_rag + description\n"
             "- “祥符禅寺哪里最值得去？” => FACT + structured_fact + highlights\n"
             "- “去百子戏弥勒玩，有什么特别推荐的体验吗？” => FACT + structured_fact + highlights\n"
+            "- “帮我生成冒泡排序的代码” => CHAT + refuse_off_topic（与景区无关）\n"
+            "- “我要投诉” => CHAT + general_chat（引导说明投诉渠道或追问具体内容）\n"
             "- “介绍一下景点” => CHAT + ask_clarification + description\n"
             "- “这里有什么好看的？” => CHAT + ask_clarification + highlights\n"
             "- “喜欢佛教文化，灵山胜境咋逛？” => RECOMMEND + route_planner + history\n"
@@ -266,6 +270,7 @@ class QueryPlanner:
             "ask_clarification",
             "refuse_realtime",
             "refuse_source_conflict",
+            "refuse_off_topic",
             "general_chat",
         }
         allowed_question_types = {
@@ -305,6 +310,7 @@ class QueryPlanner:
             "route_planner": "RECOMMEND",
             "general_chat": "CHAT",
             "ask_clarification": "CHAT",
+            "refuse_off_topic": "CHAT",
         }
         if strategy in strategy_intent:
             intent = strategy_intent[strategy]

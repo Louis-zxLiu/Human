@@ -175,11 +175,51 @@ def make_plan_node(ctx: NodeContext):
                 if context_attraction not in query and not REFERENCE_PRONOUN_PATTERN.search(query):
                     context_attraction = None
 
-        return {
+        patch: dict = {
             "plan": plan,
             "context_attraction": context_attraction,
             "intent": plan.intent,
         }
+
+        # For fast-path strategies, resolve the reply here so finalize can use it directly.
+        if plan.strategy in FAST_ANSWER_STRATEGIES:
+            chat_reply = str(plan.chat_reply or "").strip()
+            if not chat_reply:
+                if plan.strategy == "refuse_off_topic":
+                    chat_reply = _OFF_TOPIC_REPLY
+                elif plan.strategy == "refuse_realtime":
+                    chat_reply = _REALTIME_REPLY
+                elif plan.strategy == "refuse_source_conflict":
+                    chat_reply = _SOURCE_CONFLICT_REPLY
+                elif plan.strategy == "ask_clarification":
+                    chat_reply = _build_clarification_reply(
+                        user_query,
+                        question_type=plan.question_type,
+                        scenic_slug=plan.scenic_slug or scenic_slug,
+                    )
+                else:
+                    # general_chat fallback
+                    chat_reply = _fallback_general_chat_reply(user_query) or "你好，我在。"
+
+            response_kind = {
+                "refuse_off_topic": "refused:off_topic",
+                "refuse_realtime": "refused:realtime_required",
+                "refuse_source_conflict": "refused:source_conflict",
+                "ask_clarification": "clarification",
+                "general_chat": "chat",
+            }.get(plan.strategy, "chat")
+
+            patch["result"] = {
+                "answer": chat_reply,
+                "response_kind": response_kind,
+                "evidence": [],
+                "refusal": None,
+                "warnings": [],
+            }
+            patch["agent_type"] = plan.strategy
+            patch["response_kind"] = response_kind
+
+        return patch
     return plan_node
 
 
@@ -923,7 +963,11 @@ def _infer_tts_style(llm_fn, answer: str) -> str:
 # Conditional edge functions
 # ---------------------------------------------------------------------------
 
-FAST_ANSWER_STRATEGIES = {"general_chat", "ask_clarification", "refuse_realtime", "refuse_source_conflict"}
+FAST_ANSWER_STRATEGIES = {"general_chat", "ask_clarification", "refuse_realtime", "refuse_source_conflict", "refuse_off_topic"}
+
+_OFF_TOPIC_REPLY = "抱歉，这超出了我的服务范围。我是景区导游助手，可以帮您查景点介绍、规划路线或了解景区文化。"
+_REALTIME_REPLY = "抱歉，这需要实时或外部数据支持，我目前无法获取。可以帮您了解景区历史均值数据或景点讲解。"
+_SOURCE_CONFLICT_REPLY = "抱歉，这个问题要求用不匹配的数据源回答，我无法提供准确结果。"
 
 
 def route_after_plan(state: GraphState) -> str:
@@ -931,7 +975,7 @@ def route_after_plan(state: GraphState) -> str:
     if plan is None:
         return "finalize"
     if plan.strategy in FAST_ANSWER_STRATEGIES:
-        return "fast_answer"
+        return "finalize"
     return "tool_dispatch"
 
 
