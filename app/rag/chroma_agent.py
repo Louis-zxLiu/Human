@@ -15,6 +15,8 @@ from app.rag.response_contract import make_evidence
 
 TOKEN_RE = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]+")
 
+_RERANKER_INSTANCE: Any = None
+
 
 @dataclass
 class RetrievedChunk:
@@ -48,7 +50,6 @@ class ChromaStaticAgent:
         self.db_dir = resolve_path(settings.CHROMA_DB_DIR)
         self.collection_name = collection_name
         self.use_reranker = use_reranker
-        self._reranker = None  # lazy-loaded on first use
         self.client = chromadb.PersistentClient(
             path=self.db_dir,
             settings=Settings(anonymized_telemetry=False),
@@ -176,15 +177,16 @@ class ChromaStaticAgent:
         return ranked[:top_k]
 
     def _rerank(self, query: str, chunks: List[RetrievedChunk]) -> List[RetrievedChunk]:
-        if self._reranker is None:
+        global _RERANKER_INSTANCE
+        if _RERANKER_INSTANCE is None:
             try:
                 from sentence_transformers import CrossEncoder
-                self._reranker = CrossEncoder(self.RERANKER_MODEL, device=settings.EMBEDDING_DEVICE)
+                _RERANKER_INSTANCE = CrossEncoder(self.RERANKER_MODEL, device=settings.EMBEDDING_DEVICE)
             except Exception:
                 return chunks
         try:
             pairs = [[query, chunk.text] for chunk in chunks]
-            scores = self._reranker.predict(pairs)
+            scores = _RERANKER_INSTANCE.predict(pairs)
             scored = sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)
             return [chunk for chunk, score in scored if score >= self.RERANKER_THRESHOLD]
         except Exception:

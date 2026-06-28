@@ -6,6 +6,7 @@ from typing import Dict
 from app.core.docx_utils import extract_docx_tables
 from app.core.config import resolve_path
 from app.core.runtime import merge_runtime_status
+from app.rag.fact_agent import _invalidate_fact_rows_cache
 
 
 STRUCTURED_HEADER_MAP = {
@@ -111,6 +112,7 @@ def prepare_fact_db() -> Dict[str, object]:
     write_rows_to_sqlite(db_path, "attractions", headers, rows)
 
     merge_runtime_status({"behavior_db_ready": os.path.exists(db_path)})
+    _invalidate_fact_rows_cache()
     return {
         "ok": True,
         "table": "attractions",

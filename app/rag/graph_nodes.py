@@ -97,6 +97,30 @@ class NodeContext:
 
 # ---------------------------------------------------------------------------
 # Node factories
+
+
+def _resolve_context_attraction(
+    start_attraction: Optional[str],
+    session_memory: Optional[Dict],
+    conversation_context: Optional[list],
+    user_query: str,
+) -> Optional[str]:
+    context_attraction: Optional[str] = start_attraction
+    if not context_attraction:
+        memory_attraction = (session_memory or {}).get("last_attraction")
+        if memory_attraction:
+            context_attraction = str(memory_attraction)
+        else:
+            for item in reversed(list(conversation_context or [])):
+                meta = item.get("meta") if isinstance(item, dict) else None
+                if isinstance(meta, dict) and meta.get("matched_attraction"):
+                    context_attraction = str(meta["matched_attraction"])
+                    break
+        if context_attraction:
+            query = str(user_query or "")
+            if context_attraction not in query and not REFERENCE_PRONOUN_PATTERN.search(query):
+                context_attraction = None
+    return context_attraction
 # ---------------------------------------------------------------------------
 
 def make_plan_node(ctx: NodeContext):
@@ -115,21 +139,9 @@ def make_plan_node(ctx: NodeContext):
         )
 
         # resolve context attraction
-        context_attraction: Optional[str] = start_attraction
-        if not context_attraction:
-            memory_attraction = (session_memory or {}).get("last_attraction")
-            if memory_attraction:
-                context_attraction = str(memory_attraction)
-            else:
-                for item in reversed(list(conversation_context or [])):
-                    meta = item.get("meta") if isinstance(item, dict) else None
-                    if isinstance(meta, dict) and meta.get("matched_attraction"):
-                        context_attraction = str(meta["matched_attraction"])
-                        break
-            if context_attraction:
-                query = str(user_query or "")
-                if context_attraction not in query and not REFERENCE_PRONOUN_PATTERN.search(query):
-                    context_attraction = None
+        context_attraction = _resolve_context_attraction(
+            start_attraction, session_memory, conversation_context, user_query
+        )
 
         patch: dict = {
             "plan": plan,

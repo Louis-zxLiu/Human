@@ -16,6 +16,8 @@ from app.rag.response_contract import compact_rows, make_evidence, make_refusal
 
 SOURCE_PREFIX = "基于游客行为数据分析，"
 
+_LOW_SAMPLE_THRESHOLD = 30
+
 SQL_SEMANTIC_RULE_CONFIG = load_json_config("app/rag/config/sql_semantic_rules.json")
 
 
@@ -121,21 +123,41 @@ class TouristAnalyticsAgent:
     def query(self, user_query: str) -> str:
         return self.query_with_trace(user_query)["answer"]
 
+    @staticmethod
+    def _sql_result(
+        answer: str,
+        response_kind: str,
+        *,
+        semantic_plan: Any = None,
+        sql: Optional[str] = None,
+        rows_preview: Optional[List[Dict[str, Any]]] = None,
+        evidence: Optional[List[Any]] = None,
+        warnings: Optional[List[str]] = None,
+        refusal: Any = None,
+        trace: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "answer": answer,
+            "response_kind": response_kind,
+            "semantic_plan": semantic_plan,
+            "sql": sql,
+            "rows_preview": rows_preview or [],
+            "evidence": evidence or [],
+            "warnings": warnings or [],
+            "refusal": refusal,
+            "trace": trace or {},
+        }
+
     def query_with_trace(self, user_query: str) -> Dict[str, Any]:
         if self._has_source_conflict(user_query):
             answer = (
                 "抱歉，这个问题要求混用错误的数据源。游客行为数据只能用于统计分析，"
                 "景区资料只能用于景点事实、历史文化和讲解内容，我不能把一种数据源当作另一种事实依据。"
             )
-            return {
-                "answer": answer,
-                "response_kind": "refused:source_conflict",
-                "semantic_plan": None,
-                "sql": None,
-                "rows_preview": [],
-                "evidence": [],
-                "warnings": [],
-                "refusal": make_refusal(
+            return self._sql_result(
+                answer,
+                "refused:source_conflict",
+                refusal=make_refusal(
                     "source_conflict",
                     message="游客行为分析不能直接充当景点事实来源。",
                     suggested_queries=[
@@ -144,78 +166,65 @@ class TouristAnalyticsAgent:
                     ],
                     allowed_sources=["behavior_sql"],
                 ),
-                "trace": {"fallback_used": False},
-            }
+                trace={"fallback_used": False},
+            )
 
         comparison = self._gender_comparison_response(user_query)
         if comparison:
-            return {
-                "answer": comparison,
-                "response_kind": "analytics:special_case",
-                "semantic_plan": {"mode": "gender_comparison"},
-                "sql": None,
-                "rows_preview": [],
-                "evidence": [make_evidence("behavior_sql", "tourist_behavior", snippet=comparison)],
-                "warnings": [],
-                "refusal": None,
-                "trace": {"fallback_used": False, "special_case": True},
-            }
+            return self._sql_result(
+                comparison,
+                "analytics:special_case",
+                semantic_plan={"mode": "gender_comparison"},
+                evidence=[make_evidence("behavior_sql", "tourist_behavior", snippet=comparison)],
+                trace={"fallback_used": False, "special_case": True},
+            )
 
         special = self._special_case_response(user_query)
         if special:
-            return {
-                "answer": special,
-                "response_kind": "analytics:special_case",
-                "semantic_plan": {"mode": "special_case"},
-                "sql": None,
-                "rows_preview": [],
-                "evidence": [make_evidence("behavior_sql", "tourist_behavior", snippet=special)],
-                "warnings": [],
-                "refusal": None,
-                "trace": {"fallback_used": False, "special_case": True},
-            }
+            return self._sql_result(
+                special,
+                "analytics:special_case",
+                semantic_plan={"mode": "special_case"},
+                evidence=[make_evidence("behavior_sql", "tourist_behavior", snippet=special)],
+                trace={"fallback_used": False, "special_case": True},
+            )
 
         plan, plan_warnings = self._plan_analytics_query(user_query)
         if plan:
             sql, params = self._build_sql(plan)
             rows = self.execute_sql(sql, params)
             if not rows:
-                return {
-                    "answer": f"{SOURCE_PREFIX}暂时没有检索到相关记录。",
-                    "response_kind": "analytics:empty",
-                    "semantic_plan": plan.to_dict(),
-                    "sql": sql,
-                    "rows_preview": [],
-                    "evidence": [],
-                    "warnings": plan_warnings,
-                    "refusal": None,
-                    "trace": {"fallback_used": bool(plan_warnings), "params": list(params)},
-                }
+                return self._sql_result(
+                    f"{SOURCE_PREFIX}暂时没有检索到相关记录。",
+                    "analytics:empty",
+                    semantic_plan=plan.to_dict(),
+                    sql=sql,
+                    warnings=plan_warnings,
+                    trace={"fallback_used": bool(plan_warnings), "params": list(params)},
+                )
             if "error" in rows[0]:
-                return {
-                    "answer": "抱歉，游客行为数据分析暂时失败，请稍后再试。",
-                    "response_kind": "analytics:error",
-                    "semantic_plan": plan.to_dict(),
-                    "sql": sql,
-                    "rows_preview": compact_rows(rows, limit=1),
-                    "evidence": [],
-                    "warnings": plan_warnings,
-                    "refusal": None,
-                    "trace": {"fallback_used": bool(plan_warnings), "params": list(params)},
-                }
+                return self._sql_result(
+                    "抱歉，游客行为数据分析暂时失败，请稍后再试。",
+                    "analytics:error",
+                    semantic_plan=plan.to_dict(),
+                    sql=sql,
+                    rows_preview=compact_rows(rows, limit=1),
+                    warnings=plan_warnings,
+                    trace={"fallback_used": bool(plan_warnings), "params": list(params)},
+                )
             rendered = self._render_semantic_result(plan, rows)
             if rendered:
                 sample_count = self._estimate_sample_size(plan)
                 warnings = list(plan_warnings)
-                if sample_count is not None and sample_count < 30:
+                if sample_count is not None and sample_count < _LOW_SAMPLE_THRESHOLD:
                     warnings.append(f"low_sample_size:{sample_count}")
-                return {
-                    "answer": rendered,
-                    "response_kind": "analytics",
-                    "semantic_plan": plan.to_dict(),
-                    "sql": sql,
-                    "rows_preview": compact_rows(rows),
-                    "evidence": [
+                return self._sql_result(
+                    rendered,
+                    "analytics",
+                    semantic_plan=plan.to_dict(),
+                    sql=sql,
+                    rows_preview=compact_rows(rows),
+                    evidence=[
                         make_evidence(
                             "behavior_sql",
                             "tourist_behavior",
@@ -228,22 +237,16 @@ class TouristAnalyticsAgent:
                             },
                         )
                     ],
-                    "warnings": warnings,
-                    "refusal": None,
-                    "trace": {"fallback_used": bool(plan_warnings), "params": list(params)},
-                }
+                    warnings=warnings,
+                    trace={"fallback_used": bool(plan_warnings), "params": list(params)},
+                )
 
-        return {
-            "answer": "抱歉，我暂时无法从游客行为数据中整理出这个问题的分析结果。",
-            "response_kind": "analytics:unresolved",
-            "semantic_plan": None,
-            "sql": None,
-            "rows_preview": [],
-            "evidence": [],
-            "warnings": plan_warnings or ["semantic_parse_failed"],
-            "refusal": None,
-            "trace": {"fallback_used": bool(plan_warnings)},
-        }
+        return self._sql_result(
+            "抱歉，我暂时无法从游客行为数据中整理出这个问题的分析结果。",
+            "analytics:unresolved",
+            warnings=plan_warnings or ["semantic_parse_failed"],
+            trace={"fallback_used": bool(plan_warnings)},
+        )
 
     def get_preference_hint(self, attraction_types: List[str]) -> Optional[str]:
         if not attraction_types:
@@ -888,45 +891,36 @@ class TouristAnalyticsAgent:
 
         return filters
 
+    @staticmethod
+    def _filter_clause(filter_key: str, value: Any) -> Tuple[str, List[Any]]:
+        _MAP: Dict[str, Tuple[str, Any]] = {
+            "gender":           ("gender = ?",                          lambda v: [v]),
+            "attraction_type":  ("attraction_type = ?",                 lambda v: [v]),
+            "attraction_name":  ("attraction_name = ?",                 lambda v: [v]),
+            "date_range":       ("visit_date >= ? and visit_date < ?",  list),
+            "age_between":      ("cast(age as real) between ? and ?",   lambda v: [v.lower, v.upper]),
+            "age_gte":          ("cast(age as real) >= ?",              lambda v: [v.lower]),
+            "age_gt":           ("cast(age as real) > ?",               lambda v: [v.lower]),
+            "age_lt":           ("cast(age as real) < ?",               lambda v: [v.upper]),
+            "age_lte":          ("cast(age as real) <= ?",              lambda v: [v.upper]),
+            "satisfaction_lt":  ("cast(satisfaction as real) < ?",      lambda v: [v]),
+            "satisfaction_eq":  ("cast(satisfaction as real) = ?",      lambda v: [v]),
+        }
+        if filter_key not in _MAP:
+            return "", []
+        tpl, extractor = _MAP[filter_key]
+        return tpl, extractor(value)
+
     def _build_sql(self, plan: SemanticQueryPlan) -> Tuple[str, List[Any]]:
         metric = self.METRICS[plan.metric_key]
         params: List[Any] = []
         where_clauses: List[str] = []
 
         for filter_key, value in plan.filters:
-            if filter_key == "gender":
-                where_clauses.append("gender = ?")
-                params.append(value)
-            elif filter_key == "attraction_type":
-                where_clauses.append("attraction_type = ?")
-                params.append(value)
-            elif filter_key == "attraction_name":
-                where_clauses.append("attraction_name = ?")
-                params.append(value)
-            elif filter_key == "date_range":
-                where_clauses.append("visit_date >= ? and visit_date < ?")
-                params.extend(list(value))
-            elif filter_key == "age_between":
-                where_clauses.append("cast(age as real) between ? and ?")
-                params.extend([value.lower, value.upper])
-            elif filter_key == "age_gte":
-                where_clauses.append("cast(age as real) >= ?")
-                params.append(value.lower)
-            elif filter_key == "age_gt":
-                where_clauses.append("cast(age as real) > ?")
-                params.append(value.lower)
-            elif filter_key == "age_lt":
-                where_clauses.append("cast(age as real) < ?")
-                params.append(value.upper)
-            elif filter_key == "age_lte":
-                where_clauses.append("cast(age as real) <= ?")
-                params.append(value.upper)
-            elif filter_key == "satisfaction_lt":
-                where_clauses.append("cast(satisfaction as real) < ?")
-                params.append(value)
-            elif filter_key == "satisfaction_eq":
-                where_clauses.append("cast(satisfaction as real) = ?")
-                params.append(value)
+            clause, clause_params = self._filter_clause(filter_key, value)
+            if clause:
+                where_clauses.append(clause)
+                params.extend(clause_params)
 
         select_parts = [f"{metric['expr']} as {metric['alias']}"]
         group_by_clause = ""
@@ -947,8 +941,6 @@ class TouristAnalyticsAgent:
         if where_clauses:
             sql += " where " + " and ".join(where_clauses)
         sql += group_by_clause
-        if not plan.dimension_key and plan.metric_key == "avg_satisfaction" and plan.query_mode == "scalar":
-            sql += ""
         sql += order_by_clause + limit_clause
         return sql, params
 
@@ -956,28 +948,9 @@ class TouristAnalyticsAgent:
         _, params = self._build_sql(plan)
         where_clauses: List[str] = []
         for filter_key, value in plan.filters:
-            if filter_key == "gender":
-                where_clauses.append("gender = ?")
-            elif filter_key == "attraction_type":
-                where_clauses.append("attraction_type = ?")
-            elif filter_key == "attraction_name":
-                where_clauses.append("attraction_name = ?")
-            elif filter_key == "date_range":
-                where_clauses.append("visit_date >= ? and visit_date < ?")
-            elif filter_key == "age_between":
-                where_clauses.append("cast(age as real) between ? and ?")
-            elif filter_key == "age_gte":
-                where_clauses.append("cast(age as real) >= ?")
-            elif filter_key == "age_gt":
-                where_clauses.append("cast(age as real) > ?")
-            elif filter_key == "age_lt":
-                where_clauses.append("cast(age as real) < ?")
-            elif filter_key == "age_lte":
-                where_clauses.append("cast(age as real) <= ?")
-            elif filter_key == "satisfaction_lt":
-                where_clauses.append("cast(satisfaction as real) < ?")
-            elif filter_key == "satisfaction_eq":
-                where_clauses.append("cast(satisfaction as real) = ?")
+            clause, _ = self._filter_clause(filter_key, value)
+            if clause:
+                where_clauses.append(clause)
         count_sql = "select count(*) as sample_count from tourist_behavior"
         if where_clauses:
             count_sql += " where " + " and ".join(where_clauses)

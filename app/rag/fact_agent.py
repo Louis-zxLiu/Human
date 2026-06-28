@@ -14,7 +14,6 @@ from app.rag.rule_config import load_json_config, term_map, term_tuple
 from app.rag.response_contract import make_evidence, make_refusal
 
 
-STRUCTURED_OVERRIDES_PATH = Path(resolve_path("app/rag/config/fact_structured_overrides.json"))
 FACT_RULE_CONFIG = load_json_config("app/rag/config/fact_rules.json")
 
 
@@ -31,6 +30,90 @@ ATTRACTION_COLUMNS = [
     "open_info",
     "remarks",
 ]
+
+_FACT_ROWS_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+_FACT_ROWS_DB_PATH: Optional[str] = None
+
+_DOCX_SCORE_THRESHOLD  = 13
+_DOCX_SCORE_BASE       = 10
+_DOCX_SCORE_TOPIC_MATCH   = 8
+_DOCX_SCORE_TOPIC_TERM    = 3
+_DOCX_SCORE_TOKEN_MATCH   = 6
+_DOCX_SCORE_MUST_INCLUDE  = 2
+_FACT_SEMANTIC_MAX_TOKENS = 420
+
+_FACT_SEMANTIC_PLAN_PROMPT = (
+    "Return one JSON object with these fields:\n"
+    "- attraction_name: one known attraction name, or null if the question is scenic-level/broad.\n"
+    "- question_type: one of location, open_info, architecture_params, highlights, remarks, history, cultural_meaning, core_function, description.\n"
+    "- evidence_mode: structured, docx, or hybrid. Use structured for exact field facts; docx/hybrid for broad historical/cultural/document evidence questions.\n"
+    "- is_comparison: true if comparing two attractions.\n"
+    "- compared_attractions: array of known attraction names when is_comparison=true.\n"
+    "- confidence: 0.0 to 1.0.\n"
+    "- reasoning: short Chinese sentence.\n\n"
+    "Known attractions: {allowed_attractions}\n"
+    "Context attraction: {context_attraction}\n"
+    "Outer planner question_type hint: {planned_question_type}\n"
+    "Requested retrieval mode: {retrieval_mode}\n\n"
+    "Question type guide:\n"
+    "- where/position/how to get there => location\n"
+    "- daily open hours, visitor opening hours, performance time => open_info\n"
+    "- official opening date, completion date, consecration date, origin date => history\n"
+    "- size, height, material, architecture, dimensions => architecture_params\n"
+    "- what to see/play/experience/features, main experience, must-experience, most worth visiting => highlights\n"
+    "- tips, reminders, photo/check-in advice => remarks; if the question asks opening availability/time restrictions, use open_info instead.\n"
+    "- origin, background, story, why named => history\n"
+    "- symbolism, cultural meaning, spirit => cultural_meaning\n"
+    "- purpose, use, function, what it is for => core_function\n"
+    "- general intro/explain/overview/key introduction points => description\n\n"
+    "Evidence mode guide:\n"
+    "- Use docx or hybrid when the user asks for evidence, key facts, key points, explanation highlights, official dates, craft details, symbolism details, performance contents, or judge-facing facts.\n"
+    "- Use docx for questions containing official dates, key numbers, judge-facing wording, cannot-be-wrong facts, scale/dimensions that need exact DOCX evidence, cultural symbolism, or performance facts.\n"
+    "- Use structured only for plain direct fields such as where it is, ordinary open hours, basic function, or short overview.\n\n"
+    "Examples:\n"
+    "- question_type=history, evidence_mode=docx\n"
+    "- question_type=architecture_params, evidence_mode=docx\n"
+    "- question_type=open_info, evidence_mode=docx\n"
+    "- question_type=highlights, evidence_mode=structured\n"
+    "- question_type=open_info, evidence_mode=structured\n"
+    "- question_type=description, evidence_mode=structured\n"
+    "- question_type=location, evidence_mode=structured\n\n"
+    "User question: {user_query}\n"
+    "JSON only."
+)
+
+
+def _load_rows_cached(db_path: str) -> Dict[str, Dict[str, Any]]:
+    global _FACT_ROWS_CACHE, _FACT_ROWS_DB_PATH
+    if _FACT_ROWS_CACHE is not None and _FACT_ROWS_DB_PATH == db_path:
+        return _FACT_ROWS_CACHE
+    rows: Dict[str, Dict[str, Any]] = {}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        table_exists = cursor.execute(
+            "select count(*) from sqlite_master where type='table' and name='attractions'"
+        ).fetchone()[0]
+        if table_exists:
+            col_list = ", ".join(ATTRACTION_COLUMNS)
+            for row in cursor.execute(f"select {col_list} from attractions").fetchall():
+                row_dict = dict(row)
+                supplements = SUPPLEMENTAL_FACTS.get(row_dict["attraction_name"], {})
+                for key, value in supplements.items():
+                    if not str(row_dict.get(key) or "").strip():
+                        row_dict[key] = value
+                rows[row_dict["attraction_name"]] = row_dict
+    finally:
+        conn.close()
+    _FACT_ROWS_CACHE = rows
+    _FACT_ROWS_DB_PATH = db_path
+    return _FACT_ROWS_CACHE
+
+
+def _invalidate_fact_rows_cache() -> None:
+    global _FACT_ROWS_CACHE
+    _FACT_ROWS_CACHE = None
 
 
 
@@ -60,27 +143,9 @@ class FactSemanticPlan:
         }
 
 
-SUPPLEMENTAL_FACTS: Dict[str, Dict[str, str]] = {
-    "祥符禅寺": {
-        "location": "位于灵山胜境中轴核心、灵山大佛基座之下，四周绿树环绕，环境清幽，是景区内历史最悠久的人文景观。",
-        "architecture_params": "唐代古刹，占地约30亩，整体采用仿唐重檐歇山式建筑风格，布局完整，包含弥勒殿、大雄宝殿、钟楼、鼓楼；寺内还有六角井、八角井、白莲池、千年古银杏等历史遗迹，钟楼内悬挂重12.8吨的“祥符禅钟”。",
-        "core_function": "承担宗教活动开展、千年古刹瞻仰与佛教礼佛祈福功能，同时展示江南禅宗文化，兼具宗教体验、历史科普与人文观赏功能。",
-        "cultural_meaning": "祥符禅寺始建于唐贞观年间，由玄奘法师的弟子窥基大师开坛讲经，北宋年间正式更名为“祥符禅寺”；历经千年风雨洗礼，香火绵延不绝，是江南地区重要的千年禅宗祖庭，也是佛教文化传承与传播的重要场所。",
-        "description": "祥符禅寺布局严谨、错落有致，整体采用仿唐重檐歇山式建筑风格，红墙黛瓦、飞檐翘角。大雄宝殿内供奉释迦牟尼佛及迦叶、阿难两大弟子；钟楼内悬挂重12.8吨的“祥符禅钟”。寺内六角井、八角井、白莲池和千年古银杏共同构成寺院历史遗存。",
-        "highlights": "适合礼佛祈福、虔诚朝拜，聆听祥符禅钟的浑厚钟声，观赏唐代古建与千年历史遗迹；秋季还可欣赏千年银杏的金黄景致，感受古刹静谧庄严。",
-        "open_info": "全天开放，宗教活动正常开展；钟楼定时有钟声表演，具体时间以景区广播通知为准，寺内禁止大声喧哗，需保持庄严肃穆。",
-        "remarks": "建议保持安静、尊重宗教礼仪，可把祥符禅寺安排在灵山大佛前后讲解，形成古刹渊源、礼佛祈福与现代景区建设的连续叙事。",
-    },
-    "灵山大佛": {
-        "core_function": "灵山胜境的核心礼佛地标，也是游客俯瞰景区中轴线和太湖景观的重要节点。",
-        "cultural_meaning": "作为神州五方五佛之一的东方佛，灵山大佛象征佛教文化在江南地区的弘扬，也承载着祈福平安、感悟慈悲智慧的文化内涵。",
-        "description": "灵山大佛是灵山胜境最具代表性的核心景观，以露天青铜释迦牟尼立像著称，整体空间庄严开阔，和祥符禅寺、梵宫等景点共同构成景区主轴。",
-        "highlights": "可近距离感受大佛体量与仪式感，登临相关观景区域俯瞰太湖与景区全貌，也是游客拍照打卡和集中讲解的重点景点。",
-        "open_info": "通常随灵山胜境景区开放时间同步开放，建议游客结合当日景区公告或官方购票页面确认最新开放安排。",
-        "remarks": "若计划拍摄大佛全景，建议在天气通透时前往；如需重点礼佛或听讲解，可将此处安排在主游线中段或后段。",
-    }
-}
-
+SUPPLEMENTAL_FACTS: Dict[str, Dict[str, str]] = load_json_config(
+    "app/rag/config/supplemental_facts.json"
+)
 
 QUESTION_FIELD_MAP: Dict[str, Tuple[str, ...]] = {
     "open_info": ("开放", "开放时间", "营业", "几点", "什么时候", "开门", "闭园", "演出时间", "门票"),
@@ -277,7 +342,7 @@ class ScenicFactAgent:
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or resolve_path("data/processed/tourist_behavior.db")
-        self._rows = self._load_rows()
+        self._rows = _load_rows_cached(self.db_path)
         self._rows_by_id = {row.get("attraction_id"): row for row in self._rows.values() if row.get("attraction_id")}
         self._rows_by_scenic: Dict[str, List[Dict[str, Any]]] = {}
         for row in self._rows.values():
@@ -286,7 +351,6 @@ class ScenicFactAgent:
         self._rag_agent: Optional[ChromaStaticAgent] = None
         self._attraction_aliases = self._build_aliases()
         self._docx_evidence = self._load_docx_evidence()
-        self._structured_overrides = self._load_structured_overrides()
 
     def answer(
         self,
@@ -404,27 +468,6 @@ class ScenicFactAgent:
                 term in user_query for term in ("建筑", "藏式", "藏传", "坛城", "佛塔")
             ) else "description"
 
-        structured_override = self._answer_configured_structured_override(user_query, attraction, question_type)
-        if not structured_override:
-            structured_override = self._answer_structured_override(user_query, attraction, question_type)
-        if structured_override:
-            return self._result(
-                structured_override,
-                attraction,
-                "structured_override",
-                evidence=[
-                    make_evidence(
-                        "structured_fact_db",
-                        "curated_structured_fact",
-                        entity=attraction,
-                        field=question_type or "description",
-                        snippet=structured_override,
-                    )
-                ],
-                trace=plan_trace,
-                warnings=plan_warnings,
-            )
-
         prefers_docx = (
             semantic_plan.evidence_mode in {"docx", "hybrid"}
             if semantic_plan
@@ -514,7 +557,7 @@ class ScenicFactAgent:
                             warnings=plan_warnings,
                         )
 
-        general_fact = self._answer_general_docx_fact(user_query, question_type)
+        general_fact = self._answer_general_docx_fact(user_query, question_type) if not prefers_docx else None
         if general_fact:
             return self._result(
                 general_fact,
@@ -545,20 +588,6 @@ class ScenicFactAgent:
                     trace={**(rag_result.get("trace") or {}), **plan_trace},
                     warnings=plan_warnings,
                 )
-
-        if attraction and self._is_direct_overview_request(user_query, attraction):
-            row = self.get_attraction_row(attraction)
-            if row:
-                overview = self._format_overview(row)
-                if overview:
-                    return self._result(
-                        overview,
-                        attraction,
-                        "overview",
-                        evidence=self._overview_evidence(row),
-                        trace=plan_trace,
-                        warnings=plan_warnings,
-                    )
 
         follow_up = self._build_refusal_follow_up(question_type, attraction, scenic_slug=scenic_slug)
         return self._result(
@@ -678,52 +707,18 @@ class ScenicFactAgent:
             "Convert the Chinese user question into strict JSON only. "
             "Do not answer the question and do not invent facts."
         )
-        prompt = (
-            "Return one JSON object with these fields:\n"
-            "- attraction_name: one known attraction name, or null if the question is scenic-level/broad.\n"
-            "- question_type: one of location, open_info, architecture_params, highlights, remarks, history, cultural_meaning, core_function, description.\n"
-            "- evidence_mode: structured, docx, or hybrid. Use structured for exact field facts; docx/hybrid for broad historical/cultural/document evidence questions.\n"
-            "- is_comparison: true if comparing two attractions.\n"
-            "- compared_attractions: array of known attraction names when is_comparison=true.\n"
-            "- confidence: 0.0 to 1.0.\n"
-            "- reasoning: short Chinese sentence.\n\n"
-            f"Known attractions: {json.dumps(allowed_attractions[:160], ensure_ascii=False)}\n"
-            f"Context attraction: {context_attraction or 'none'}\n"
-            f"Outer planner question_type hint: {planned_question_type or 'none'}\n"
-            f"Requested retrieval mode: {retrieval_mode}\n\n"
-            "Question type guide:\n"
-            "- where/position/how to get there => location\n"
-            "- daily open hours, visitor opening hours, performance time => open_info\n"
-            "- official opening date, completion date, consecration date, origin date => history\n"
-            "- size, height, material, architecture, dimensions => architecture_params\n"
-            "- what to see/play/experience/features, main experience, must-experience, most worth visiting => highlights\n"
-            "- tips, reminders, photo/check-in advice => remarks; if the question asks opening availability/time restrictions, use open_info instead.\n"
-            "- origin, background, story, why named => history\n"
-            "- symbolism, cultural meaning, spirit => cultural_meaning\n"
-            "- purpose, use, function, what it is for => core_function\n"
-            "- general intro/explain/overview/key introduction points => description\n\n"
-            "Evidence mode guide:\n"
-            "- Use docx or hybrid when the user asks for evidence, key facts, key points, explanation highlights, official dates, craft details, symbolism details, performance contents, or judge-facing facts.\n"
-            "- Use docx for questions containing official dates, key numbers, judge-facing wording, cannot-be-wrong facts, scale/dimensions that need exact DOCX evidence, cultural symbolism, or performance facts.\n"
-            "- Use structured only for plain direct fields such as where it is, ordinary open hours, basic function, or short overview.\n\n"
-            "Examples:\n"
-            "- 灵山梵宫什么时候正式开放的？ => question_type=history, evidence_mode=docx\n"
-            "- 九龙灌浴的规模和尺寸是多少？ => question_type=architecture_params, evidence_mode=docx\n"
-            "- 吉祥颂演出信息里哪些时间是关键？ => question_type=open_info, evidence_mode=docx\n"
-            "- 评委问灵山大佛高度材质该答什么关键事实？ => question_type=architecture_params, evidence_mode=docx\n"
-            "- 去五智门主要体验啥？ => question_type=highlights, evidence_mode=structured\n"
-            "- 阿育王柱开放有啥要注意？ => question_type=open_info, evidence_mode=structured\n"
-            "- 百子戏弥勒介绍重点有哪些？ => question_type=description, evidence_mode=structured\n"
-            "- 去无尽意斋主要体验什么？ => question_type=highlights, evidence_mode=structured\n"
-            "- 五印坛城在哪里？ => question_type=location, evidence_mode=structured\n\n"
-            f"User question: {user_query}\n"
-            "JSON only."
+        prompt = _FACT_SEMANTIC_PLAN_PROMPT.format(
+            allowed_attractions=json.dumps(allowed_attractions[:160], ensure_ascii=False),
+            context_attraction=context_attraction or "none",
+            planned_question_type=planned_question_type or "none",
+            retrieval_mode=retrieval_mode,
+            user_query=user_query,
         )
         raw = generate_chat_completion(
             prompt,
             system_prompt=system_prompt,
             temperature=0.0,
-            max_tokens=420,
+            max_tokens=_FACT_SEMANTIC_MAX_TOKENS,
             return_error_text=False,
             json_mode=True,
         )
@@ -875,203 +870,12 @@ class ScenicFactAgent:
         return None
 
     @staticmethod
-    def _load_structured_overrides() -> List[Dict[str, Any]]:
-        if not STRUCTURED_OVERRIDES_PATH.exists():
-            return []
-        try:
-            payload = json.loads(STRUCTURED_OVERRIDES_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return []
-        if not isinstance(payload, list):
-            return []
-        return [item for item in payload if isinstance(item, dict) and str(item.get("answer") or "").strip()]
-
-    def _answer_configured_structured_override(
-        self,
-        user_query: str,
-        attraction: Optional[str],
-        question_type: Optional[str],
-    ) -> Optional[str]:
-        query = str(user_query or "")
-        name = str(attraction or "")
-        for rule in self._structured_overrides:
-            if self._structured_override_matches(rule, query, name, question_type):
-                answer = str(rule.get("answer") or "").strip()
-                if answer:
-                    return answer
-        return None
-
-    @staticmethod
-    def _structured_override_matches(
-        rule: Dict[str, Any],
-        query: str,
-        attraction: str,
-        question_type: Optional[str],
-    ) -> bool:
-        rule_attraction = str(rule.get("attraction") or "").strip()
-        if rule_attraction and rule_attraction != attraction:
-            return False
-
-        question_types = [str(item) for item in rule.get("question_types") or [] if str(item)]
-        if question_types and question_type not in question_types:
-            return False
-
-        include_all = [str(item) for item in rule.get("include_all") or [] if str(item)]
-        if include_all and not all(term in query for term in include_all):
-            return False
-
-        include_any = [str(item) for item in rule.get("include_any") or [] if str(item)]
-        if include_any and not any(term in query for term in include_any):
-            return False
-
-        exclude_any = [str(item) for item in rule.get("exclude_any") or [] if str(item)]
-        if exclude_any and any(term in query for term in exclude_any):
-            return False
-
-        return True
-
-    @staticmethod
     def _resolve_question_type(
         user_query: str,
         question_query: str,
         planned_question_type: Optional[str],
     ) -> Optional[str]:
         return planned_question_type or None
-
-    @staticmethod
-    def _answer_structured_override(
-        user_query: str,
-        attraction: Optional[str],
-        question_type: Optional[str],
-    ) -> Optional[str]:
-        query = str(user_query or "")
-        name = str(attraction or "")
-        strong_docx_cues = (
-            "DOCX",
-            "docx",
-            "资料",
-            "依据",
-            "关键事实",
-            "关键信息",
-            "关键数据",
-            "关键数字",
-            "关键点",
-            "核心事实",
-            "核心数字",
-            "核心内容",
-            "提炼",
-            "不能错",
-            "不能讲错",
-            "必提",
-            "讲解重点",
-            "讲解时",
-            "评委问",
-            "答什么",
-            "答哪些",
-            "该答",
-            "突出什么",
-        )
-        has_strong_docx_cue = any(term in query for term in strong_docx_cues)
-        if name == "灵山大照壁" and any(term in query for term in ("时间", "注意什么时间")):
-            return "灵山大照壁全天开放、无时间限制，适合各类时段入园游客观赏，不受景区内部演艺时间影响。"
-        if name == "五明桥" and any(term in query for term in ("尺寸", "材质")):
-            return (
-                "五明桥由5座石拱桥并列排布，间距均匀；桥身采用汉白玉雕刻而成，"
-                "桥面与桥栏均刻有精美佛教图案，造型规整大气。"
-            )
-        if name == "五智门" and any(term in query for term in ("起啥作用", "作用", "游览路线")):
-            return (
-                "五智门是进入灵山胜境核心景区门户，也是智慧象征；"
-                "它承担着划分景区区域、传递佛教智慧、营造庄严肃穆氛围的核心功能。"
-            )
-        if name == "五智门" and any(term in query for term in ("吸引人", "亮点", "看点")):
-            return (
-                "五智门最吸引人的体验包括穿门祈福，感受佛教建筑的恢弘气势；"
-                "也适合拍摄牌坊全景，搭配蓝天绿树背景定格庄严肃穆的禅意画面，"
-                "并解读门柱经文与门楣图案，深入了解佛教六度智慧。"
-            )
-        if name == "菩提大道" and any(term in query for term in ("好讲", "讲解", "整体")):
-            return (
-                "菩提大道两侧的菩提树均为从印度引进的正宗树种，树形挺拔、枝叶繁茂，"
-                "树枝交错缠绕后形成天然的禅意拱廊，遮挡烈日的同时也增添了静谧的氛围；"
-                "地面采用特殊防滑材料铺设，适合边走边讲中轴礼佛空间。"
-            )
-        if name == "菩提大道" and any(term in query for term in ("重点看", "玩")):
-            return (
-                "去菩提大道重点看漫步林荫拱廊，感受禅意清幽，聆听菩提叶作响的自然之声；"
-                "春季菩提花开时，可观赏洁白的菩提花、定格绝美瞬间，"
-                "还可捡拾掉落的菩提叶，制作特色书签作为纪念。"
-            )
-        if name == "降魔浮雕" and any(term in query for term in ("整体", "重点", "讲解", "啥样")):
-            return (
-                "降魔浮雕采用高浮雕与浅浮雕相结合的精湛手法，分层刻画场景、层次感十足；"
-                "浮雕中央是佛陀端坐于菩提树下，神情坚定、目光如炬，尽显佛法的无畏与庄严。"
-            )
-        if name == "百子戏弥勒" and any(term in query for term in ("讲", "整体", "啥样")):
-            return (
-                "百子戏弥勒青铜群雕采用优质青铜铸造，并经过特殊防腐处理，色泽温润、造型精美；"
-                "群雕中弥勒佛呈舒适的卧姿，袒胸露腹、嘴角上扬，适合向游客讲欢喜、包容和民间祈福寓意。"
-            )
-        if name == "祥符禅寺" and "亮点" in query:
-            return (
-                "祥符禅寺布局严谨、错落有致，整体采用仿唐重檐歇山式建筑风格，红墙黛瓦、飞檐翘角，"
-                "尽显唐代古建的庄严与恢弘；大雄宝殿内供奉着释迦牟尼佛及迦叶、阿难两大弟子，"
-                "钟楼内还悬挂重12.8吨的祥符禅钟。"
-            )
-        if name == "祥符禅寺" and any(term in query for term in ("最值得去", "好玩", "主要体验")):
-            return (
-                "祥符禅寺最值得体验的是礼佛祈福、虔诚朝拜，寄托美好心愿；"
-                "也可以聆听祥符禅钟的浑厚钟声，感受禅意悠远，观赏唐代古建与千年历史遗迹，"
-                "秋季还可欣赏千年银杏的金黄景致，感受古刹的静谧与庄严。"
-            )
-        if name == "灵山梵宫" and any(term in query for term in ("特点", "重点介绍")):
-            return (
-                "灵山梵宫于2008年建成，凭借其极致的艺术价值与恢弘的建筑规模，被誉为“东方卢浮宫”；"
-                "建筑外立面以米黄色石材为基底，雕刻着莲花、飞天、经文等佛教元素，适合作为建筑艺术与佛教文化融合的重点介绍。"
-            )
-        if name == "灵山大佛" and any(term in query for term in ("多高", "多重", "高度", "材质")) and not has_strong_docx_cue:
-            return (
-                "灵山大佛佛像高88m、主体高度79m、莲花瓣高度9m，含台基总高101.5m；"
-                "耗铜量达725吨，由2000块铸铜面板拼接而成。也可表述为通高88米、佛体79米、莲花瓣9米。"
-            )
-        if name == "灵山梵宫" and any(term in query for term in ("建筑规模", "规模多大", "多大", "面积")) and not has_strong_docx_cue:
-            return (
-                "灵山梵宫建筑面积达72000㎡，最高处66.5米，整体呈“莲花环抱”之势；"
-                "拥有五座错落分布的莲花圣塔，建筑主体采用钢混结构，外立面融合石材雕刻与玻璃幕墙。"
-            )
-        if (
-            name == "灵山梵宫"
-            and question_type == "open_info"
-            and not has_strong_docx_cue
-            and any(term in query for term in ("注意", "几点", "闭馆", "演出", "场次"))
-            and "正式开放" not in query
-        ):
-            return (
-                "灵山梵宫通常为9:00至17:00开放，冬季闭馆时间提前至16:30；"
-                "《灵山吉祥颂》演出时间为10:35、11:30、14:00、16:00等场次，实际以景区当日公告为准。"
-            )
-        if name == "五印坛城" and question_type == "location":
-            return (
-                "五印坛城位于香水海中央的独立圆岛上，处在灵山梵宫南侧，"
-                "通过景观栈道与梵宫相连；四面环水、环境清幽，藏式建筑风格与周边江南景观形成鲜明对比。"
-            )
-        if name == "五印坛城" and "壁画" in query:
-            return (
-                "五印坛城壁画讲解应突出面积达1500平方米，由中央曼茶罗、金刚界曼茶罗、胎藏界曼茶罗三部分组成；"
-                "这些壁画把藏传佛教宇宙观、坛城空间和佛教艺术装饰结合起来，是坛城内部最重要的艺术看点之一。"
-            )
-        if name == "五印坛城" and "转经" in query:
-            return (
-                "五印坛城转经体验的关键是顺时针转动转经筒，寄托祈福安康的心愿；"
-                "讲解时要突出转经筒和“福慧双增”的寓意。"
-            )
-        if name == "五印坛城" and any(term in query for term in ("数据", "规模", "建筑")):
-            return (
-                "介绍五印坛城时要说清它是五层重檐楼宇，总高约30米，占地5000平方米，内部与外部设计呼应108等佛教象征数字；"
-                "整体采用藏式碉楼建筑风格，体现藏传佛教建筑特征，白墙红边金顶、金顶红墙，"
-                "墙体采用花岗岩砌筑，屋顶覆盖鎏金铜瓦，四门分别安置马宝等瑞兽。"
-            )
-        return None
 
     @staticmethod
     def _prefers_docx_evidence(
@@ -1221,17 +1025,17 @@ class ScenicFactAgent:
             if not self._docx_entity_matches(entity, user_query):
                 continue
 
-            score = 10
+            score = _DOCX_SCORE_BASE
             if topic and topic in user_query:
-                score += 8
+                score += _DOCX_SCORE_TOPIC_MATCH
             topic_terms = self._docx_topic_terms(topic)
-            score += sum(3 for term in topic_terms if term in user_query)
+            score += sum(_DOCX_SCORE_TOPIC_TERM for term in topic_terms if term in user_query)
             for token in self._docx_topic_tokens(topic):
                 if token and token in user_query:
-                    score += 6
+                    score += _DOCX_SCORE_TOKEN_MATCH
 
             must_include = [str(term) for term in item.get("must_include") or [] if str(term)]
-            score += sum(2 for term in must_include if term != entity and term in user_query)
+            score += sum(_DOCX_SCORE_MUST_INCLUDE for term in must_include if term != entity and term in user_query)
 
             specificity = self._docx_topic_specificity(topic, user_query)
             score += specificity
@@ -1241,7 +1045,7 @@ class ScenicFactAgent:
                 best_specificity = specificity
                 best_item = item
 
-        if best_item and best_score >= 13:
+        if best_item and best_score >= _DOCX_SCORE_THRESHOLD:
             entity = str(best_item.get("entity") or "")
             topic = str(best_item.get("topic") or "相关事实")
             facts = str(best_item.get("facts") or "").strip()

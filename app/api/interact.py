@@ -7,7 +7,8 @@ import shutil
 import threading
 import time
 import uuid
-from typing import Any, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -35,6 +36,32 @@ _location_agent_cache: Optional[ScenicLocationAgent] = None
 INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
 WEAK_GPS_SESSIONS: Dict[str, Dict[str, Any]] = {}
 CONVERSATION_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+_EMOJI_RE = re.compile(
+    r"["
+    r"\U0001f600-\U0001f64f"
+    r"\U0001f300-\U0001f5ff"
+    r"\U0001f680-\U0001f6ff"
+    r"\U0001f1e0-\U0001f1ff"
+    r"]+",
+    flags=re.UNICODE,
+)
+
+_CONVERSATION_CONTEXT_WINDOW = 8
+
+
+@dataclass
+class PipelineRequest:
+    user_text: str
+    scenic_slug: Optional[str] = None
+    attraction_id: Optional[str] = None
+    conversation_context: Optional[List[Dict[str, Any]]] = None
+    session_key: Optional[str] = None
+    user_profile: Optional[str] = None
+    route_label: Optional[str] = None
+    forced_recommendation_profile: Optional[str] = None
+    forced_recommendation_title: Optional[str] = None
+    gps_status: str = "normal"
 
 
 def _init_session_store() -> None:
@@ -145,16 +172,7 @@ def clean_markdown_for_tts(text: str) -> str:
     html = markdown.markdown(text)
     soup = BeautifulSoup(html, "html.parser")
     plain_text = soup.get_text()
-    emoji_pattern = re.compile(
-        r"["
-        r"\U0001f600-\U0001f64f"
-        r"\U0001f300-\U0001f5ff"
-        r"\U0001f680-\U0001f6ff"
-        r"\U0001f1e0-\U0001f1ff"
-        r"]+",
-        flags=re.UNICODE,
-    )
-    return emoji_pattern.sub("", plain_text).strip()
+    return _EMOJI_RE.sub("", plain_text).strip()
 
 
 def _select_avatar_response_text(
@@ -296,7 +314,7 @@ def parse_conversation_context(raw: Optional[str]) -> list[Dict[str, Any]]:
     if not isinstance(payload, list):
         return []
     context: list[Dict[str, Any]] = []
-    for item in payload[-8:]:
+    for item in payload[-_CONVERSATION_CONTEXT_WINDOW:]:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "")[:16]
@@ -309,18 +327,19 @@ def parse_conversation_context(raw: Optional[str]) -> list[Dict[str, Any]]:
 
 
 def get_conversation_memory(session_key: str) -> Dict[str, Any]:
-    """Get conversation memory. Falls back to SQLite if not in the in-memory cache."""
+    """Sync version: reads in-memory cache only. Cache is kept warm by save_session_memory after each response."""
+    return dict(CONVERSATION_SESSIONS.get(session_key, {}))
+
+
+async def get_conversation_memory_async(session_key: str) -> Dict[str, Any]:
+    """Async version for use inside async handlers. Falls back to SQLite on cold cache."""
     if session_key in CONVERSATION_SESSIONS:
         return dict(CONVERSATION_SESSIONS[session_key])
-    # Try persistent store (run in a worker thread to avoid blocking the event loop)
     try:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, get_session_memory(session_key))
-            memory = future.result(timeout=2.0)
-            if memory:
-                CONVERSATION_SESSIONS[session_key] = memory
-                return dict(memory)
+        memory = await get_session_memory(session_key)
+        if memory:
+            CONVERSATION_SESSIONS[session_key] = memory
+            return dict(memory)
     except Exception:
         pass
     return {}
@@ -421,24 +440,18 @@ def update_conversation_memory(
 
 
 def handle_weak_gps_flow(
-    user_text: str,
-    gps_status: str,
-    session_key: str,
-    user_profile: Optional[str],
-    scenic_slug: Optional[str] = None,
-    attraction_id: Optional[str] = None,
-    conversation_context: Optional[list[Dict[str, Any]]] = None,
+    req: PipelineRequest,
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
-    if gps_status != "weak":
-        pop_weak_gps_context(session_key)
+    if req.gps_status != "weak":
+        pop_weak_gps_context(req.session_key)
         return None
 
     pipeline = get_pipeline()
     location_agent = get_location_agent()
-    pending = WEAK_GPS_SESSIONS.get(session_key)
+    pending = WEAK_GPS_SESSIONS.get(req.session_key)
 
     if pending:
-        candidates = location_agent.infer_candidates(user_text, scenic_slug=pending.get("scenic_slug"))
+        candidates = location_agent.infer_candidates(req.user_text, scenic_slug=pending.get("scenic_slug"))
         gps_result = location_agent.build_candidate_reply(candidates, pending["original_query"])
         base_metadata = {
             "query": pending["original_query"],
@@ -453,21 +466,21 @@ def handle_weak_gps_flow(
         }
 
         if gps_result["gps_state"] != "resolved":
-            set_weak_gps_context(session_key, pending)
+            set_weak_gps_context(req.session_key, pending)
             return gps_result["answer"], base_metadata
 
         current_attraction = gps_result["resolved_attraction"]
-        pop_weak_gps_context(session_key)
+        pop_weak_gps_context(req.session_key)
 
         if pending["original_intent"] == "RECOMMEND":
             recommendation_result = pipeline.process_query(
                 pending["original_query"],
-                user_profile=user_profile,
+                user_profile=req.user_profile,
                 start_attraction=current_attraction,
                 scenic_slug=pending.get("scenic_slug"),
                 attraction_id=pending.get("attraction_id"),
-                conversation_context=conversation_context,
-                session_memory=get_conversation_memory(session_key),
+                conversation_context=req.conversation_context,
+                session_memory=get_conversation_memory(req.session_key),
             )
             recommendation_result["agent_type"] = "weak_gps_recommendation"
             recommendation_result["matched_attraction"] = current_attraction
@@ -480,23 +493,23 @@ def handle_weak_gps_flow(
 
         return gps_result["answer"], base_metadata
 
-    original_intent = get_query_intent(user_text)
-    if not should_enter_weak_gps_flow(user_text, gps_status, original_intent):
+    original_intent = get_query_intent(req.user_text)
+    if not should_enter_weak_gps_flow(req.user_text, req.gps_status, original_intent):
         return None
 
     set_weak_gps_context(
-        session_key,
+        req.session_key,
         {
-            "original_query": user_text,
+            "original_query": req.user_text,
             "original_intent": original_intent,
             "created_at": time.time(),
-            "scenic_slug": scenic_slug,
-            "attraction_id": attraction_id,
+            "scenic_slug": req.scenic_slug,
+            "attraction_id": req.attraction_id,
         },
     )
     answer = location_agent.build_follow_up_prompt()
     return answer, {
-        "query": user_text,
+        "query": req.user_text,
         "intent": original_intent,
         "agent_type": "weak_gps_prompt",
         "matched_attraction": None,
@@ -508,40 +521,22 @@ def handle_weak_gps_flow(
     }
 
 
-def run_answer_pipeline(
-    user_text: str,
-    gps_status: str,
-    session_key: str,
-    user_profile: Optional[str] = None,
-    scenic_slug: Optional[str] = None,
-    attraction_id: Optional[str] = None,
-    forced_recommendation_profile: Optional[str] = None,
-    forced_recommendation_title: Optional[str] = None,
-    conversation_context: Optional[list[Dict[str, Any]]] = None,
-) -> Tuple[str, Dict[str, Any]]:
-    gps_result = handle_weak_gps_flow(
-        user_text,
-        gps_status,
-        session_key,
-        user_profile,
-        scenic_slug=scenic_slug,
-        attraction_id=attraction_id,
-        conversation_context=conversation_context,
-    )
+def run_answer_pipeline(req: PipelineRequest) -> Tuple[str, Dict[str, Any]]:
+    gps_result = handle_weak_gps_flow(req)
     if gps_result:
         return gps_result
 
     result = get_pipeline().process_query(
-        user_text,
-        user_profile=user_profile,
-        scenic_slug=scenic_slug,
-        attraction_id=attraction_id,
-        forced_recommendation_profile=forced_recommendation_profile,
-        forced_recommendation_title=forced_recommendation_title,
-        conversation_context=conversation_context,
-        session_memory=get_conversation_memory(session_key),
+        req.user_text,
+        user_profile=req.user_profile,
+        scenic_slug=req.scenic_slug,
+        attraction_id=req.attraction_id,
+        forced_recommendation_profile=req.forced_recommendation_profile,
+        forced_recommendation_title=req.forced_recommendation_title,
+        conversation_context=req.conversation_context,
+        session_memory=get_conversation_memory(req.session_key),
     )
-    result["gps_state"] = "normal" if gps_status != "weak" else "weak_without_followup"
+    result["gps_state"] = "normal" if req.gps_status != "weak" else "weak_without_followup"
     result["gps_candidates"] = []
     return result["answer"], result
 
@@ -582,15 +577,17 @@ def _generate_fresh_avatar_response(
         }
 
     assistant_text, pipeline_result = run_answer_pipeline(
-        user_text,
-        gps_status,
-        session_key=session_key,
-        user_profile=user_profile,
-        scenic_slug=scenic_slug,
-        attraction_id=attraction_id,
-        forced_recommendation_profile=forced_recommendation_profile,
-        forced_recommendation_title=forced_recommendation_title,
-        conversation_context=conversation_context,
+        PipelineRequest(
+            user_text=user_text,
+            gps_status=gps_status,
+            session_key=session_key,
+            user_profile=user_profile,
+            scenic_slug=scenic_slug,
+            attraction_id=attraction_id,
+            forced_recommendation_profile=forced_recommendation_profile,
+            forced_recommendation_title=forced_recommendation_title,
+            conversation_context=conversation_context,
+        )
     )
     assistant_text = _select_avatar_response_text(
         assistant_text,
@@ -872,6 +869,28 @@ def refresh_preset_route_cache_in_background() -> None:
     thread.start()
 
 
+async def _resolve_input_text(payload: Dict[str, Any]) -> Tuple[str, bool]:
+    """Return (user_text, is_audio_input) from a WS payload dict."""
+    if "text" in payload:
+        return payload["text"], False
+
+    if "audio" in payload:
+        audio_bytes = base64.b64decode(payload["audio"])
+        request_id = str(uuid.uuid4())
+        temp_audio_path = os.path.join(TEMP_DIR, f"{request_id}_ws_input.webm")
+        with open(temp_audio_path, "wb") as file_obj:
+            file_obj.write(audio_bytes)
+        try:
+            asr_service = get_asr_service()
+            asr_result = asr_service.transcribe(temp_audio_path)
+            user_text = asr_result.strip() if isinstance(asr_result, str) else str(asr_result)
+            return user_text or "（没有听到声音）", True
+        except Exception:
+            return "（语音识别失败）", True
+
+    return "", False
+
+
 @router.websocket("/v1/interact/stream")
 async def interact_stream_ws(websocket: WebSocket):
     await websocket.accept()
@@ -903,23 +922,7 @@ async def interact_stream_ws(websocket: WebSocket):
                 conversation_context = []
             session_key = get_session_key("anonymous", client_session_id, fallback=ws_session_key)
 
-            if "text" in payload:
-                user_text = payload["text"]
-            elif "audio" in payload:
-                is_audio_input = True
-                audio_bytes = base64.b64decode(payload["audio"])
-                request_id = str(uuid.uuid4())
-                temp_audio_path = os.path.join(TEMP_DIR, f"{request_id}_ws_input.webm")
-                with open(temp_audio_path, "wb") as file_obj:
-                    file_obj.write(audio_bytes)
-                try:
-                    asr_service = get_asr_service()
-                    asr_result = asr_service.transcribe(temp_audio_path)
-                    user_text = asr_result.strip() if isinstance(asr_result, str) else str(asr_result)
-                    if not user_text:
-                        user_text = "（没有听到声音）"
-                except Exception:
-                    user_text = "（语音识别失败）"
+            user_text, is_audio_input = await _resolve_input_text(payload)
 
             if not is_valid_user_text(user_text):
                 await websocket.send_json({"type": "error", "message": "未识别到有效语音或文本。"})
@@ -928,16 +931,17 @@ async def interact_stream_ws(websocket: WebSocket):
             if is_audio_input:
                 await websocket.send_json({"type": "text_user", "text": user_text})
 
-            # Phase 1: try weak-GPS fast path; if not applicable, stream graph nodes.
-            gps_fast = handle_weak_gps_flow(
-                user_text,
-                gps_status,
-                session_key,
-                user_profile=None,
+            ws_req = PipelineRequest(
+                user_text=user_text,
+                gps_status=gps_status,
+                session_key=session_key,
                 scenic_slug=scenic_slug,
                 attraction_id=attraction_id,
                 conversation_context=conversation_context,
             )
+
+            # Phase 1: try weak-GPS fast path; if not applicable, stream graph nodes.
+            gps_fast = handle_weak_gps_flow(ws_req)
             if gps_fast:
                 assistant_text, pipeline_result = gps_fast
             else:
@@ -950,7 +954,7 @@ async def interact_stream_ws(websocket: WebSocket):
                     scenic_slug=scenic_slug,
                     attraction_id=attraction_id,
                     conversation_context=conversation_context,
-                    session_memory=get_conversation_memory(session_key),
+                    session_memory=await get_conversation_memory_async(session_key),
                 ):
                     if _event["node"] == "__final__":
                         pipeline_result = _event["data"]
