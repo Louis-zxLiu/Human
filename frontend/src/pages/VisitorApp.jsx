@@ -251,8 +251,9 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   const [pendingDelete, setPendingDelete] = useState(null);
   const [isPresetOpen, setIsPresetOpen] = useState(false);
   const [agentNodes, setAgentNodes] = useState([]);
-  const [isAgentGraphExpanded, setIsAgentGraphExpanded] = useState(false);
+  const [isAgentGraphExpanded, setIsAgentGraphExpanded] = useState(true);
   const [agentElapsedMs, setAgentElapsedMs] = useState(0);
+  const [pendingReviewLogId, setPendingReviewLogId] = useState(null);
 
   const currentSessionRef = useRef(currentSession);
   const chatRef = useRef(null);
@@ -269,6 +270,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
   const recordingStartedAtRef = useRef(0);
   const agentStartTimeRef = useRef(null);
   const agentElapsedTimerRef = useRef(null);
+  const pendingReviewTimerRef = useRef(null);
 
   useEffect(() => {
     currentSessionRef.current = currentSession;
@@ -484,6 +486,56 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
     }
   }
 
+  function clearPendingReviewPoller() {
+    if (pendingReviewTimerRef.current) {
+      clearInterval(pendingReviewTimerRef.current);
+      pendingReviewTimerRef.current = null;
+    }
+  }
+
+  function startPendingReviewPoller(logId, assistantIndex) {
+    clearPendingReviewPoller();
+    setPendingReviewLogId(logId);
+    const token = localStorage.getItem("auth_token");
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    let attempts = 0;
+    pendingReviewTimerRef.current = setInterval(async () => {
+      attempts += 1;
+      // Stop polling after 10 minutes (120 × 5s)
+      if (attempts > 120) {
+        clearPendingReviewPoller();
+        setPendingReviewLogId(null);
+        updateAssistantMessage(assistantIndex, {
+          content: "⚠️ 本条回复需人工审核，审核超时，请稍后重试。",
+          meta: null,
+        }, true);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/v1/interact/review/${logId}`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.review_status === "approved") {
+          clearPendingReviewPoller();
+          setPendingReviewLogId(null);
+          updateAssistantMessage(assistantIndex, {
+            content: data.answer,
+            meta: null,
+          }, true);
+        } else if (data.review_status === "rejected") {
+          clearPendingReviewPoller();
+          setPendingReviewLogId(null);
+          updateAssistantMessage(assistantIndex, {
+            content: "抱歉，本条回复已被系统审核拒绝，请换一种方式提问。",
+            meta: null,
+          }, true);
+        }
+      } catch {
+        // network hiccup — retry next tick
+      }
+    }, 5000);
+  }
+
   function scheduleProcessingStages(question, startStage = "heard") {
     resetAgentNodes();
     clearStageTimers();
@@ -677,6 +729,25 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
         if (message.type === "done") {
           ensureAssistantPlaceholder();
           const finalText = message.full_text || assistantText;
+          const reviewStatus = message.review_status || "auto";
+          const logId = message.log_id || null;
+
+          if (reviewStatus === "pending" && logId) {
+            updateAssistantMessage(
+              assistantIndex,
+              { content: "⏳ 本条回复正在人工审核中，审核通过后将自动显示…", meta: null },
+              true,
+            );
+            setStreamNotice("回复已提交人工审核，请稍候。");
+            completeProcessing({ video_stream_url: "__stream__" });
+            stopAgentTimer();
+            settled = true;
+            closeSocket();
+            startPendingReviewPoller(logId, assistantIndex);
+            resolve(message);
+            return;
+          }
+
           updateAssistantMessage(
             assistantIndex,
             { content: finalText, meta: message.rag_metadata || null },
@@ -686,7 +757,7 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
           if (!streamedMedia) {
             settled = true;
             closeSocket();
-            reject(new Error("瀹炴椂閾捐矾鏈敓鎴愭暟瀛椾汉鐢婚潰"));
+            reject(new Error("实时链路未生成数字人画面"));
             return;
           }
           completeProcessing({ video_stream_url: "__stream__" });
@@ -1202,15 +1273,19 @@ export function VisitorApp({ guideContext = {}, embedded = false, productTone = 
             </div>
           </div>
 
-          {/* Agent graph card */}
+          {/* Agent graph card moved to right sidebar */}
+
+        </section>
+
+        {/* ===== RIGHT SIDEBAR: Agent Graph ===== */}
+        <aside className="vis-right-sidebar">
           <AgentGraphCard
             agentNodes={agentNodes}
             isExpanded={isAgentGraphExpanded}
             onToggle={() => setIsAgentGraphExpanded((v) => !v)}
             elapsedMs={agentElapsedMs}
           />
-
-        </section>
+        </aside>
 
         {/* ===== RIGHT PANEL: CHAT ===== */}
         <section className="vis-chat-panel">

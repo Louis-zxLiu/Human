@@ -170,10 +170,16 @@ class LogService:
                 ),
             )
             conn.commit()
+            log_id = cursor.lastrowid
             if review_status == "pending":
-                _trigger_notify(cursor.lastrowid)
+                _trigger_notify(log_id)
         finally:
             conn.close()
+        return log_id, review_status
+
+    def analyze_and_log_returning_status(self, **kwargs):
+        """Wrapper that returns (log_id, review_status). analyze_and_log now returns them too."""
+        return self.analyze_and_log(**kwargs)
 
     def get_user_history(self, username: str, limit: int = 50):
         conn = sqlite3.connect(self.db_path)

@@ -998,7 +998,6 @@ async def interact_stream_ws(websocket: WebSocket):
                 attraction_id=attraction_id,
                 route_label=route_label,
             )
-            await websocket.send_json({"type": "done", "full_text": assistant_text, "rag_metadata": rag_metadata})
             update_conversation_memory(
                 session_key,
                 user_text,
@@ -1009,8 +1008,11 @@ async def interact_stream_ws(websocket: WebSocket):
                 route_label=route_label,
             )
 
+            # Log first so we have log_id for review_status
+            log_id = None
+            review_status = "auto"
             try:
-                log_service.analyze_and_log(
+                log_id, review_status = log_service.analyze_and_log_returning_status(
                     user_query=user_text,
                     ai_response=assistant_text,
                     cost_time=0.0,
@@ -1024,6 +1026,14 @@ async def interact_stream_ws(websocket: WebSocket):
                 )
             except Exception as exc:
                 print(f"[API] failed to log websocket interaction: {exc}")
+
+            await websocket.send_json({
+                "type": "done",
+                "full_text": assistant_text,
+                "rag_metadata": rag_metadata,
+                "review_status": review_status,
+                "log_id": log_id,
+            })
 
     except WebSocketDisconnect:
         print("[API] WebSocket disconnected")
@@ -1146,6 +1156,33 @@ async def interact_text(
     )
 
     return JSONResponse(content=result)
+
+
+@router.get("/v1/interact/review/{log_id}")
+async def get_review_status(
+    log_id: int,
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+):
+    """Poll endpoint for frontend to check if a pending review has been resolved."""
+    import sqlite3 as _sqlite3
+    from app.core.config import resolve_path as _rp
+    db_path = _rp("data/processed/interaction_logs.db")
+    try:
+        conn = _sqlite3.connect(db_path)
+        conn.row_factory = _sqlite3.Row
+        row = conn.execute(
+            "SELECT review_status, suggested_answer, ai_response FROM interaction_logs WHERE id=?",
+            (log_id,),
+        ).fetchone()
+        conn.close()
+    except Exception:
+        raise HTTPException(status_code=500, detail="DB error")
+    if not row:
+        raise HTTPException(status_code=404, detail="Not found")
+    status = row["review_status"]
+    # If admin suggested a replacement answer, return it; else return original
+    answer = row["suggested_answer"] or row["ai_response"]
+    return JSONResponse(content={"review_status": status, "answer": answer if status in ("approved", "rejected") else None})
 
 
 @router.get("/v1/interact/profile")
