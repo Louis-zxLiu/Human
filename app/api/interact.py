@@ -17,7 +17,7 @@ from app.api.auth import get_current_user, get_current_user_optional
 from app.api.stream_utils import build_stream_tts_segments, split_sentences
 from app.core.config import resolve_path, settings
 from app.rag.location_agent import ScenicLocationAgent, detect_landmark_follow_up_need
-from app.rag.pipeline import ScenicRAGPipeline
+from app.rag.pipeline import ScenicRAGPipeline, AGENT_NODE_LABELS
 from app.rag.router import get_query_intent
 from app.services.asr_tts import get_asr_service, get_tts_service
 from app.services.avatar_engine import get_avatar_engine
@@ -887,15 +887,43 @@ async def interact_stream_ws(websocket: WebSocket):
             if is_audio_input:
                 await websocket.send_json({"type": "text_user", "text": user_text})
 
-            assistant_text, pipeline_result = run_answer_pipeline(
+            # Phase 1: try weak-GPS fast path; if not applicable, stream graph nodes.
+            gps_fast = handle_weak_gps_flow(
                 user_text,
                 gps_status,
-                session_key=session_key,
+                session_key,
                 user_profile=None,
                 scenic_slug=scenic_slug,
                 attraction_id=attraction_id,
                 conversation_context=conversation_context,
             )
+            if gps_fast:
+                assistant_text, pipeline_result = gps_fast
+            else:
+                # Normal path: stream per-node progress events to the client.
+                _pipeline = get_pipeline()
+                assistant_text = ""
+                pipeline_result = {}
+                async for _event in _pipeline.async_stream_events(
+                    user_text=user_text,
+                    scenic_slug=scenic_slug,
+                    attraction_id=attraction_id,
+                    conversation_context=conversation_context,
+                    session_memory=get_conversation_memory(session_key),
+                ):
+                    if _event["node"] == "__final__":
+                        pipeline_result = _event["data"]
+                        assistant_text = pipeline_result.get("answer", "")
+                    else:
+                        await websocket.send_json({
+                            "type": "agent_node",
+                            "node": _event["node"],
+                            "label": AGENT_NODE_LABELS.get(_event["node"], _event["node"]),
+                            "status": _event["status"],
+                            "ts": _event["ts"],
+                        })
+                pipeline_result["gps_state"] = "normal" if gps_status != "weak" else "weak_without_followup"
+                pipeline_result["gps_candidates"] = []
             assistant_text = _select_avatar_response_text(
                 assistant_text,
                 pipeline_result,
