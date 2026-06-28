@@ -524,6 +524,14 @@ export function AdminApp() {
   const [kbFile, setKbFile] = useState(null);
   const [kbRebuildResult, setKbRebuildResult] = useState(null);
 
+  // Review queue state
+  const [reviewPendingCount, setReviewPendingCount] = useState(0);
+  const [reviewQueue, setReviewQueue] = useState([]);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewStats, setReviewStats] = useState(null);
+  const [suggestingId, setSuggestingId] = useState(null);
+  const [suggestText, setSuggestText] = useState("");
+
   const revealRef = useReveal();
   const particleCanvasRef = useParticleCanvas();
   const cursorGlowRef = useCursorGlow();
@@ -558,6 +566,62 @@ export function AdminApp() {
     bootstrap();
   }, [redirectToLogin]);
 
+  // WebSocket for real-time review notifications (only when authenticated)
+  useEffect(() => {
+    const token = localStorage.getItem("auth_token");
+    const role = localStorage.getItem("user_role");
+    if (!token || role !== "admin") return;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/admin/notify`);
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "review_pending") {
+          setReviewPendingCount((c) => c + 1);
+        }
+      } catch {}
+    };
+    return () => ws.close();
+  }, []);
+
+  async function loadReviewQueue() {
+    setReviewLoading(true);
+    try {
+      const [qRes, sRes] = await Promise.all([
+        fetch("/api/v1/admin/review/queue?status=pending&limit=20", {
+          headers: { Authorization: `Bearer ${localStorage.getItem("auth_token")}` },
+        }),
+        fetch("/api/v1/admin/review/stats", {
+          headers: { Authorization: `Bearer ${localStorage.getItem("auth_token")}` },
+        }),
+      ]);
+      if (qRes.ok) {
+        const items = (await qRes.json()).items || [];
+        setReviewQueue(items);
+        // Keep badge in sync with actual queue length
+        setReviewPendingCount(items.length);
+      }
+      if (sRes.ok) setReviewStats(await sRes.json());
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  async function handleReviewAction(logId, action, extra = {}) {
+    const token = localStorage.getItem("auth_token");
+    const res = await fetch(`/api/v1/admin/review/${logId}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(extra),
+    });
+    if (!res.ok) {
+      setFeedback({ type: "danger", message: `操作失败（${res.status}），请重试。` });
+      return;
+    }
+    setReviewQueue((q) => q.filter((item) => item.id !== logId));
+    setReviewPendingCount((c) => Math.max(0, c - 1));
+  }
+
   async function bootstrap() {
     setLoading(true);
     setError("");
@@ -573,6 +637,7 @@ export function AdminApp() {
       setCurrentVoice(voiceResult.current_voice || voiceResult.available_voices?.[0]?.id || "");
       setAvatarRuntime(runtimeResult);
       setKbDocs(kbResult.documents || []);
+      loadReviewQueue();
     } catch (err) {
       if (isAuthError(err)) {
         redirectToLogin();
@@ -872,6 +937,12 @@ export function AdminApp() {
             <MagneticBtn className="adm-btn adm-btn--danger" onClick={handleLogout}>
               退出登录
             </MagneticBtn>
+            {reviewPendingCount > 0 && (
+              <div className="adm-notify-badge" title="待审核记录">
+                <i className="fas fa-bell" />
+                <span className="adm-notify-badge__count">{reviewPendingCount}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1069,41 +1140,88 @@ export function AdminApp() {
           </div>
         </div>
 
-        {/* ── Recent Failed Samples ── */}
-        <div className="adm-section adm-reveal">
-          <h2 className="adm-section-title">
-            <span className="adm-section-dot" style={{ background: "#ef4444" }} />
-            最近失败样本
-          </h2>
-          <div className="adm-table-wrap">
-            {(data.recent_failed_samples || []).length ? (
-              <table className="adm-table">
-                <thead>
-                  <tr>
-                    <th>创建时间</th>
-                    <th>用户问题</th>
-                    <th>数字人回复</th>
-                    <th>响应类型</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(data.recent_failed_samples || []).map((s, i) => (
-                    <tr key={i}>
-                      <td className="adm-td-date">{formatDateTime(s.created_at)}</td>
-                      <td>{formatAdminText(s.user_query)}</td>
-                      <td className="adm-td-response">{formatAdminText(s.ai_response)}</td>
-                      <td>
-                        <span className="adm-tag adm-tag--rose">{formatResponseKind(s.response_kind)}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="adm-empty">近期没有失败样例</div>
-            )}
+        {/* ── Review Queue ─────────────────── */}
+        <section className="adm-section adm-reveal">
+          <div className="adm-section-header">
+            <h3 className="adm-section-title">
+              待审核队列
+              {reviewQueue.length > 0 && (
+                <span className="adm-q-badge">{reviewQueue.length}</span>
+              )}
+            </h3>
+            <button className="adm-btn adm-btn--ghost" onClick={loadReviewQueue}>
+              <i className="fas fa-sync-alt" /> 刷新
+            </button>
           </div>
-        </div>
+
+          {/* Hot topics KB gap alert */}
+          {reviewStats?.hot_topics_needing_kb?.length > 0 && (
+            <div className="adm-kb-gap-alert">
+              <i className="fas fa-exclamation-triangle" />
+              <span>知识库缺口：</span>
+              {reviewStats.hot_topics_needing_kb.map((t) => (
+                <span key={t.topic} className="adm-kb-gap-tag">
+                  {t.topic} ×{t.count}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {reviewLoading && <div className="adm-loading">加载中...</div>}
+
+          {!reviewLoading && reviewQueue.length === 0 && (
+            <div className="adm-empty">暂无待审核记录</div>
+          )}
+
+          <div className="adm-review-list">
+            {reviewQueue.map((item) => (
+              <div key={item.id} className={`adm-review-item adm-review-item--${item.sentiment === "负面" ? "negative" : item.refusal ? "refused" : "warn"}`}>
+                <div className="adm-review-item__meta">
+                  <span className="adm-tag adm-tag--rose">{item.response_kind || "未知类型"}</span>
+                  <span className="adm-tag">{item.sentiment}</span>
+                  <span className="adm-review-item__time">{item.created_at?.slice(0, 16)}</span>
+                </div>
+                <div className="adm-review-item__query">
+                  <strong>游客：</strong>{item.user_query}
+                </div>
+                <div className="adm-review-item__response">
+                  <strong>AI：</strong>{item.ai_response?.slice(0, 120)}{item.ai_response?.length > 120 ? "…" : ""}
+                </div>
+
+                {suggestingId === item.id ? (
+                  <div className="adm-review-item__suggest">
+                    <textarea
+                      className="adm-review-textarea"
+                      value={suggestText}
+                      onChange={(e) => setSuggestText(e.target.value)}
+                      placeholder="输入建议回答..."
+                      rows={3}
+                    />
+                    <div className="adm-review-item__actions">
+                      <button className="adm-btn adm-btn--primary" onClick={() => {
+                        handleReviewAction(item.id, "suggest", { suggested_answer: suggestText });
+                        setSuggestingId(null); setSuggestText("");
+                      }}>提交建议</button>
+                      <button className="adm-btn adm-btn--ghost" onClick={() => setSuggestingId(null)}>取消</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="adm-review-item__actions">
+                    <button className="adm-btn adm-btn--success" onClick={() => handleReviewAction(item.id, "approve")}>
+                      <i className="fas fa-check" /> 批准
+                    </button>
+                    <button className="adm-btn adm-btn--danger" onClick={() => handleReviewAction(item.id, "reject")}>
+                      <i className="fas fa-times" /> 拒绝
+                    </button>
+                    <button className="adm-btn adm-btn--ghost" onClick={() => { setSuggestingId(item.id); setSuggestText(""); }}>
+                      <i className="fas fa-edit" /> 建议回答
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
 
         {/* ── Operation Recommendations ── */}
         <div className="adm-section adm-reveal">
