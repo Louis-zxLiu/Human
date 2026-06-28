@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import threading
 from collections import Counter
 from typing import Any, Dict, Optional
 
@@ -25,7 +26,16 @@ class LogService:
 
     def __init__(self):
         self.db_path = resolve_path("data/processed/interaction_logs.db")
+        self._local = threading.local()
         self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
+        return conn
 
     def _init_db(self) -> None:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -78,6 +88,14 @@ class LogService:
             for column, statement in migrations.items():
                 if column not in columns:
                     cursor.execute(statement)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_interaction_logs_username "
+                "ON interaction_logs (username)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_interaction_logs_created_at "
+                "ON interaction_logs (created_at)"
+            )
             conn.commit()
         finally:
             conn.close()
@@ -85,10 +103,9 @@ class LogService:
     @staticmethod
     def _should_flag_for_review(metadata: dict, sentiment: str) -> bool:
         """Return True if this interaction should be queued for human review."""
-        if metadata.get("refusal"):
-            return True
         warnings = metadata.get("warnings") or []
-        if any("weak_evidence" in str(w) for w in warnings):
+        has_weak_evidence = any("weak_evidence" in str(w) for w in warnings)
+        if metadata.get("refusal") and has_weak_evidence:
             return True
         response_kind = str(metadata.get("response_kind") or "")
         if response_kind.startswith("gps:ambiguous"):
@@ -137,44 +154,41 @@ class LogService:
 
         review_status = "pending" if self._should_flag_for_review(metadata, sentiment) else "auto"
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO interaction_logs
-                (username, user_query, ai_response, intent_type, sentiment, focus_point,
-                 query_scope, matched_attraction, recommendation_label, response_kind,
-                 plan_json, evidence_json, refusal_json, warnings_json, observability_json, cost_time,
-                 review_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    username,
-                    user_query,
-                    ai_response,
-                    intent_type,
-                    sentiment,
-                    focus_point,
-                    metadata.get("query_scope"),
-                    metadata.get("matched_attraction"),
-                    metadata.get("recommendation_label"),
-                    metadata.get("response_kind"),
-                    plan_json,
-                    evidence_json,
-                    refusal_json,
-                    warnings_json,
-                    observability_json,
-                    cost_time,
-                    review_status,
-                ),
-            )
-            conn.commit()
-            log_id = cursor.lastrowid
-            if review_status == "pending":
-                _trigger_notify(log_id)
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO interaction_logs
+            (username, user_query, ai_response, intent_type, sentiment, focus_point,
+             query_scope, matched_attraction, recommendation_label, response_kind,
+             plan_json, evidence_json, refusal_json, warnings_json, observability_json, cost_time,
+             review_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                username,
+                user_query,
+                ai_response,
+                intent_type,
+                sentiment,
+                focus_point,
+                metadata.get("query_scope"),
+                metadata.get("matched_attraction"),
+                metadata.get("recommendation_label"),
+                metadata.get("response_kind"),
+                plan_json,
+                evidence_json,
+                refusal_json,
+                warnings_json,
+                observability_json,
+                cost_time,
+                review_status,
+            ),
+        )
+        conn.commit()
+        log_id = cursor.lastrowid
+        if review_status == "pending":
+            _trigger_notify(log_id)
         return log_id, review_status
 
     def analyze_and_log_returning_status(self, **kwargs):
@@ -182,48 +196,40 @@ class LogService:
         return self.analyze_and_log(**kwargs)
 
     def get_user_history(self, username: str, limit: int = 50):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT user_query, ai_response, response_kind, warnings_json, created_at
-                FROM interaction_logs
-                WHERE username = ?
-                ORDER BY created_at DESC LIMIT ?
-                """,
-                (username, limit),
-            )
-            history = []
-            for row in cursor.fetchall():
-                item = dict(row)
-                try:
-                    item["warnings"] = json.loads(item.pop("warnings_json") or "[]")
-                except json.JSONDecodeError:
-                    item["warnings"] = []
-                history.append(item)
-            return history
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT user_query, ai_response, response_kind, warnings_json, created_at
+            FROM interaction_logs
+            WHERE username = ?
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (username, limit),
+        )
+        history = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            try:
+                item["warnings"] = json.loads(item.pop("warnings_json") or "[]")
+            except json.JSONDecodeError:
+                item["warnings"] = []
+            history.append(item)
+        return history
 
     def get_user_profile(self, username: str) -> str:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT intent_type, sentiment, focus_point, recommendation_label
-                FROM interaction_logs
-                WHERE username = ?
-                ORDER BY created_at DESC LIMIT 20
-                """,
-                (username,),
-            )
-            rows = cursor.fetchall()
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT intent_type, sentiment, focus_point, recommendation_label
+            FROM interaction_logs
+            WHERE username = ?
+            ORDER BY created_at DESC LIMIT 20
+            """,
+            (username,),
+        )
+        rows = cursor.fetchall()
 
         if not rows:
             return "新游客，暂无历史偏好记录。"
@@ -247,15 +253,12 @@ class LogService:
         return "；".join(profile_parts) if profile_parts else "暂无明显的偏好特征。"
 
     def clear_logs(self) -> Dict[str, Any]:
-        conn = sqlite3.connect(self.db_path)
-        try:
-            cursor = conn.cursor()
-            removed = cursor.execute("SELECT COUNT(*) FROM interaction_logs").fetchone()[0]
-            cursor.execute("DELETE FROM interaction_logs")
-            cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'interaction_logs'")
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        removed = cursor.execute("SELECT COUNT(*) FROM interaction_logs").fetchone()[0]
+        cursor.execute("DELETE FROM interaction_logs")
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'interaction_logs'")
+        conn.commit()
 
         return {
             "ok": True,
