@@ -10862,3 +10862,85 @@ select.input-field option:disabled {
     height: 54px;
   }
 }
+
+/* ── Admin Review Queue ─────────────────────────────────────── */
+.adm-notify-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(255, 191, 71, 0.15);
+  border: 1px solid rgba(255, 191, 71, 0.3);
+  border-radius: 20px;
+  color: var(--tone-amber);
+  font-size: 13px;
+  cursor: pointer;
+}
+.adm-notify-badge__count {
+  background: var(--tone-amber);
+  color: #07111f;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.adm-kb-gap-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(255, 122, 89, 0.12);
+  border: 1px solid rgba(255, 122, 89, 0.25);
+  border-radius: 10px;
+  color: var(--tone-coral);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.adm-kb-gap-tag {
+  background: rgba(255, 122, 89, 0.2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.adm-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.adm-review-item {
+  background: rgba(18, 34, 54, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.adm-review-item--negative { border-left: 3px solid var(--tone-coral); }
+.adm-review-item--refused  { border-left: 3px solid var(--tone-amber); }
+.adm-review-item--warn     { border-left: 3px solid var(--tone-sky); }
+.adm-review-item__meta { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.adm-review-item__time { margin-left: auto; color: var(--text-muted); font-size: 12px; }
+.adm-review-item__query, .adm-review-item__response {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+.adm-review-item__query strong, .adm-review-item__response strong { color: var(--text); }
+.adm-review-item__actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.adm-review-item__suggest { margin-top: 10px; }
+.adm-review-textarea {
+  width: 100%;
+  background: rgba(7, 17, 31, 0.6);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 13px;
+  resize: vertical;
+  margin-bottom: 8px;
+}
+.adm-btn--primary { background: var(--tone-sky); color: #07111f; }
+.adm-btn--success { background: var(--tone-mint); color: #07111f; }
+.adm-btn--ghost   { background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid rgba(255,255,255,0.12); }
+.adm-loading { text-align: center; color: var(--text-muted); padding: 20px; font-size: 13px; }
+.adm-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
