@@ -23,6 +23,7 @@ from app.services.asr_tts import get_asr_service, get_tts_service
 from app.services.avatar_engine import get_avatar_engine
 from app.services.log_service import log_service
 from app.services.preset_route_cache import preset_route_cache
+from app.services.session_store import get_session_memory, save_session_memory, init_store
 
 router = APIRouter()
 
@@ -34,6 +35,24 @@ _location_agent_cache: Optional[ScenicLocationAgent] = None
 INVALID_INPUTS = {"（没有听到声音）", "（语音识别失败）", "（未听清）"}
 WEAK_GPS_SESSIONS: Dict[str, Dict[str, Any]] = {}
 CONVERSATION_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+
+def _init_session_store() -> None:
+    """Schedule SQLite session store initialisation without blocking module load."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(init_store())
+    except RuntimeError:
+        # No running loop at import time — run synchronously
+        try:
+            asyncio.run(init_store())
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+_init_session_store()
 
 
 @router.get("/v1/interact/avatar/default")
@@ -290,8 +309,21 @@ def parse_conversation_context(raw: Optional[str]) -> list[Dict[str, Any]]:
 
 
 def get_conversation_memory(session_key: str) -> Dict[str, Any]:
-    return dict(CONVERSATION_SESSIONS.get(session_key) or {})
-
+    """Get conversation memory. Falls back to SQLite if not in the in-memory cache."""
+    if session_key in CONVERSATION_SESSIONS:
+        return dict(CONVERSATION_SESSIONS[session_key])
+    # Try persistent store (run in a worker thread to avoid blocking the event loop)
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, get_session_memory(session_key))
+            memory = future.result(timeout=2.0)
+            if memory:
+                CONVERSATION_SESSIONS[session_key] = memory
+                return dict(memory)
+    except Exception:
+        pass
+    return {}
 
 def _extract_preference_memory(
     user_text: str,
@@ -377,6 +409,15 @@ def update_conversation_memory(
     elif previous.get("pending_clarification"):
         memory["pending_clarification"] = None
     CONVERSATION_SESSIONS[session_key] = {key: value for key, value in memory.items() if value is not None}
+    # Persist asynchronously — fire-and-forget, failure only prints a warning
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(save_session_memory(session_key, CONVERSATION_SESSIONS[session_key]))
+    except RuntimeError:
+        # No running loop (e.g. unit tests calling this synchronously) — skip persistence
+        pass
+    except Exception:
+        pass
 
 
 def handle_weak_gps_flow(
