@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.core.runtime import utc_timestamp
 from app.rag.graph import build_graph
@@ -57,6 +58,19 @@ def detect_general_chat_reply(user_query: str) -> Optional[str]:
     except Exception:
         pass
     return fallback_reply
+
+
+AGENT_NODE_LABELS: Dict[str, str] = {
+    "planner": "意图解析",
+    "fast_answer": "快速回答",
+    "tool_dispatch": "工具调度",
+    "tool_execute": "工具执行",
+    "agent_loop_decide": "循环判断",
+    "synthesize": "综合生成",
+    "review": "质量审核",
+    "repair_execute": "修复执行",
+    "finalize": "最终输出",
+}
 
 
 class ScenicRAGPipeline:
@@ -126,6 +140,96 @@ class ScenicRAGPipeline:
 
         final: GraphState = self._graph.invoke(initial)
         return self._state_to_response(user_query, final)
+
+    async def async_stream_events(
+        self,
+        user_text: str,
+        gps_status: str = "normal",
+        session_key: str = "",
+        user_profile: Optional[str] = None,
+        scenic_slug: Optional[str] = None,
+        attraction_id: Optional[str] = None,
+        conversation_context: Optional[List[Dict[str, Any]]] = None,
+        session_memory: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Yield per-node events as each graph node completes.
+
+        Each event has the shape::
+
+            {"node": str, "status": "done", "data": dict, "ts": float}
+
+        After all nodes finish a final event is yielded::
+
+            {"node": "__final__", "status": "done", "data": <pipeline_result>, "ts": float}
+
+        LangGraph 1.x ``graph.stream()`` yields ``{node_name: output_dict}``
+        dicts.  We run the synchronous iterator inside a thread pool and
+        forward results through an ``asyncio.Queue`` so the async caller can
+        consume them without blocking the event loop.
+        """
+        initial: GraphState = {
+            "user_query": user_text,
+            "conversation_context": conversation_context or [],
+            "session_memory": session_memory or {},
+            "user_profile": user_profile,
+            "scenic_slug": scenic_slug,
+            "attraction_id": attraction_id,
+            "start_attraction": None,
+            "forced_recommendation_profile": None,
+            "forced_recommendation_title": None,
+            "latency_start": time.perf_counter(),
+            "tool_observations": [],
+            "agent_steps": [],
+            "candidate_tool_calls": [],
+            "seen_tools": [],
+            "tool_loop_count": 0,
+            "repair_count": 0,
+            "repair_history": [],
+            "trace": {},
+        }
+
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _run_stream() -> None:
+            """Run graph.stream() in a thread and push events onto the queue."""
+            try:
+                # LangGraph 1.x stream() yields {node_name: output_dict}
+                for chunk in self._graph.stream(initial):
+                    for node_name, node_output in chunk.items():
+                        queue.put_nowait(
+                            {
+                                "node": node_name,
+                                "status": "done",
+                                "data": node_output,
+                                "ts": time.time(),
+                            }
+                        )
+            except Exception as exc:  # noqa: BLE001
+                queue.put_nowait({"error": str(exc)})
+            finally:
+                queue.put_nowait(None)  # sentinel — stream finished
+
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(None, _run_stream)
+
+        final_state: Optional[Dict[str, Any]] = None
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            if "error" in event:
+                await future  # let thread clean up before raising
+                raise RuntimeError(event["error"])
+            # capture the finalize node output so we can build the full result
+            if event["node"] == "finalize":
+                final_state = event["data"]
+            yield event
+
+        await future  # ensure thread has fully exited
+
+        if final_state is not None:
+            result = self._state_to_response(user_text, final_state)
+            yield {"node": "__final__", "status": "done", "data": result, "ts": time.time()}
 
     # ------------------------------------------------------------------
     # Internal helpers
