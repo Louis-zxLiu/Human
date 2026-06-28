@@ -8,7 +8,6 @@ from langgraph.graph import END, StateGraph
 from app.rag.graph_nodes import (
     NodeContext,
     make_agent_loop_decide_node,
-    make_fast_answer_node,
     make_finalize_node,
     make_plan_node,
     make_repair_execute_node,
@@ -32,7 +31,6 @@ def build_graph(ctx: NodeContext | None = None) -> Any:
     g = StateGraph(GraphState)
 
     g.add_node("planner", make_plan_node(ctx))
-    g.add_node("fast_answer", make_fast_answer_node(ctx))
     g.add_node("tool_dispatch", make_tool_dispatch_node(ctx))
     g.add_node("tool_execute", make_tool_execute_node(ctx))
     g.add_node("agent_loop_decide", make_agent_loop_decide_node(ctx))
@@ -44,12 +42,9 @@ def build_graph(ctx: NodeContext | None = None) -> Any:
     g.set_entry_point("planner")
 
     g.add_conditional_edges("planner", route_after_plan, {
-        "fast_answer": "fast_answer",
         "tool_dispatch": "tool_dispatch",
         "finalize": "finalize",
     })
-
-    g.add_edge("fast_answer", "finalize")
     g.add_conditional_edges("tool_dispatch", route_after_tool_dispatch, {
         "tool_execute": "tool_execute",
     })

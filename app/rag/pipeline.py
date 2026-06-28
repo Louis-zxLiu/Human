@@ -8,69 +8,13 @@ from app.core.runtime import utc_timestamp
 from app.rag.graph import build_graph
 from app.rag.graph_nodes import (
     NodeContext,
-    _fallback_general_chat_reply,
-    _is_pure_social_chat,
-    _normalize_general_chat_reply,
     _plan_payload,
 )
 from app.rag.graph_state import GraphState
 from app.rag.llm_client import generate_chat_completion
 
 # Human-readable labels for each LangGraph node, used for frontend progress display.
-AGENT_NODE_LABELS: Dict[str, str] = {
-    "planner": "意图解析",
-    "fast_answer": "快速回答",
-    "tool_dispatch": "工具调度",
-    "tool_execute": "工具执行",
-    "agent_loop_decide": "循环决策",
-    "synthesize": "答案生成",
-    "review": "答案审核",
-    "repair_execute": "答案修复",
-    "finalize": "结果整理",
-}
 
-
-def detect_general_chat_reply(user_query: str) -> Optional[str]:
-    """Re-exported for backward compatibility with callers and tests."""
-    import json
-
-    query = str(user_query or "").strip()
-    if not query:
-        return None
-    fallback_reply = _fallback_general_chat_reply(query)
-    if not _is_pure_social_chat(query) and not fallback_reply:
-        return None
-    system_prompt = (
-        "You classify whether a message to a scenic-guide assistant is ordinary conversation. "
-        "Return strict JSON only. "
-        'Use {"is_general_chat": true, "reply": "...", "reason": "..."} for greetings, thanks, '
-        "goodbyes, simple acknowledgements, asking who the assistant is, or other brief social talk. "
-        'Use {"is_general_chat": false, "reason": "..."} for scenic facts, route recommendations, '
-        "navigation, weather, traffic, opening info, or any domain task. "
-        "If is_general_chat is true, reply in concise Simplified Chinese, warm and natural, under 24 Chinese characters."
-    )
-    prompt = (
-        f"User message: {query}\n"
-        '- "你好" => {"is_general_chat": true, "reply": "你好，我在。", "reason": "greeting"}\n'
-        '- "灵山大佛在哪里" => {"is_general_chat": false, "reason": "scenic fact"}\n'
-        "Return JSON only."
-    )
-    try:
-        raw = generate_chat_completion(prompt, system_prompt, temperature=0.0, max_tokens=160,
-                                       return_error_text=False, json_mode=True)
-        cleaned = str(raw or "").replace("```json", "").replace("```", "").strip()
-        if cleaned:
-            payload = json.loads(cleaned)
-            if payload.get("is_general_chat") is True:
-                return _normalize_general_chat_reply(
-                    str(payload.get("reply") or ""),
-                    fallback_reply or "你好，我在。",
-                )
-            if payload.get("is_general_chat") is False:
-                return None
-    except Exception:
-        pass
-    return fallback_reply
 
 
 AGENT_NODE_LABELS: Dict[str, str] = {
