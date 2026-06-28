@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.core.runtime import utc_timestamp
 from app.rag.graph import build_graph
@@ -14,6 +14,19 @@ from app.rag.graph_nodes import (
 )
 from app.rag.graph_state import GraphState
 from app.rag.llm_client import generate_chat_completion
+
+# Human-readable labels for each LangGraph node, used for frontend progress display.
+AGENT_NODE_LABELS: Dict[str, str] = {
+    "planner": "意图解析",
+    "fast_answer": "快速回答",
+    "tool_dispatch": "工具调度",
+    "tool_execute": "工具执行",
+    "agent_loop_decide": "循环决策",
+    "synthesize": "答案生成",
+    "review": "答案审核",
+    "repair_execute": "答案修复",
+    "finalize": "结果整理",
+}
 
 
 def detect_general_chat_reply(user_query: str) -> Optional[str]:
@@ -126,6 +139,63 @@ class ScenicRAGPipeline:
 
         final: GraphState = self._graph.invoke(initial)
         return self._state_to_response(user_query, final)
+
+    async def async_stream_events(
+        self,
+        user_text: str,
+        scenic_slug: Optional[str] = None,
+        attraction_id: Optional[str] = None,
+        conversation_context: Optional[List[Dict[str, Any]]] = None,
+        session_memory: Optional[Dict[str, Any]] = None,
+        user_profile: Optional[str] = None,
+        forced_recommendation_profile: Optional[str] = None,
+        forced_recommendation_title: Optional[str] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Stream per-node progress events, then yield a final ``__final__`` event.
+
+        Each intermediate event has the shape::
+
+            {"node": "<name>", "status": "done", "ts": <float>}
+
+        The terminal event has the shape::
+
+            {"node": "__final__", "status": "done", "ts": <float>, "data": <response dict>}
+        """
+        initial: GraphState = {
+            "user_query": user_text,
+            "conversation_context": conversation_context or [],
+            "session_memory": session_memory or {},
+            "user_profile": user_profile,
+            "scenic_slug": scenic_slug,
+            "attraction_id": attraction_id,
+            "start_attraction": None,
+            "forced_recommendation_profile": forced_recommendation_profile,
+            "forced_recommendation_title": forced_recommendation_title,
+            "latency_start": time.perf_counter(),
+            "tool_observations": [],
+            "agent_steps": [],
+            "candidate_tool_calls": [],
+            "seen_tools": [],
+            "tool_loop_count": 0,
+            "repair_count": 0,
+            "repair_history": [],
+            "trace": {},
+        }
+
+        # Use LangGraph's native astream() so each node event is yielded progressively
+        # (not buffered), giving the client real-time progress updates.
+        merged_state: GraphState = {}  # type: ignore[assignment]
+        async for chunk in self._graph.astream(initial, stream_mode="updates"):
+            # chunk is a dict: {node_name: updated_state_slice}
+            for node_name, state_slice in chunk.items():
+                if isinstance(state_slice, dict):
+                    merged_state.update(state_slice)
+                yield {"node": node_name, "status": "done", "ts": time.time()}
+
+        # Merge initial state with accumulated updates for _state_to_response
+        full_state: GraphState = {**initial, **merged_state}  # type: ignore[misc]
+        response = self._state_to_response(user_text, full_state)
+        yield {"node": "__final__", "status": "done", "ts": time.time(), "data": response}
 
     # ------------------------------------------------------------------
     # Internal helpers
