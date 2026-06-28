@@ -800,8 +800,4 @@ def route_after_review(state: GraphState) -> str:
 
 
 def route_after_repair(state: GraphState) -> str:
-    repair_count: int = state.get("repair_count", 0)
-    candidate_calls: list = state.get("candidate_tool_calls") or []
-    if repair_count >= 2 or not candidate_calls:
-        return "synthesize"
     return "synthesize"

@@ -180,14 +180,11 @@ def _select_avatar_response_text(
     pipeline_result: Dict[str, Any],
     prefer_compact_recommendation: bool,
 ) -> str:
-    compact_mode = True
     recommendation = pipeline_result.get("recommendation") or {}
     compact_answer = str(recommendation.get("compact_answer") or "").strip()
     response_kind = str(pipeline_result.get("response_kind") or "")
     if compact_answer and (prefer_compact_recommendation or response_kind == "recommendation"):
         return compact_answer
-    if not compact_mode:
-        return assistant_text
     return _compact_response_text(assistant_text, response_kind=response_kind)
 
 

@@ -1153,6 +1153,3 @@ class TouristAnalyticsAgent:
             if normalized_query and len(normalized_query) >= 3 and normalized_query in normalized_value:
                 return value
         return None
-
-
-TouristSQLAgent = TouristAnalyticsAgent
