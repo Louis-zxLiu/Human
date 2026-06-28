@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import time
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+
+from langgraph.types import Send
 
 from app.rag.agent_loop import AgentLoopController, AgentStep
 from app.rag.answer_review_agent import AnswerReviewAgent
@@ -379,10 +381,44 @@ def make_tool_dispatch_node(ctx: NodeContext):
         forced_recommendation_title = state.get("forced_recommendation_title")
 
         strategy = plan.strategy
-        if strategy == "semantic_sql" or intent == "ANALYTICS":
-            first_call = ToolCall("behavior_sql", {"user_query": user_query}, reason="planner_selected_semantic_sql")
+
+        def _fact_tool_call(tool_name: str, reason: str) -> ToolCall:
+            return ToolCall(
+                tool_name,
+                {
+                    "user_query": user_query,
+                    "scenic_slug": plan.scenic_slug or scenic_slug,
+                    "attraction_id": attraction_id,
+                    "attraction_name": context_attraction,
+                    "planned_question_type": plan.question_type,
+                },
+                reason=reason,
+            )
+
+        calls: List[ToolCall]
+
+        # Detect "fact + analytics" parallel case: user query asks for both factual
+        # information AND statistical analytics at the same time.  We recognise this
+        # by looking for the raw_payload hint "parallel_fact_analytics" set by the
+        # planner, OR by a heuristic: the plan carries ANALYTICS intent while the
+        # query also contains scenic-fact keywords.
+        raw_payload = getattr(plan, "raw_payload", {}) or {}
+        is_parallel_fact_analytics = raw_payload.get("parallel_fact_analytics", False)
+
+        if is_parallel_fact_analytics:
+            # Fan-out: fire both a fact tool and the SQL analytics tool in parallel.
+            tool_name = "hybrid_rag" if strategy == "hybrid_rag" else "structured_fact"
+            fact_call = _fact_tool_call(tool_name, "planner_parallel_fact")
+            sql_call = ToolCall(
+                "behavior_sql",
+                {"user_query": user_query},
+                reason="planner_parallel_analytics",
+            )
+            calls = [fact_call, sql_call]
+        elif strategy == "semantic_sql" or intent == "ANALYTICS":
+            calls = [ToolCall("behavior_sql", {"user_query": user_query}, reason="planner_selected_semantic_sql")]
         elif strategy == "route_planner" or intent == "RECOMMEND":
-            first_call = ToolCall(
+            calls = [ToolCall(
                 "route_planner",
                 {
                     "user_query": user_query,
@@ -393,35 +429,25 @@ def make_tool_dispatch_node(ctx: NodeContext):
                     "forced_title": forced_recommendation_title,
                 },
                 reason="planner_selected_route_planner",
-            )
+            )]
         elif strategy == "web_search":
-            first_call = ToolCall(
+            calls = [ToolCall(
                 "web_search",
                 {"user_query": user_query},
                 reason="planner_selected_web_search",
-            )
+            )]
         else:
             tool_name = "hybrid_rag" if strategy == "hybrid_rag" else "structured_fact"
-            first_call = ToolCall(
-                tool_name,
-                {
-                    "user_query": user_query,
-                    "scenic_slug": plan.scenic_slug or scenic_slug,
-                    "attraction_id": attraction_id,
-                    "attraction_name": context_attraction,
-                    "planned_question_type": plan.question_type,
-                },
-                reason=f"planner_selected_{tool_name}",
-            )
+            calls = [_fact_tool_call(tool_name, f"planner_selected_{tool_name}")]
 
         first_step = AgentStep(
             action="call_tool",
-            reason=first_call.reason or "planner_selected_initial_tool",
+            reason=calls[0].reason or "planner_selected_initial_tool",
             source="planner",
-            tool_call=first_call,
+            tool_call=calls[0],
         )
         return {
-            "candidate_tool_calls": [first_call],
+            "candidate_tool_calls": calls,
             "agent_steps": [first_step],
             "tool_observations": [],
             "seen_tools": [],
@@ -433,10 +459,7 @@ def make_tool_dispatch_node(ctx: NodeContext):
 def make_tool_execute_node(ctx: NodeContext):
     def tool_execute_node(state: GraphState) -> dict:
         candidate_calls: list = state.get("candidate_tool_calls", [])
-        observations: list = list(state.get("tool_observations", []))
-        agent_steps: list = list(state.get("agent_steps", []))
         seen_tools: list = list(state.get("seen_tools", []))
-        loop_count: int = state.get("tool_loop_count", 0)
 
         if not candidate_calls:
             return {}
@@ -448,19 +471,22 @@ def make_tool_execute_node(ctx: NodeContext):
                 reason=f"tool_already_called:{call.name}",
                 source="agent_policy_fallback",
             )
-            agent_steps.append(stop_step)
-            return {"agent_steps": agent_steps, "candidate_tool_calls": []}
+            # Return only the new step; reducer appends it.
+            # Don't return candidate_tool_calls here — agent_loop_decide will reset it.
+            return {"agent_steps": [stop_step]}
 
-        seen_tools.append(call.name)
         observation = ctx.tool_runner.run(call)
-        observations.append(observation)
 
+        # Return only the NEW items produced by this invocation. The Annotated
+        # reducers on tool_observations, seen_tools, agent_steps, and
+        # tool_loop_count will accumulate them correctly whether this node runs
+        # sequentially or as one of several parallel Send branches.
+        # candidate_tool_calls is intentionally omitted: agent_loop_decide always
+        # resets it, and returning [] from two parallel branches would conflict.
         return {
-            "tool_observations": observations,
-            "seen_tools": seen_tools,
-            "tool_loop_count": loop_count + 1,
-            "candidate_tool_calls": candidate_calls[1:],
-            "agent_steps": agent_steps,
+            "tool_observations": [observation],
+            "seen_tools": [call.name],
+            "tool_loop_count": 1,
         }
     return tool_execute_node
 
@@ -470,7 +496,6 @@ def make_agent_loop_decide_node(ctx: NodeContext):
         user_query = state.get("user_query", "")
         plan = state["plan"]
         observations: list = state.get("tool_observations", [])
-        agent_steps: list = list(state.get("agent_steps", []))
         seen_tools: list = state.get("seen_tools", [])
 
         # build candidate calls from last observation
@@ -515,14 +540,14 @@ def make_agent_loop_decide_node(ctx: NodeContext):
             observations=observations,
             candidate_calls=candidates,
         )
-        agent_steps.append(next_step)
 
         next_candidates = []
         if next_step.action == "call_tool" and next_step.tool_call:
             next_candidates = [next_step.tool_call]
 
+        # Return only the new step; the Annotated reducer on agent_steps appends it.
         return {
-            "agent_steps": agent_steps,
+            "agent_steps": [next_step],
             "candidate_tool_calls": next_candidates,
         }
     return agent_loop_decide_node
@@ -689,7 +714,6 @@ def make_repair_execute_node(ctx: NodeContext):
         user_query = state.get("user_query", "")
         plan = state["plan"]
         observations: list = list(state.get("tool_observations", []))
-        agent_steps: list = list(state.get("agent_steps", []))
         repair_history: list = list(state.get("repair_history") or [])
         repair_count: int = state.get("repair_count", 0)
         review: dict = state.get("review_result") or {}
@@ -746,13 +770,13 @@ def make_repair_execute_node(ctx: NodeContext):
             user_query=user_query, plan=plan, observations=observations,
             review=review, candidate_calls=candidate_calls,
         )
-        agent_steps.append(repair_step)
 
         if repair_step.action != "call_tool" or not repair_step.tool_call:
             repair_history.append({"attempt": repair_count + 1, "action": action, "status": "no_repair_tool",
                                     "agent_step": repair_step.to_trace()})
             trace["answer_review_repair"] = repair_history
-            return {"agent_steps": agent_steps, "repair_history": repair_history, "trace": trace,
+            # Return only the new step; reducer appends it.
+            return {"agent_steps": [repair_step], "repair_history": repair_history, "trace": trace,
                     "repair_count": repair_count + 1, "candidate_tool_calls": []}
 
         repair_call = repair_step.tool_call
@@ -760,12 +784,10 @@ def make_repair_execute_node(ctx: NodeContext):
             repair_history.append({"attempt": repair_count + 1, "action": action, "status": "tool_already_called",
                                     "agent_step": repair_step.to_trace()})
             trace["answer_review_repair"] = repair_history
-            return {"agent_steps": agent_steps, "repair_history": repair_history, "trace": trace,
+            return {"agent_steps": [repair_step], "repair_history": repair_history, "trace": trace,
                     "repair_count": repair_count + 1, "candidate_tool_calls": []}
 
         new_obs = ctx.tool_runner.run(repair_call)
-        observations.append(new_obs)
-        seen_tools_new = list(seen_tools) + [repair_call.name]
         repair_history.append({
             "attempt": repair_count + 1,
             "action": action,
@@ -777,9 +799,9 @@ def make_repair_execute_node(ctx: NodeContext):
         })
 
         return {
-            "tool_observations": observations,
-            "agent_steps": agent_steps,
-            "seen_tools": seen_tools_new,
+            "tool_observations": [new_obs],
+            "agent_steps": [repair_step],
+            "seen_tools": [repair_call.name],
             "repair_count": repair_count + 1,
             "repair_history": repair_history,
             "trace": trace,
@@ -911,6 +933,15 @@ def route_after_plan(state: GraphState) -> str:
     if plan.strategy in FAST_ANSWER_STRATEGIES:
         return "fast_answer"
     return "tool_dispatch"
+
+
+def route_after_tool_dispatch(state: GraphState) -> Union[str, List[Send]]:
+    """Fan-out to parallel tool_execute nodes when multiple calls are queued."""
+    calls: list = state.get("candidate_tool_calls", [])
+    if len(calls) > 1:
+        # Each Send carries the full state but with only one tool call to execute.
+        return [Send("tool_execute", {**state, "candidate_tool_calls": [call]}) for call in calls]
+    return "tool_execute"
 
 
 def route_after_agent_loop_decide(state: GraphState) -> str:

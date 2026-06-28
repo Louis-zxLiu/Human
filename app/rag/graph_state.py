@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import operator
 from typing import Any, Dict, List, Optional
 
-from typing_extensions import TypedDict
+from typing_extensions import Annotated, TypedDict
+
+
+def _add_int(a: int, b: int) -> int:
+    """Reducer for tool_loop_count: sum contributions from parallel nodes."""
+    return (a or 0) + (b or 0)
 
 
 class GraphState(TypedDict, total=False):
@@ -25,11 +31,14 @@ class GraphState(TypedDict, total=False):
     context_attraction: Optional[str]
 
     # --- tool loop ---
-    tool_observations: List[Any]  # List[ToolObservation]
-    agent_steps: List[Any]        # List[AgentStep]
+    # Annotated with operator.add so parallel tool_execute nodes can each append
+    # their single result without conflicting writes.
+    tool_observations: Annotated[List[Any], operator.add]   # List[ToolObservation]
+    agent_steps: Annotated[List[Any], operator.add]         # List[AgentStep]
+    seen_tools: Annotated[List[str], operator.add]
+    tool_loop_count: Annotated[int, _add_int]
+    # candidate_tool_calls is replaced wholesale each step — no reducer needed.
     candidate_tool_calls: List[Any]  # List[ToolCall]
-    seen_tools: List[str]
-    tool_loop_count: int
 
     # --- review / repair ---
     review_result: Optional[Dict[str, Any]]

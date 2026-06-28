@@ -20,6 +20,7 @@ from app.rag.graph_nodes import (
     route_after_plan,
     route_after_repair,
     route_after_review,
+    route_after_tool_dispatch,
 )
 from app.rag.graph_state import GraphState
 
@@ -49,7 +50,9 @@ def build_graph(ctx: NodeContext | None = None) -> Any:
     })
 
     g.add_edge("fast_answer", "finalize")
-    g.add_edge("tool_dispatch", "tool_execute")
+    g.add_conditional_edges("tool_dispatch", route_after_tool_dispatch, {
+        "tool_execute": "tool_execute",
+    })
     g.add_edge("tool_execute", "agent_loop_decide")
 
     g.add_conditional_edges("agent_loop_decide", route_after_agent_loop_decide, {
